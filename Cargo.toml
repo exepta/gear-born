@@ -1,0 +1,72 @@
+[package]
+name = "gear-born"
+version = "0.1.0"
+edition = "2024"
+authors = ["Daniel Ramke <genshin.exepta@outlook.com>"]
+
+[[bin]]
+name = "gear-born"
+path = "src/main.rs"
+
+[workspace]
+members = [
+    "crates/game_core",
+]
+
+[profile.release]
+panic = "unwind"
+opt-level = "s"
+lto = true
+codegen-units = 1
+strip = true
+
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 3
+debug = true
+
+[dependencies.game_core]
+path = "crates/game_core"
+
+[dependencies.bevy]
+version = "0.16.1"
+default-features = false
+features = [
+    "bevy_asset",
+    "bevy_state",
+    "bevy_core_pipeline",
+    "bevy_log",
+    "bevy_render",
+    "bevy_window",
+    "bevy_winit",
+    "default_font",
+    "multi_threaded",
+    "x11"
+]
+
+[dependencies.bevy-inspector-egui]
+version = "0.33.1"
+
+[dependencies.bevy_rapier3d]
+version = "0.31.0"
+features = [
+    "default",
+    "simd-stable",
+    "debug-render-3d"
+]
+
+[dependencies.tracing-subscriber]
+version = "0.3.19"
+
+[dependencies.chrono]
+version = "0.4.41"
+features = ["clock"]
+
+[dependencies.dotenvy]
+version = "0.15.7"
+
+[dev-dependencies.serial_test]
+version = "3.2.0"
+

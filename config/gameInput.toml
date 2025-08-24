@@ -1,0 +1,21 @@
+mouse_sensitivity_vertical = 1.0
+mouse_sensitivity_horizontal = 1.0
+mouse_zoom_in = 3.5
+mouse_zoom_out = 10.0
+mouse_screen_unlock = "AltLeft"
+
+move_up = "W"
+move_down = "S"
+move_left = "A"
+move_right = "D"
+jump = "Space"
+sprint = "ShiftLeft"
+interact = "E"
+attack = ""
+
+ui_menu = "Escape"
+ui_inventory = "B"
+ui_close_back = "Escape"
+
+rapier_debug = "F3"
+world_inspector = "F1"

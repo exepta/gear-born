@@ -1,0 +1,42 @@
+[package]
+name = "game_core"
+version = "0.1.0"
+edition = "2024"
+authors = ["Daniel Ramke <genshin.exepta@outlook.com>"]
+
+[lib]
+name = "game_core"
+path = "src/lib.rs"
+
+[dependencies.bevy]
+version = "0.16.1"
+default-features = false
+features = [
+    "bevy_state",
+    "bevy_log",
+    "bevy_asset",
+    "bevy_animation"
+]
+
+[dependencies.bevy_rapier3d]
+version = "0.31.0"
+features = [
+    "default",
+    "simd-stable",
+    "debug-render-3d"
+]
+
+
+[dependencies.serde]
+version = "1.0.219"
+features = ["derive"]
+
+[dependencies.serde_json]
+version = "1.0.143"
+
+[dependencies.toml]
+version = "0.9.5"
+features = [
+    "parse",
+    "display"
+]

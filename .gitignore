@@ -1,0 +1,7 @@
+/.idea
+.idea
+/target
+target
+/logs
+/log
+coverage.lcov
