@@ -42,8 +42,8 @@ fn spawn_scene(
         asset_server,
         meshes,
         materials,
-        "textures/blocks/tileset.json",
-        "blocks/grass_block.json",
+        "textures/blocks/dirt/tileset.json",
+        "blocks/dirt_block.json",
         Vec3::ZERO,
         1.0,
     );

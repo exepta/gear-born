@@ -1,5 +1,5 @@
 {
-  "image": "textures/blocks/grass.png",
+  "image": "textures/blocks/grass/grass.png",
   "tile_size": 64,
   "columns": 3,
   "rows": 1,
@@ -7,6 +7,7 @@
     "grass_top": [
       0,
       0
+
     ],
     "grass_side": [
       1,

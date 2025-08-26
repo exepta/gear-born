@@ -1,0 +1,12 @@
+{
+  "image": "textures/blocks/grass/grass.png",
+  "tile_size": 64,
+  "columns": 3,
+  "rows": 1,
+  "tiles": {
+    "dirt": [
+      2,
+      0
+    ]
+  }
+}
