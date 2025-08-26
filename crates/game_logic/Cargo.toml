@@ -1,12 +1,15 @@
 [package]
-name = "game_core"
+name = "game_logic"
 version = "0.1.0"
 edition = "2024"
 authors = ["Daniel Ramke <genshin.exepta@outlook.com>"]
 
 [lib]
-name = "game_core"
+name = "game_logic"
 path = "src/lib.rs"
+
+[dependencies.game_core]
+path = "../game_core"
 
 [dependencies.bevy]
 version = "0.16.1"
@@ -15,8 +18,14 @@ features = [
     "bevy_state",
     "bevy_log",
     "bevy_asset",
+    "bevy_gltf",
+    "bevy_render",
+    "bevy_core_pipeline",
+    "bevy_pbr",
     "bevy_animation",
-    "png"
+    "animation",
+    "tonemapping_luts",
+    "bevy_window"
 ]
 
 [dependencies.bevy_rapier3d]
@@ -25,19 +34,4 @@ features = [
     "default",
     "simd-stable",
     "debug-render-3d"
-]
-
-
-[dependencies.serde]
-version = "1.0.219"
-features = ["derive"]
-
-[dependencies.serde_json]
-version = "1.0.143"
-
-[dependencies.toml]
-version = "0.9.5"
-features = [
-    "parse",
-    "display"
 ]

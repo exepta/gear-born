@@ -30,11 +30,10 @@ use tracing_subscriber::Layer;
 /// This function is only included in debug builds.
 #[cfg(debug_assertions)]
 #[coverage(off)]
-fn main() -> AppExit {
-    load_log_env_filter();
+fn main() {
     let options = GameConfig::new();
     let mut app = App::new();
-    client_core(&mut app, options).run()
+    init_bevy_app(&mut app, &options);
 }
 
 /// Application entry point for release builds.
@@ -43,42 +42,10 @@ fn main() -> AppExit {
 /// This function is only included in release builds.
 #[cfg(not(debug_assertions))]
 #[coverage(off)]
-fn main() -> AppExit {
+fn main() {
     let options = GameConfig::new();
     let mut app = App::new();
-    client_core(&mut app, options).run()
-}
-
-/// Sets up the core Bevy application, inserting configuration and plugins.
-///
-/// # Parameters
-/// - `app`: Mutable reference to the Bevy [`App`] instance.
-/// - `config`: The loaded [`GameConfig`] containing window, graphics, input, and audio configuration.
-///
-/// # Returns
-/// A mutable reference to the configured [`App`] instance.
-///
-/// # Behavior
-/// - Inserts the [`GameConfig`] resource, making it available to all systems.
-/// - Adds commonly used plugins: Egui, WorldInspector, and your [`ManagerPlugin`].
-/// - Configures inspector state for debugging.
-///
-/// # Example
-/// ```rust
-/// let mut app = App::new();
-/// let config = GameConfig::new();
-/// client_core(&mut app, config).run();
-/// ```
-#[allow(dead_code)]
-#[coverage(off)]
-pub(crate) fn client_core(app: &mut App, config: GameConfig) -> &mut App {
-    init_bevy_app(app, config.clone())
-        .init_state::<AppState>()
-        .insert_resource(config)
-        .insert_resource(WorldInspectorState(false))
-        .add_plugins(EguiPlugin::default())
-        .add_plugins(WorldInspectorPlugin::default().run_if(check_world_inspector_state))
-        .add_plugins(ManagerPlugin)
+    init_bevy_app(&mut app, &options);
 }
 
 /// Initializes core Bevy app plugins and logging settings.
@@ -90,8 +57,10 @@ pub(crate) fn client_core(app: &mut App, config: GameConfig) -> &mut App {
 /// # Returns
 /// A mutable reference to the initialized [`App`] instance.
 #[coverage(off)]
-fn init_bevy_app(app: &mut App, config: GameConfig) -> &mut App {
-    app.add_plugins(DefaultPlugins.set(
+fn init_bevy_app(app: &mut App, config: &GameConfig) {
+    app
+        .insert_resource(config.clone())
+        .add_plugins(DefaultPlugins.set(
         WindowPlugin {
             primary_window: Some(Window {
                 title: String::from("Bevy Client"),
@@ -103,7 +72,7 @@ fn init_bevy_app(app: &mut App, config: GameConfig) -> &mut App {
         }
     ).set(
         RenderPlugin {
-            render_creation: RenderCreation::Automatic(create_gpu_settings(config.graphics.graphic_backend)),
+            render_creation: RenderCreation::Automatic(create_gpu_settings(&config.graphics.graphic_backend)),
             ..default()
         }
     ).set(ImagePlugin {
@@ -115,7 +84,13 @@ fn init_bevy_app(app: &mut App, config: GameConfig) -> &mut App {
         custom_layer: log_file_appender
     }))
         .insert_resource(ClearColor(Color::Srgba(Srgba::rgb_u8(20, 25,27))))
+        .init_state::<AppState>()
+        .insert_resource(WorldInspectorState(false))
+        .add_plugins(EguiPlugin::default())
+        .add_plugins(WorldInspectorPlugin::default().run_if(check_world_inspector_state))
+        .add_plugins(ManagerPlugin)
         .add_systems(Update, init_app_finish.run_if(in_state(AppState::AppInit).and(resource_exists::<GameConfig>)))
+        .run();
 }
 
 #[coverage(off)]
@@ -136,17 +111,20 @@ fn init_app_finish(mut next_state: ResMut<NextState<AppState>>) {
 /// ```rust
 /// let gpu_settings = create_gpu_settings();
 /// ```
-fn create_gpu_settings(backend_str: String) -> WgpuSettings {
-    let backend = match backend_str.as_str() {
+fn create_gpu_settings(backend_str: &str) -> WgpuSettings {
+    let backend = match backend_str {
         "auto" | "AUTO" | "primary" | "PRIMARY" => Some(Backends::PRIMARY),
         "vulkan" | "VULKAN" => Some(Backends::VULKAN),
         "dx12" | "DX12" => Some(Backends::DX12),
         "metal" | "METAL" => Some(Backends::METAL),
-        _ => panic!("Invalid backend: {}", backend_str)
+        other => {
+            eprintln!("Unknown backend '{}', falling back to PRIMARY", other);
+            Some(Backends::PRIMARY)
+        }
     };
 
     WgpuSettings {
-        features: WgpuFeatures::POLYGON_MODE_LINE,
+        features: if cfg!(debug_assertions) { WgpuFeatures::POLYGON_MODE_LINE } else { WgpuFeatures::empty() },
         backends: backend,
         ..default()
     }
@@ -287,35 +265,35 @@ mod tests {
 
     #[test]
     fn test_create_gpu_settings_primary() {
-        let settings = create_gpu_settings("primary".to_string());
+        let settings = create_gpu_settings("primary");
         assert_eq!(settings.backends, Some(Backends::PRIMARY));
         assert_eq!(settings.features, WgpuFeatures::POLYGON_MODE_LINE);
 
-        let settings = create_gpu_settings("AUTO".to_string());
+        let settings = create_gpu_settings("AUTO");
         assert_eq!(settings.backends, Some(Backends::PRIMARY));
     }
 
     #[test]
     fn test_create_gpu_settings_vulkan() {
-        let settings = create_gpu_settings("vulkan".to_string());
+        let settings = create_gpu_settings("vulkan");
         assert_eq!(settings.backends, Some(Backends::VULKAN));
     }
 
     #[test]
     fn test_create_gpu_settings_dx12() {
-        let settings = create_gpu_settings("DX12".to_string());
+        let settings = create_gpu_settings("DX12");
         assert_eq!(settings.backends, Some(Backends::DX12));
     }
 
     #[test]
     fn test_create_gpu_settings_metal() {
-        let settings = create_gpu_settings("metal".to_string());
+        let settings = create_gpu_settings("metal");
         assert_eq!(settings.backends, Some(Backends::METAL));
     }
 
     #[test]
     #[should_panic(expected = "Invalid backend")]
     fn test_create_gpu_settings_invalid() {
-        let _ = create_gpu_settings("unknown-backend".to_string());
+        let _ = create_gpu_settings("unknown-backend");
     }
 }

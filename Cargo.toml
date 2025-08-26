@@ -11,6 +11,8 @@ path = "src/main.rs"
 [workspace]
 members = [
     "crates/game_core",
+    "crates/game_logic",
+    "crates/game_world",
 ]
 
 [profile.release]
@@ -29,6 +31,12 @@ debug = true
 
 [dependencies.game_core]
 path = "crates/game_core"
+
+[dependencies.game_logic]
+path = "crates/game_logic"
+
+[dependencies.game_world]
+path = "crates/game_world"
 
 [dependencies.bevy]
 version = "0.16.1"
