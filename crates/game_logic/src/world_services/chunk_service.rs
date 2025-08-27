@@ -531,20 +531,17 @@ async fn mesh_subchunk_async(
         (None, None, None, None, y0, y1)
     };
 
-    let sample = |opt: &Option<Vec<BlockId>>, y: usize, i: usize, stride: usize| -> BlockId {
-        match opt {
-            Some(v) => {
-                let iy = y - snap_y0;
-                v[iy * stride + i]
-            }
-            None => 0,
-        }
+    let sample_opt = |opt: &Option<Vec<BlockId>>, y: usize, i: usize, stride: usize| -> Option<BlockId> {
+        opt.as_ref().map(|v| {
+            let iy = y - snap_y0;
+            v[iy * stride + i]
+        })
     };
 
-    let east_at  = |y: usize, z: usize| sample(&east,  y, z, CZ);
-    let west_at  = |y: usize, z: usize| sample(&west,  y, z, CZ);
-    let south_at = |y: usize, x: usize| sample(&south, y, x, CX);
-    let north_at = |y: usize, x: usize| sample(&north, y, x, CX);
+    let east_at_opt  = |y: usize, z: usize| sample_opt(&east,  y, z, CZ);
+    let west_at_opt  = |y: usize, z: usize| sample_opt(&west,  y, z, CZ);
+    let south_at_opt = |y: usize, x: usize| sample_opt(&south, y, x, CX);
+    let north_at_opt = |y: usize, x: usize| sample_opt(&north, y, x, CX);
 
     let get = |x:isize,y:isize,z:isize| -> BlockId {
         if x < 0 || y < 0 || z < 0 || x >= CX as isize || y >= CY as isize || z >= CZ as isize { 0 }
@@ -574,28 +571,71 @@ async fn mesh_subchunk_async(
                     b.quad([[wx,wy,wz],[wx+s,wy,wz],[wx+s,wy,wz+s],[wx,wy,wz+s]],[0.0,-1.0,0.0], uvq(u.u0,u.v0,u.u1,u.v1,false));
                 }
                 // +X (East)
-                let n_east = if x + 1 < CX { get(x as isize+1, y as isize, z as isize) } else { east_at(y, z) };
-                if !(n_east != 0 && reg.opaque(n_east)) {
-                    let u = reg.uv(id, Face::East);
-                    b.quad([[wx+s,wy,wz+s],[wx+s,wy,wz],[wx+s,wy+s,wz],[wx+s,wy+s,wz+s]],[1.0,0.0,0.0], uvq(u.u0,u.v0,u.u1,u.v1,true));
+                let n_east = if x + 1 < CX {
+                    Some(get(x as isize + 1, y as isize, z as isize))
+                } else {
+                    east_at_opt(y, z)
+                };
+                if let Some(nei) = n_east {
+                    if !(nei != 0 && reg.opaque(nei)) {
+                        let u = reg.uv(id, Face::East);
+                        b.quad(
+                            [[wx+s,wy,wz+s],[wx+s,wy,wz],[wx+s,wy+s,wz],[wx+s,wy+s,wz+s]],
+                            [1.0,0.0,0.0],
+                            uvq(u.u0,u.v0,u.u1,u.v1,true)
+                        );
+                    }
                 }
+
                 // -X (West)
-                let n_west = if x > 0 { get(x as isize-1, y as isize, z as isize) } else { west_at(y, z) };
-                if !(n_west != 0 && reg.opaque(n_west)) {
-                    let u = reg.uv(id, Face::West);
-                    b.quad([[wx,wy,wz],[wx,wy,wz+s],[wx,wy+s,wz+s],[wx,wy+s,wz]],[-1.0,0.0,0.0], uvq(u.u0,u.v0,u.u1,u.v1,true));
+                let n_west = if x > 0 {
+                    Some(get(x as isize - 1, y as isize, z as isize))
+                } else {
+                    west_at_opt(y, z)
+                };
+                if let Some(nei) = n_west {
+                    if !(nei != 0 && reg.opaque(nei)) {
+                        let u = reg.uv(id, Face::West);
+                        b.quad(
+                            [[wx,wy,wz],[wx,wy,wz+s],[wx,wy+s,wz+s],[wx,wy+s,wz]],
+                            [-1.0,0.0,0.0],
+                            uvq(u.u0,u.v0,u.u1,u.v1,true)
+                        );
+                    }
                 }
+
                 // +Z (South)
-                let n_south = if z + 1 < CZ { get(x as isize, y as isize, z as isize+1) } else { south_at(y, x) };
-                if !(n_south != 0 && reg.opaque(n_south)) {
-                    let u = reg.uv(id, Face::South);
-                    b.quad([[wx,wy,wz+s],[wx+s,wy,wz+s],[wx+s,wy+s,wz+s],[wx,wy+s,wz+s]],[0.0,0.0,1.0], uvq(u.u0,u.v0,u.u1,u.v1,true));
+                let n_south = if z + 1 < CZ {
+                    Some(get(x as isize, y as isize, z as isize + 1))
+                } else {
+                    south_at_opt(y, x)
+                };
+                if let Some(nei) = n_south {
+                    if !(nei != 0 && reg.opaque(nei)) {
+                        let u = reg.uv(id, Face::South);
+                        b.quad(
+                            [[wx,wy,wz+s],[wx+s,wy,wz+s],[wx+s,wy+s,wz+s],[wx,wy+s,wz+s]],
+                            [0.0,0.0,1.0],
+                            uvq(u.u0,u.v0,u.u1,u.v1,true)
+                        );
+                    }
                 }
+
                 // -Z (North)
-                let n_north = if z > 0 { get(x as isize, y as isize, z as isize-1) } else { north_at(y, x) };
-                if !(n_north != 0 && reg.opaque(n_north)) {
-                    let u = reg.uv(id, Face::North);
-                    b.quad([[wx+s,wy,wz],[wx,wy,wz],[wx,wy+s,wz],[wx+s,wy+s,wz]],[0.0,0.0,-1.0], uvq(u.u0,u.v0,u.u1,u.v1,true));
+                let n_north = if z > 0 {
+                    Some(get(x as isize, y as isize, z as isize - 1))
+                } else {
+                    north_at_opt(y, x)
+                };
+                if let Some(nei) = n_north {
+                    if !(nei != 0 && reg.opaque(nei)) {
+                        let u = reg.uv(id, Face::North);
+                        b.quad(
+                            [[wx+s,wy,wz],[wx,wy,wz],[wx,wy+s,wz],[wx+s,wy+s,wz]],
+                            [0.0,0.0,-1.0],
+                            uvq(u.u0,u.v0,u.u1,u.v1,true)
+                        );
+                    }
                 }
             }
         }
