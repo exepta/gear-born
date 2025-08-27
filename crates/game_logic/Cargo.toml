@@ -25,7 +25,9 @@ features = [
     "bevy_animation",
     "animation",
     "tonemapping_luts",
-    "bevy_window"
+    "bevy_window",
+    "bevy_ui",
+    "bevy_color"
 ]
 
 [dependencies.fastnoise-lite]

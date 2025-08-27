@@ -105,6 +105,10 @@ impl BlockRegistry {
 
             let material = materials.add(StandardMaterial {
                 base_color_texture: Some(image.clone()),
+                alpha_mode: AlphaMode::Opaque,
+                unlit: false,
+                metallic: 0.0,
+                perceptual_roughness: 1.0,
                 ..Default::default()
             });
 

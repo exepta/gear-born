@@ -1,4 +1,5 @@
 use bevy::input::mouse::MouseMotion;
+use bevy::pbr::CascadeShadowConfigBuilder;
 use bevy::prelude::*;
 use bevy::window::{CursorGrabMode, PrimaryWindow};
 use game_core::configuration::GameConfig;
@@ -12,7 +13,7 @@ impl Plugin for CameraPlugin {
     fn build(&self, app: &mut App) {
         app.insert_resource(AmbientLight {
             color: Color::WHITE,
-            brightness: 150.0,
+            brightness: 50.0,
             affects_lightmapped_meshes: false,
         })
             .add_systems(OnEnter(AppState::InGame(InGameStates::Game)), (spawn_scene, spawn_camera))
@@ -37,7 +38,17 @@ fn spawn_scene(
 ) {
 
     commands.spawn((
-        DirectionalLight::default(),
+        DirectionalLight {
+            shadows_enabled: true,
+            illuminance: 1_000.0,
+            color: Color::WHITE,
+            ..default()
+        },
+        CascadeShadowConfigBuilder {
+            first_cascade_far_bound: 16.0,
+            maximum_distance: 180.0,
+            ..default()
+        }.build(),
         Transform::from_xyz(4.0, 200.0, 4.0).looking_at(Vec3::ZERO, Vec3::Y),
     ));
 

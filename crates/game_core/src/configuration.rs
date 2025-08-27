@@ -324,3 +324,23 @@ impl Default for WorldGenConfig {
         }
     }
 }
+
+#[derive(Resource)]
+pub struct CrosshairConfig {
+    pub radius: f32, 
+    pub thickness: f32,
+    pub segments: usize,
+    pub color: Color,
+    pub visible_when_unlocked: bool,
+}
+impl Default for CrosshairConfig {
+    fn default() -> Self {
+        Self {
+            radius: 8.0,
+            thickness: 2.0,
+            segments: 48,
+            color: Color::WHITE,
+            visible_when_unlocked: false,
+        }
+    }
+}
