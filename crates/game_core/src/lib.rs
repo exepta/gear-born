@@ -7,14 +7,16 @@ pub mod key_converter;
 pub mod world;
 pub mod player;
 
-use bevy::prelude::*;
+use crate::configuration::WorldGenConfig;
 use crate::player::PlayerModule;
+use bevy::prelude::*;
 
 pub struct GameCorePlugin;
 
 impl Plugin for GameCorePlugin {
     #[coverage(off)]
     fn build(&self, app: &mut App) {
+        app.init_resource::<WorldGenConfig>();
         app.add_plugins(PlayerModule);
     }
 }

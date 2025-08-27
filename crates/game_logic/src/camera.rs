@@ -4,7 +4,7 @@ use bevy::window::{CursorGrabMode, PrimaryWindow};
 use game_core::configuration::GameConfig;
 use game_core::key_converter::convert;
 use game_core::states::{AppState, InGameStates};
-use game_core::world::block::{BlockRegistry};
+use game_core::world::block::BlockRegistry;
 
 pub struct CameraPlugin;
 
@@ -36,26 +36,31 @@ fn spawn_scene(
     block_registry: Res<BlockRegistry>,
 ) {
 
-/*    block::spawn_block_by_name(
-        &mut commands,
-        &mut meshes,
-        &block_registry,
-        Blocks::Stone,
-        Vec3::ZERO,
-        1.0,
-    );*/
-
     commands.spawn((
         DirectionalLight::default(),
-        Transform::from_xyz(4.0, 8.0, 4.0).looking_at(Vec3::ZERO, Vec3::Y),
+        Transform::from_xyz(4.0, 200.0, 4.0).looking_at(Vec3::ZERO, Vec3::Y),
     ));
 
     info!("content: {:?}", block_registry.name_to_id);
 }
 
 fn spawn_camera(mut commands: Commands) {
+    let fog_color = Color::srgb(0.62, 0.72, 0.85);
+
     commands.spawn((
         Camera3d::default(),
+        Camera {
+            clear_color: ClearColorConfig::Custom(fog_color),
+            ..default()
+        },
+        DistanceFog {
+            color: fog_color,
+            falloff: FogFalloff::Linear {
+                start: 190.0,
+                end: 200.0,
+            },
+            ..default()
+        },
         Transform::from_xyz(0.0, 18.0, 6.0).looking_at(Vec3::new(0.0, 2.0, 0.0), Vec3::Y),
         FpsCamera {
             yaw: 0.0,

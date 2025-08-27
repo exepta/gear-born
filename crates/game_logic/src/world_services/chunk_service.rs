@@ -1,12 +1,15 @@
-use std::collections::HashMap;
+use bevy::asset::RenderAssetUsages;
 use bevy::prelude::*;
 use bevy::render::mesh::{Indices, PrimitiveTopology, VertexAttributeValues};
-use bevy::tasks::{AsyncComputeTaskPool, Task};
 use bevy::tasks::futures_lite::future;
+use bevy::tasks::{AsyncComputeTaskPool, Task};
+use fastnoise_lite::{FastNoiseLite, FractalType, NoiseType};
+use game_core::configuration::WorldGenConfig;
 use game_core::states::{AppState, InGameStates};
 use game_core::world::block::{id_any, BlockId, BlockRegistry, Face, UvRect};
 use game_core::world::chunk::*;
 use game_core::world::chunk_dim::*;
+use std::collections::HashMap;
 
 #[derive(Resource, Default)]
 struct ChunkMeshIndex {
@@ -30,6 +33,7 @@ struct RegLiteEntry {
 struct RegLite {
     map: HashMap<BlockId, RegLiteEntry>,
 }
+
 impl RegLite {
     fn from_reg(reg: &BlockRegistry) -> Self {
         let mut map = HashMap::new();
@@ -75,11 +79,19 @@ impl MeshBuild {
         self.idx.extend_from_slice(&[base,base+1,base+2, base,base+2,base+3]);
     }
     fn into_mesh(self) -> Mesh {
-        let mut m = Mesh::new(PrimitiveTopology::TriangleList, default());
+        let mut m = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::RENDER_WORLD);
         m.insert_attribute(Mesh::ATTRIBUTE_POSITION, self.pos);
         m.insert_attribute(Mesh::ATTRIBUTE_NORMAL,   self.nrm);
         m.insert_attribute(Mesh::ATTRIBUTE_UV_0,     self.uv);
-        m.insert_indices(Indices::U32(self.idx));
+
+        // <= 65k Vertices? -> U16-Indices
+        if self.idx.len() <= u16::MAX as usize {
+            let idx_u16: Vec<u16> = self.idx.into_iter().map(|i| i as u16).collect();
+            m.insert_indices(Indices::U16(idx_u16));
+        } else {
+            m.insert_indices(Indices::U32(self.idx));
+        }
+
         m
     }
     #[allow(dead_code)]
@@ -94,8 +106,8 @@ impl MeshBuild {
 
 pub struct ChunkService;
 
-const LOAD_RADIUS: i32 = 1;
-const KEEP_RADIUS: i32 = 2;
+const LOAD_RADIUS: i32 = 8;
+const KEEP_RADIUS: i32 = LOAD_RADIUS + 1;
 
 impl Plugin for ChunkService {
     fn build(&self, app: &mut App) {
@@ -118,6 +130,7 @@ fn schedule_chunk_generation(
     mut pending: ResMut<PendingGen>,
     chunk_map: Res<ChunkMap>,
     reg: Res<BlockRegistry>,
+    gen_cfg: Res<WorldGenConfig>,
     q_cam: Query<&GlobalTransform, With<Camera3d>>,
 ) {
     let cam = if let Ok(t) = q_cam.single() { t } else { return; };
@@ -129,6 +142,7 @@ fn schedule_chunk_generation(
         id_any(&reg, &["dirt_block","dirt"]),
         id_any(&reg, &["stone_block","stone"]),
     );
+    let cfg_clone = gen_cfg.clone();
 
     for dz in -LOAD_RADIUS..=LOAD_RADIUS {
         for dx in -LOAD_RADIUS..=LOAD_RADIUS {
@@ -137,8 +151,9 @@ fn schedule_chunk_generation(
 
             let pool = AsyncComputeTaskPool::get();
             let ids_copy = ids;
+            let cfg = cfg_clone.clone();
             let task = pool.spawn(async move {
-                let data = generate_chunk_async(c, ids_copy).await;
+                let data = generate_chunk_async_noise(c, ids_copy, cfg).await;
                 (c, data)
             });
             pending.0.insert(c, task);
@@ -309,22 +324,169 @@ fn unload_far_chunks(
     }
 }
 
-async fn generate_chunk_async(coord: IVec2, ids: (BlockId, BlockId, BlockId)) -> ChunkData {
+#[inline] fn lerp(a:f32, b:f32, t:f32) -> f32 { a + (b - a) * t }
+#[inline] fn smoothstep(e0:f32, e1:f32, x:f32) -> f32 {
+    let t = ((x - e0) / (e1 - e0)).clamp(0.0, 1.0);
+    t * t * (3.0 - 2.0 * t)
+}
+
+#[inline] fn map01(x: f32) -> f32 { x * 0.5 + 0.5 }
+
+pub async fn generate_chunk_async_noise(
+    coord: IVec2,
+    ids: (BlockId, BlockId, BlockId),
+    cfg: WorldGenConfig,
+) -> ChunkData {
     let (grass, dirt, stone) = ids;
     let mut c = ChunkData::new();
+
+    let mut height_n = FastNoiseLite::with_seed(cfg.seed);
+    height_n.set_noise_type(Option::from(NoiseType::OpenSimplex2));
+    height_n.set_frequency(Option::from(cfg.height_freq));
+    height_n.set_fractal_type(Option::from(FractalType::FBm));
+    height_n.set_fractal_octaves(Option::from(5));
+    height_n.set_fractal_gain(Some(0.5));
+    height_n.set_fractal_lacunarity(Some(2.0));
+
+    let mut warp_n = FastNoiseLite::with_seed(cfg.seed ^ 0x5EED_BA5Ei32);
+    warp_n.set_noise_type(Option::from(NoiseType::OpenSimplex2));
+    warp_n.set_frequency(Option::from(cfg.warp_freq));
+
+    let mut plains_n = FastNoiseLite::with_seed(cfg.seed ^ 0x0B10Ei32);
+    plains_n.set_noise_type(Option::from(NoiseType::OpenSimplex2));
+    plains_n.set_frequency(Option::from(cfg.plains_freq));
+
+    let (mut cave_n, mut cavern_n, cave_region_n, entrance_gate_n) =
+        if cfg.enable_caves {
+            let mut cave_n = FastNoiseLite::with_seed(cfg.seed ^ 0x0CAFE5i32);
+            cave_n.set_noise_type(Option::from(NoiseType::OpenSimplex2));
+            cave_n.set_frequency(Option::from(cfg.caves_freq));
+            cave_n.set_fractal_type(Option::from(FractalType::FBm));
+            cave_n.set_fractal_octaves(Option::from(3));
+            cave_n.set_fractal_gain(Some(0.5));
+
+            let mut cavern_n = FastNoiseLite::with_seed(cfg.seed ^ 0x00C0FFEEi32);
+            cavern_n.set_noise_type(Option::from(NoiseType::OpenSimplex2));
+            cavern_n.set_frequency(Option::from(cfg.caverns_freq));
+            cavern_n.set_fractal_type(Option::from(FractalType::FBm));
+            cavern_n.set_fractal_octaves(Option::from(2));
+
+            let mut cave_region_n = FastNoiseLite::with_seed(cfg.seed ^ 0x0DEADBEEi32);
+            cave_region_n.set_noise_type(Option::from(NoiseType::OpenSimplex2));
+            cave_region_n.set_frequency(Option::from(cfg.caves_region_freq));
+
+            let mut entrance_gate_n = FastNoiseLite::with_seed(cfg.seed ^ 0x0E17EACEi32);
+            entrance_gate_n.set_noise_type(Option::from(NoiseType::OpenSimplex2));
+            entrance_gate_n.set_frequency(Option::from(cfg.entrance_chance_freq));
+
+            (Some(cave_n), Some(cavern_n), Some(cave_region_n), Some(entrance_gate_n))
+        } else {
+            (None, None, None, None)
+        };
 
     for lx in 0..CX {
         for lz in 0..CZ {
             let wx = coord.x * CX as i32 + lx as i32;
             let wz = coord.y * CZ as i32 + lz as i32;
-            let h = height_at(wx, wz).clamp(Y_MIN + 1, Y_MAX - 1);
+            let wxf = wx as f32; let wzf = wz as f32;
+
+            let mask_raw = map01(plains_n.get_noise_2d(wxf, wzf));
+            let plains_factor = smoothstep(
+                cfg.plains_threshold - cfg.plains_blend,
+                cfg.plains_threshold + cfg.plains_blend,
+                mask_raw,
+            );
+
+            let amp = lerp(cfg.plains_span as f32, cfg.height_span as f32, plains_factor);
+            let warp_amp = lerp(cfg.warp_amp_plains, cfg.warp_amp, plains_factor);
+
+            // Domain warp
+            let dx = warp_n.get_noise_2d(wxf, wzf) * warp_amp;
+            let dz = warp_n.get_noise_2d(wxf + 1000.0, wzf - 1000.0) * warp_amp;
+
+            // Basis-Höhe
+            let mut h01 = map01(height_n.get_noise_2d(wxf + dx, wzf + dz));
+
+            let flatten = (1.0 - plains_factor) * cfg.plains_flatten;
+            if flatten > 0.0 {
+                h01 = lerp(0.5, h01, 1.0 - flatten);
+            }
+
+            let mut h = cfg.base_height + (h01 * amp) as i32;
+            h = h.clamp(Y_MIN + 1, Y_MAX - 1);
+
             for ly in 0..CY {
                 let wy = local_y_to_world(ly);
-                let id = if wy < h - 2 { stone }
+
+                let mut id = if wy < h - 2 { stone }
                 else if wy < h { dirt }
                 else if wy == h { grass }
                 else { 0 };
-                if id != 0 { c.set(lx, ly, lz, id); }
+
+                if cfg.enable_caves && id != 0 && wy < h {
+                    let cr = cave_region_n.as_ref().unwrap();
+                    let eg = entrance_gate_n.as_ref().unwrap();
+                    let cn = cave_n.as_mut().unwrap();
+                    let cv = cavern_n.as_mut().unwrap();
+
+                    let depth = (h - wy).max(0) as f32;
+                    let in_shell = wy > h - cfg.surface_shell;
+                    let y_in_band = wy >= cfg.cave_min_y && wy <= cfg.cave_max_y;
+
+                    let region_ok = map01(cr.get_noise_2d(wxf, wzf)) >= cfg.caves_region_thresh;
+                    let gate_str  = map01(eg.get_noise_2d(wxf, wzf));
+                    let allow_entrance_here = in_shell
+                        && depth <= cfg.entrance_depth as f32
+                        && gate_str >= cfg.entrance_chance_thresh;
+
+                    let can_carve_here = (y_in_band && !in_shell && region_ok) || allow_entrance_here;
+
+                    if can_carve_here {
+                        let cx = wxf;
+                        let cy = (wy as f32) * cfg.cave_y_scale;
+                        let cz = wzf;
+
+                        let tunnels = cn.get_noise_3d(cx, cy, cz).abs().powf(cfg.caves_tunnel_abs_pow);
+                        let caverns = map01(cv.get_noise_3d(cx, cy, cz));
+
+                        let entrance_bias = if allow_entrance_here {
+                            (1.0 - depth / cfg.entrance_depth as f32).max(0.0) * cfg.entrance_bonus
+                        } else { 0.0 };
+
+                        let thr_t = (cfg.caves_thresh   + 0.05 - entrance_bias).clamp(0.25, 0.95);
+                        let thr_c = (cfg.caverns_thresh + 0.05 - entrance_bias * 0.5).clamp(0.35, 0.98);
+
+                        let carve = tunnels > thr_t
+                            || (cfg.caverns_weight > 0.0 && caverns > thr_c && region_ok && !in_shell);
+
+                        if carve {
+                            id = 0;
+                        }
+                    }
+
+                    if allow_entrance_here && in_shell {
+                        let r = cfg.entrance_open_radius.max(0);
+                        let d = cfg.entrance_open_depth.max(1);
+
+                        for oy in 0..d {
+                            let yy = wy - oy;
+                            if yy < cfg.cave_min_y { break; }
+
+                            let ly2 = (ly as i32 - oy).max(0) as usize;
+                            for dx in -r..=r {
+                                let lx2 = (lx as i32 + dx).clamp(0, CX as i32 - 1) as usize;
+                                for dz in -r..=r {
+                                    let lz2 = (lz as i32 + dz).clamp(0, CZ as i32 - 1) as usize;
+                                    c.set(lx2, ly2, lz2, 0);
+                                }
+                            }
+                        }
+                    }
+                }
+
+                if id != 0 {
+                    c.set(lx, ly, lz, id);
+                }
             }
         }
     }
@@ -395,24 +557,6 @@ async fn mesh_subchunk_async(
     }
 
     by_block.into_iter().map(|(k,b)| (k,b)).collect()
-}
-
-#[inline]
-fn height_at(x: i32, z: i32) -> i32 {
-    let nx = x as f32 * 0.055;
-    let nz = z as f32 * 0.045;
-    let base = 10.0
-        + (nx.sin() * 0.6 + (nx * 0.5 + nz * 0.7).cos() * 0.4) * 6.0
-        + (hash2(x, z) * 2.0 - 1.0) * 1.5;
-    base.floor() as i32
-}
-
-#[inline]
-fn hash2(x: i32, z: i32) -> f32 {
-    let mut h = x.wrapping_mul(374761393).rotate_left(13) ^ z.wrapping_mul(668265263);
-    h = (h ^ (h >> 17)).wrapping_mul(2246822519u32 as i32);
-    let v = (h ^ (h >> 15)) as u32;
-    (v as f32) / (u32::MAX as f32)
 }
 
 fn despawn_mesh_set(
