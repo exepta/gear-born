@@ -3,63 +3,36 @@ use bevy::render::mesh::{Indices, PrimitiveTopology};
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::fs;
+use std::path::Path;
+
 // =================================================================
 //                          External Struct
 // =================================================================
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
-pub enum Blocks {
-    Dirt,
-    Grass
-}
+pub type BlockId = u32;
 
-impl Blocks {
-    pub const fn json_path(self) -> &'static str {
-        match self {
-            Blocks::Dirt  => "blocks/dirt_block.json",
-            Blocks::Grass => "blocks/grass_block.json",
-        }
-    }
-}
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
+pub enum Face { Top, Bottom, North, East, South, West }
 
-impl AsRef<str> for Blocks {
-    fn as_ref(&self) -> &str {
-        self.json_path()
-    }
-}
+#[derive(Clone, Copy)]
+pub struct UvRect { pub u0:f32, pub v0:f32, pub u1:f32, pub v1:f32 }
 
-#[derive(Deserialize)]
-pub struct BlockTileset {
-    pub image: String,
-    pub tile_size: u32,
-    pub columns: u32,
-    pub rows: u32,
-    pub tiles: HashMap<String, [u32; 2]>,
-}
-
-#[derive(Deserialize)]
-pub struct BlockJson {
+#[derive(Clone)]
+pub struct BlockDef {
     pub name: String,
-    pub texture_dir: Option<String>,
-    pub texture: TextureFacesJson,
-    #[serde(default)]
     pub stats: BlockStats,
-}
-
-#[derive(Deserialize)]
-pub struct TextureFacesJson {
-    pub top: String,
-    pub bottom: String,
-    pub west: String,
-    #[serde(default)]
-    pub nord: String,
-    #[serde(default)]
-    pub north: String,
-    pub east: String,
-    pub south: String,
+    pub uv_top: UvRect,
+    pub uv_bottom: UvRect,
+    pub uv_north: UvRect,
+    pub uv_east: UvRect,
+    pub uv_south: UvRect,
+    pub uv_west: UvRect,
+    pub image: Handle<Image>,
+    pub material: Handle<StandardMaterial>,
 }
 
 #[derive(Deserialize, Clone, Default)]
+#[allow(dead_code)]
 pub struct BlockStats {
     #[serde(default)]
     pub hardness: f32,
@@ -71,58 +44,169 @@ pub struct BlockStats {
     pub emissive: f32,
 }
 
-fn d_true() -> bool { true }
+#[derive(Resource)]
+pub struct BlockRegistry {
+    pub defs: Vec<BlockDef>,
+    pub name_to_id: HashMap<String, BlockId>,
+}
+
+impl BlockRegistry {
+    pub fn load_all(
+        asset_server: &AssetServer,
+        materials: &mut Assets<StandardMaterial>,
+        blocks_dir: &str, // z.B. "assets/blocks"
+    ) -> Self {
+        // Reserve 0 = Air
+        let mut defs: Vec<BlockDef> = Vec::new();
+        let mut name_to_id = HashMap::new();
+
+        defs.push(BlockDef {
+            name: "air".into(),
+            stats: BlockStats::default(),
+            uv_top: Z, uv_bottom: Z, uv_north: Z, uv_east: Z, uv_south: Z, uv_west: Z,
+            image: Handle::default(),
+            material: Handle::default(),
+        });
+        name_to_id.insert("air".into(), 0);
+
+        let dir = Path::new(blocks_dir);
+        for entry in fs::read_dir(dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.extension().and_then(|s| s.to_str()) != Some("json") { continue; }
+
+            let block_json: BlockJson = read_json(path.to_str().unwrap());
+            let tex_dir = block_json
+                .texture_dir
+                .clone()
+                .unwrap_or_else(|| guess_tex_dir_from_block_name(&block_json.name));
+            let tileset_path = format!("assets/{}/data.json", tex_dir);
+            let tileset: BlockTileset = read_json(&tileset_path);
+
+            let atlas_path = format!("{}/{}", tex_dir, tileset.image);
+            let image: Handle<Image> = asset_server.load(atlas_path.as_str());
+
+            // UVs je Face
+            let uv_top    = tile_uv(&tileset, &block_json.texture.top).unwrap();
+            let uv_bottom = tile_uv(&tileset, &block_json.texture.bottom).unwrap();
+            let uv_west   = tile_uv(&tileset, &block_json.texture.west).unwrap();
+            let uv_east   = tile_uv(&tileset, &block_json.texture.east).unwrap();
+            let uv_south  = tile_uv(&tileset, &block_json.texture.south).unwrap();
+            let north_key = if !block_json.texture.north.is_empty() {
+                &block_json.texture.north
+            } else {
+                &block_json.texture.nord
+            };
+            let uv_north  = tile_uv(&tileset, north_key).unwrap();
+
+            let material = materials.add(StandardMaterial {
+                base_color_texture: Some(image.clone()),
+                ..Default::default()
+            });
+
+            let id = defs.len() as BlockId;
+            name_to_id.insert(block_json.name.clone(), id);
+            defs.push(BlockDef {
+                name: block_json.name,
+                stats: block_json.stats,
+                uv_top, uv_bottom, uv_north, uv_east, uv_south, uv_west,
+                image,
+                material,
+            });
+        }
+
+        Self { defs, name_to_id }
+    }
+
+    #[inline] pub fn id(&self, name:&str) -> BlockId {
+        *self.name_to_id.get(name).expect("unknown block name")
+    }
+
+    #[inline] pub fn def(&self, id: BlockId) -> &BlockDef { &self.defs[id as usize] }
+
+    #[inline] pub fn uv(&self, id: BlockId, face: Face) -> UvRect {
+        let d = self.def(id);
+        match face {
+            Face::Top => d.uv_top,
+            Face::Bottom => d.uv_bottom,
+            Face::North => d.uv_north,
+            Face::East => d.uv_east,
+            Face::South => d.uv_south,
+            Face::West => d.uv_west,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
+pub enum Blocks {
+    Dirt,
+    Grass,
+    Stone
+}
+
+impl Blocks {
+    pub const fn name(self) -> &'static str {
+        match self {
+            Blocks::Dirt  => "dirt_block",
+            Blocks::Grass => "grass_block",
+            Blocks::Stone => "stone_block"
+        }
+    }
+}
+
+impl AsRef<str> for Blocks {
+    fn as_ref(&self) -> &str {
+        self.name()
+    }
+}
 
 // =================================================================
 //                        External Function
 // =================================================================
 
-pub fn spawn_block_from_file<P: AsRef<str>>(
+pub fn spawn_block_by_id(
     commands: &mut Commands,
-    asset_server: &AssetServer,
     meshes: &mut Assets<Mesh>,
-    materials: &mut Assets<StandardMaterial>,
+    reg: &BlockRegistry,
+    id: BlockId,
+    world_pos: Vec3,
+    size: f32,
+) {
+    let def = reg.def(id);
+    let faces = FaceUvRects {
+        top: def.uv_top,
+        bottom: def.uv_bottom,
+        north: def.uv_north,
+        east: def.uv_east,
+        south: def.uv_south,
+        west: def.uv_west,
+    };
+    let mesh = cube_mesh_with_face_uvs(&faces, size);
+
+    commands.spawn((
+        Mesh3d(meshes.add(mesh)),
+        MeshMaterial3d(def.material.clone()),
+        Transform::from_translation(world_pos + Vec3::splat(size * 0.5)),
+        Name::new(def.name.clone()),
+    ));
+}
+
+pub fn spawn_block_by_name<P: AsRef<str>>(
+    commands: &mut Commands,
+    meshes: &mut Assets<Mesh>,
+    reg: &BlockRegistry,
     block_ref: P,
     world_pos: Vec3,
     size: f32,
 ) {
-    let block_json_path: &str = block_ref.as_ref();
-    let block_json: BlockJson = read_json(&format!("assets/{block_json_path}"));
-    let tex_dir = block_json
-        .texture_dir
-        .clone()
-        .unwrap_or_else(|| guess_tex_dir_from_block_name(&block_json.name));
-    let tileset_path = format!("assets/{}/data.json", tex_dir);
-    let tileset: BlockTileset = read_json(&tileset_path);
-
-    let atlas_path = format!("{}/{}", tex_dir, tileset.image);
-    let atlas_image: Handle<Image> = asset_server.load(atlas_path.as_str());
-
-    // UVs je Face aus dem per-Block-Tileset
-    let face_uvs = collect_face_uvs(&tileset, &block_json.texture)
-        .unwrap_or_else(|e| panic!("UV mapping failed for '{}': {e}", block_json.name));
-
-    // Mesh + Material
-    let mesh = cube_mesh_with_face_uvs(&face_uvs, size);
-    let material = StandardMaterial {
-        base_color_texture: Some(atlas_image),
-        ..Default::default()
-    };
-
-    commands.spawn((
-        Mesh3d(meshes.add(mesh)),
-        MeshMaterial3d(materials.add(material)),
-        Transform::from_translation(world_pos + Vec3::splat(size * 0.5)),
-        Name::new(block_json.name),
-    ));
+    let id = reg.id(block_ref.as_ref());
+    spawn_block_by_id(commands, meshes, reg, id, world_pos, size);
 }
 
 // =================================================================
 //                          Internal Struct
 // =================================================================
 
-#[derive(Clone)]
-struct UvRect { u0: f32, v0: f32, u1: f32, v1: f32 }
+const Z: UvRect = UvRect { u0:0.0, v0:0.0, u1:0.0, v1:0.0 };
 
 #[derive(Clone)]
 struct FaceUvRects {
@@ -134,35 +218,91 @@ struct FaceUvRects {
     south: UvRect,
 }
 
+#[derive(Deserialize)]
+struct BlockTileset {
+    pub image: String,
+    pub tile_size: u32,
+    pub columns: u32,
+    pub rows: u32,
+    pub tiles: HashMap<String, [u32; 2]>,
+}
+
+#[derive(Deserialize)]
+struct BlockJson {
+    pub name: String,
+    pub texture_dir: Option<String>,
+    pub texture: TextureFacesJson,
+    #[serde(default)]
+    pub stats: BlockStats,
+}
+
+#[derive(Deserialize)]
+struct TextureFacesJson {
+    pub top: String,
+    pub bottom: String,
+    pub west: String,
+    #[serde(default)]
+    pub nord: String,
+    #[serde(default)]
+    pub north: String,
+    pub east: String,
+    pub south: String,
+}
+
+fn d_true() -> bool { true }
+
 // =================================================================
 //                        Internal Function
 // =================================================================
 
+/// Reads a UTF-8 JSON file from `path` and deserializes it into `T`.
+///
+/// The generic type `T` must implement `Deserialize`.
+///
+/// # Parameters
+/// - `path`: Filesystem path to the JSON file.
+///
+/// # Returns
+/// A value of type `T` parsed from the file contents.
+///
+/// # Panics
+/// - If the file cannot be read, with a message `missing file: {path}`.
+/// - If the file contents are not valid JSON for `T`, with a message `invalid JSON '{path}': {error}`.
 fn read_json<T: for<'de> Deserialize<'de>>(path: &str) -> T {
     let s = fs::read_to_string(path).unwrap_or_else(|_| panic!("missing file: {path}"));
     serde_json::from_str(&s).unwrap_or_else(|e| panic!("invalid JSON '{path}': {e}"))
 }
 
+/// Guesses a texture directory path for a block by its identifier.
+///
+/// If `block_name` ends with `"_block"`, that suffix is stripped; otherwise the full name is used.
+/// The returned path is of the form: `textures/blocks/{base}`.
+///
+/// # Parameters
+/// - `block_name`: Logical block identifier, optionally ending with `"_block"`.
+///
+/// # Returns
+/// A relative texture directory path for the block.
 fn guess_tex_dir_from_block_name(block_name: &str) -> String {
     let base = block_name.strip_suffix("_block").unwrap_or(block_name);
     format!("textures/blocks/{}", base)
 }
 
-fn collect_face_uvs(ts: &BlockTileset, faces: &TextureFacesJson) -> Result<FaceUvRects, String> {
-    let north_name = if !faces.north.is_empty() { &faces.north }
-    else if !faces.nord.is_empty() { &faces.nord }
-    else { return Err("north/nord missing".into()); };
-
-    Ok(FaceUvRects {
-        top:    tile_uv(ts, &faces.top)?,
-        bottom: tile_uv(ts, &faces.bottom)?,
-        west:   tile_uv(ts, &faces.west)?,
-        east:   tile_uv(ts, &faces.east)?,
-        south:  tile_uv(ts, &faces.south)?,
-        north:  tile_uv(ts, north_name)?,
-    })
-}
-
+/// Computes a normalized UV rectangle for a named tile within a tileset atlas.
+///
+/// The UV rectangle is in the `[0, 1] × [0, 1]` range. A half-texel inset is applied
+/// to all sides to reduce sampling bleeding between adjacent tiles.
+///
+/// # Parameters
+/// - `ts`: Tileset containing the atlas dimensions, tile size, and tile name mapping.
+/// - `name`: Tile identifier to resolve within the tileset.
+///
+/// # Returns
+/// A `UvRect { u0, v0, u1, v1 }` spanning the tile in normalized coordinates.
+///
+/// # Errors
+/// - If `name` is not found in the tileset mapping.
+/// - If the resolved tile coordinates exceed the tileset bounds.
 fn tile_uv(ts: &BlockTileset, name: &str) -> Result<UvRect, String> {
     let [col, row] = *ts.tiles.get(name)
         .ok_or_else(|| format!("tile '{}' not in data.json", name))?;
@@ -188,6 +328,29 @@ fn tile_uv(ts: &BlockTileset, name: &str) -> Result<UvRect, String> {
     Ok(UvRect { u0, v0, u1, v1 })
 }
 
+/// Builds a cube mesh with per-face UVs and outward-facing normals.
+///
+/// Generates a cube spanning the range `[0, size]` on each axis. Each face
+/// uses its own four vertices (no shared vertices across faces) to allow
+/// distinct UV mapping. Triangle winding is counter-clockwise for outward
+/// normals. UV orientation per face may flip `v` to match the expected
+/// texture orientation.
+///
+/// The resulting `Mesh` contains:
+/// - `Mesh::ATTRIBUTE_POSITION` (24 vertices),
+/// - `Mesh::ATTRIBUTE_NORMAL` (per-vertex outward axis-aligned normals),
+/// - `Mesh::ATTRIBUTE_UV_0` (per-vertex UVs),
+/// and indexed triangles (`u32`) with `PrimitiveTopology::TriangleList`.
+///
+/// # Parameters
+/// - `f`: UV rectangles for each cube face.
+/// - `size`: Edge length of the cube.
+///
+/// # Returns
+/// A `Mesh` ready to be rendered, with positions, normals, UVs, and indices populated.
+///
+/// # Notes
+/// The cube is not centered at the origin; it occupies `[0, size]` in X/Y/Z.
 fn cube_mesh_with_face_uvs(f: &FaceUvRects, size: f32) -> Mesh {
     let s = size;
 
