@@ -13,6 +13,5 @@ pub struct GameCorePlugin;
 impl Plugin for GameCorePlugin {
     #[coverage(off)]
     fn build(&self, _app: &mut App) {
-
     }
 }

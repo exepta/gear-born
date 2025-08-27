@@ -1,5 +1,6 @@
 {
   "name": "grass_block",
+  "texture_dir": "textures/blocks/grass",
   "texture": {
     "top": "grass_top",
     "bottom": "dirt",

@@ -1,5 +1,6 @@
 {
   "name": "dirt_block",
+  "texture_dir": "textures/blocks/dirt",
   "texture": {
     "top": "dirt",
     "bottom": "dirt",

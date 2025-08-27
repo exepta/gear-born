@@ -3,7 +3,9 @@ use bevy::prelude::*;
 use bevy::window::{CursorGrabMode, PrimaryWindow};
 use game_core::configuration::GameConfig;
 use game_core::key_converter::convert;
+use game_core::states::{AppState, InGameStates};
 use game_core::world::block;
+use game_core::world::block::{BlockRegistry, Blocks};
 
 pub struct CameraPlugin;
 
@@ -14,10 +16,10 @@ impl Plugin for CameraPlugin {
             brightness: 150.0,
             affects_lightmapped_meshes: false,
         })
-            .add_systems(Startup, (spawn_scene, spawn_camera))
+            .add_systems(OnEnter(AppState::InGame(InGameStates::Game)), (spawn_scene, spawn_camera))
             .add_systems(
                 Update,
-                (grab_cursor_on_click, release_cursor_on_escape, mouse_look, creative_movement),
+                (grab_cursor_on_click, release_cursor_on_escape, mouse_look, creative_movement).run_if(resource_exists::<BlockRegistry>),
             );
     }
 }
@@ -32,18 +34,15 @@ struct FpsCamera {
 
 fn spawn_scene(
     mut commands: Commands,
-    meshes: ResMut<Assets<Mesh>>,
-    materials: ResMut<Assets<StandardMaterial>>,
-    asset_server: Res<AssetServer>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    block_registry: Res<BlockRegistry>,
 ) {
 
-    block::spawn_block_from_files(
+    block::spawn_block_by_name(
         &mut commands,
-        asset_server,
-        meshes,
-        materials,
-        "textures/blocks/dirt/tileset.json",
-        "blocks/dirt_block.json",
+        &mut meshes,
+        &block_registry,
+        Blocks::Stone,
         Vec3::ZERO,
         1.0,
     );
@@ -52,6 +51,8 @@ fn spawn_scene(
         DirectionalLight::default(),
         Transform::from_xyz(4.0, 8.0, 4.0).looking_at(Vec3::ZERO, Vec3::Y),
     ));
+
+    info!("content: {:?}", block_registry.name_to_id);
 }
 
 fn spawn_camera(mut commands: Commands) {
