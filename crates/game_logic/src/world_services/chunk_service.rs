@@ -104,6 +104,16 @@ impl MeshBuild {
     }
 }
 
+#[derive(Clone)]
+struct BorderSnapshot {
+    y0: usize,
+    y1: usize,
+    east:  Option<Vec<BlockId>>,
+    west:  Option<Vec<BlockId>>,
+    south: Option<Vec<BlockId>>,
+    north: Option<Vec<BlockId>>,
+}
+
 pub struct ChunkService;
 
 const LOAD_RADIUS: i32 = 8;
@@ -119,7 +129,7 @@ impl Plugin for ChunkService {
                 schedule_chunk_generation,
                 collect_generated_chunks,
                 collect_meshed_subchunks,
-                schedule_remesh_tasks,
+                schedule_remesh_tasks_from_events.in_set(VoxelStage::Meshing),
                 unload_far_chunks,
             ).chain()
                 .run_if(in_state(AppState::InGame(InGameStates::Game))));
@@ -167,7 +177,6 @@ fn collect_generated_chunks(
     mut chunk_map: ResMut<ChunkMap>,
     reg: Res<BlockRegistry>,
 ) {
-    // Snapshot der UVs/Opacity für Meshing-Tasks
     let reg_lite = RegLite::from_reg(&reg);
     let mut finished = Vec::new();
 
@@ -179,11 +188,40 @@ fn collect_generated_chunks(
             for sub in 0..SEC_COUNT {
                 let chunk_copy = data.clone();
                 let reg_copy = reg_lite.clone();
+                let y0 = sub * SEC_H;
+                let y1 = (y0 + SEC_H).min(CY);
+                let borders = snapshot_borders(&chunk_map, c, y0, y1);
+
                 let t = pool.spawn(async move {
-                    let builds = mesh_subchunk_async(&chunk_copy, &reg_copy, sub, 1.0).await;
+                    let builds = mesh_subchunk_async(&chunk_copy, &reg_copy, sub, 1.0, Some(borders)).await;
                     ((c, sub), builds)
                 });
                 pending_mesh.0.insert((c, sub), t);
+            }
+
+            let neigh = [
+                IVec2::new(c.x + 1, c.y),
+                IVec2::new(c.x - 1, c.y),
+                IVec2::new(c.x, c.y + 1),
+                IVec2::new(c.x, c.y - 1),
+            ];
+            for n_coord in neigh {
+                if let Some(n_chunk) = chunk_map.chunks.get(&n_coord) {
+                    for sub in 0..SEC_COUNT {
+                        let key = (n_coord, sub);
+                        //if pending_mesh.0.contains_key(&key) { continue; }
+                        let reg_copy = reg_lite.clone();
+                        let chunk_copy = n_chunk.clone();
+                        let y0 = sub * SEC_H;
+                        let y1 = (y0 + SEC_H).min(CY);
+                        let borders = snapshot_borders(&chunk_map, n_coord, y0, y1);
+                        let t = pool.spawn(async move {
+                            let builds = mesh_subchunk_async(&chunk_copy, &reg_copy, sub, 1.0, Some(borders)).await;
+                            (key, builds)
+                        });
+                        pending_mesh.0.insert(key, t);
+                    }
+                }
             }
 
             finished.push(*coord);
@@ -206,20 +244,13 @@ fn collect_meshed_subchunks(
 
     for (key, task) in pending_mesh.0.iter_mut() {
         if let Some(((coord, sub), builds)) = future::block_on(future::poll_once(task)) {
-
             let old_keys: Vec<_> = mesh_index.map
                 .keys()
                 .cloned()
                 .filter(|(c, s, _)| c == &coord && *s as usize == sub)
                 .collect();
 
-            despawn_mesh_set(
-                old_keys,
-                &mut mesh_index,
-                &mut commands,
-                &q_mesh,
-                &mut meshes,
-            );
+            despawn_mesh_set(old_keys, &mut mesh_index, &mut commands, &q_mesh, &mut meshes);
 
             let s = 1.0;
             let origin = Vec3::new(
@@ -227,7 +258,6 @@ fn collect_meshed_subchunks(
                 (Y_MIN as f32) * s,
                 (coord.y * CZ as i32) as f32 * s,
             );
-
 
             for (bid, mb) in builds {
                 if mb.pos.is_empty() { continue; }
@@ -253,29 +283,44 @@ fn collect_meshed_subchunks(
     for k in done_keys { pending_mesh.0.remove(&k); }
 }
 
-fn schedule_remesh_tasks(
+fn schedule_remesh_tasks_from_events(
     mut pending_mesh: ResMut<PendingMesh>,
     chunk_map: Res<ChunkMap>,
     reg: Res<BlockRegistry>,
+    mut ev_dirty: EventReader<SubchunkDirty>,
 ) {
-    if chunk_map.chunks.is_empty() { return; }
+    if chunk_map.chunks.is_empty() {
+        ev_dirty.clear();
+        return;
+    }
+
     let reg_lite = RegLite::from_reg(&reg);
     let pool = AsyncComputeTaskPool::get();
 
-    for (coord, chunk) in chunk_map.chunks.iter() {
-        for sub in 0..SEC_COUNT {
-            if !chunk.is_dirty(sub) { continue; }
-            if pending_mesh.0.contains_key(&(*coord, sub)) { continue; }
+    for e in ev_dirty.read().copied() {
+        let coord = e.coord;
+        let sub   = e.sub;
 
-            let chunk_copy = chunk.clone();
-            let reg_copy = reg_lite.clone();
-            let key = (*coord, sub);
-            let t = pool.spawn(async move {
-                let builds = mesh_subchunk_async(&chunk_copy, &reg_copy, sub, 1.0).await;
-                (key, builds)
-            });
-            pending_mesh.0.insert(key, t);
+        let Some(chunk) = chunk_map.chunks.get(&coord) else { continue; };
+
+        let key = (coord, sub);
+        if pending_mesh.0.contains_key(&key) {
+            continue;
         }
+
+        let chunk_copy = chunk.clone();
+        let reg_copy   = reg_lite.clone();
+
+        let y0 = sub * SEC_H;
+        let y1 = (y0 + SEC_H).min(CY);
+        let borders = snapshot_borders(&chunk_map, coord, y0, y1);
+
+        let t = pool.spawn(async move {
+            let builds = mesh_subchunk_async(&chunk_copy, &reg_copy, sub, 1.0, Some(borders)).await;
+            (key, builds)
+        });
+
+        pending_mesh.0.insert(key, t);
     }
 }
 
@@ -312,19 +357,13 @@ fn unload_far_chunks(
             .filter(|(c, _, _)| c == coord)
             .collect();
 
-        despawn_mesh_set(
-            keys,
-            &mut mesh_index,
-            &mut commands,
-            &q_mesh,
-            &mut meshes,
-        );
+        despawn_mesh_set(keys, &mut mesh_index, &mut commands, &q_mesh, &mut meshes);
 
         chunk_map.chunks.remove(coord);
     }
 }
 
-#[inline] fn lerp(a:f32, b:f32, t:f32) -> f32 { a + (b - a) * t }
+#[inline] fn leap(a:f32, b:f32, t:f32) -> f32 { a + (b - a) * t }
 #[inline] fn smoothstep(e0:f32, e1:f32, x:f32) -> f32 {
     let t = ((x - e0) / (e1 - e0)).clamp(0.0, 1.0);
     t * t * (3.0 - 2.0 * t)
@@ -356,33 +395,7 @@ pub async fn generate_chunk_async_noise(
     plains_n.set_noise_type(Option::from(NoiseType::OpenSimplex2));
     plains_n.set_frequency(Option::from(cfg.plains_freq));
 
-    let (mut cave_n, mut cavern_n, cave_region_n, entrance_gate_n) =
-        if cfg.enable_caves {
-            let mut cave_n = FastNoiseLite::with_seed(cfg.seed ^ 0x0CAFE5i32);
-            cave_n.set_noise_type(Option::from(NoiseType::OpenSimplex2));
-            cave_n.set_frequency(Option::from(cfg.caves_freq));
-            cave_n.set_fractal_type(Option::from(FractalType::FBm));
-            cave_n.set_fractal_octaves(Option::from(3));
-            cave_n.set_fractal_gain(Some(0.5));
-
-            let mut cavern_n = FastNoiseLite::with_seed(cfg.seed ^ 0x00C0FFEEi32);
-            cavern_n.set_noise_type(Option::from(NoiseType::OpenSimplex2));
-            cavern_n.set_frequency(Option::from(cfg.caverns_freq));
-            cavern_n.set_fractal_type(Option::from(FractalType::FBm));
-            cavern_n.set_fractal_octaves(Option::from(2));
-
-            let mut cave_region_n = FastNoiseLite::with_seed(cfg.seed ^ 0x0DEADBEEi32);
-            cave_region_n.set_noise_type(Option::from(NoiseType::OpenSimplex2));
-            cave_region_n.set_frequency(Option::from(cfg.caves_region_freq));
-
-            let mut entrance_gate_n = FastNoiseLite::with_seed(cfg.seed ^ 0x0E17EACEi32);
-            entrance_gate_n.set_noise_type(Option::from(NoiseType::OpenSimplex2));
-            entrance_gate_n.set_frequency(Option::from(cfg.entrance_chance_freq));
-
-            (Some(cave_n), Some(cavern_n), Some(cave_region_n), Some(entrance_gate_n))
-        } else {
-            (None, None, None, None)
-        };
+    let (_cave_n, _cavern_n, _cave_region_n, _entrance_gate_n) = (None::<FastNoiseLite>, None::<FastNoiseLite>, None::<FastNoiseLite>, None::<FastNoiseLite>);
 
     for lx in 0..CX {
         for lz in 0..CZ {
@@ -397,8 +410,8 @@ pub async fn generate_chunk_async_noise(
                 mask_raw,
             );
 
-            let amp = lerp(cfg.plains_span as f32, cfg.height_span as f32, plains_factor);
-            let warp_amp = lerp(cfg.warp_amp_plains, cfg.warp_amp, plains_factor);
+            let amp = leap(cfg.plains_span as f32, cfg.height_span as f32, plains_factor);
+            let warp_amp = leap(cfg.warp_amp_plains, cfg.warp_amp, plains_factor);
 
             // Domain warp
             let dx = warp_n.get_noise_2d(wxf, wzf) * warp_amp;
@@ -409,7 +422,7 @@ pub async fn generate_chunk_async_noise(
 
             let flatten = (1.0 - plains_factor) * cfg.plains_flatten;
             if flatten > 0.0 {
-                h01 = lerp(0.5, h01, 1.0 - flatten);
+                h01 = leap(0.5, h01, 1.0 - flatten);
             }
 
             let mut h = cfg.base_height + (h01 * amp) as i32;
@@ -418,75 +431,12 @@ pub async fn generate_chunk_async_noise(
             for ly in 0..CY {
                 let wy = local_y_to_world(ly);
 
-                let mut id = if wy < h - 2 { stone }
+                let id = if wy < h - 2 { stone }
                 else if wy < h { dirt }
                 else if wy == h { grass }
                 else { 0 };
 
-                if cfg.enable_caves && id != 0 && wy < h {
-                    let cr = cave_region_n.as_ref().unwrap();
-                    let eg = entrance_gate_n.as_ref().unwrap();
-                    let cn = cave_n.as_mut().unwrap();
-                    let cv = cavern_n.as_mut().unwrap();
-
-                    let depth = (h - wy).max(0) as f32;
-                    let in_shell = wy > h - cfg.surface_shell;
-                    let y_in_band = wy >= cfg.cave_min_y && wy <= cfg.cave_max_y;
-
-                    let region_ok = map01(cr.get_noise_2d(wxf, wzf)) >= cfg.caves_region_thresh;
-                    let gate_str  = map01(eg.get_noise_2d(wxf, wzf));
-                    let allow_entrance_here = in_shell
-                        && depth <= cfg.entrance_depth as f32
-                        && gate_str >= cfg.entrance_chance_thresh;
-
-                    let can_carve_here = (y_in_band && !in_shell && region_ok) || allow_entrance_here;
-
-                    if can_carve_here {
-                        let cx = wxf;
-                        let cy = (wy as f32) * cfg.cave_y_scale;
-                        let cz = wzf;
-
-                        let tunnels = cn.get_noise_3d(cx, cy, cz).abs().powf(cfg.caves_tunnel_abs_pow);
-                        let caverns = map01(cv.get_noise_3d(cx, cy, cz));
-
-                        let entrance_bias = if allow_entrance_here {
-                            (1.0 - depth / cfg.entrance_depth as f32).max(0.0) * cfg.entrance_bonus
-                        } else { 0.0 };
-
-                        let thr_t = (cfg.caves_thresh   + 0.05 - entrance_bias).clamp(0.25, 0.95);
-                        let thr_c = (cfg.caverns_thresh + 0.05 - entrance_bias * 0.5).clamp(0.35, 0.98);
-
-                        let carve = tunnels > thr_t
-                            || (cfg.caverns_weight > 0.0 && caverns > thr_c && region_ok && !in_shell);
-
-                        if carve {
-                            id = 0;
-                        }
-                    }
-
-                    if allow_entrance_here && in_shell {
-                        let r = cfg.entrance_open_radius.max(0);
-                        let d = cfg.entrance_open_depth.max(1);
-
-                        for oy in 0..d {
-                            let yy = wy - oy;
-                            if yy < cfg.cave_min_y { break; }
-
-                            let ly2 = (ly as i32 - oy).max(0) as usize;
-                            for dx in -r..=r {
-                                let lx2 = (lx as i32 + dx).clamp(0, CX as i32 - 1) as usize;
-                                for dz in -r..=r {
-                                    let lz2 = (lz as i32 + dz).clamp(0, CZ as i32 - 1) as usize;
-                                    c.set(lx2, ly2, lz2, 0);
-                                }
-                            }
-                        }
-                    }
-                }
-
-                if id != 0 {
-                    c.set(lx, ly, lz, id);
-                }
+                if id != 0 { c.set(lx, ly, lz, id); }
             }
         }
     }
@@ -499,11 +449,35 @@ async fn mesh_subchunk_async(
     reg: &RegLite,
     sub: usize,
     block_size: f32,
+    borders: Option<BorderSnapshot>,
 ) -> Vec<(BlockId, MeshBuild)> {
     let mut by_block: HashMap<BlockId, MeshBuild> = HashMap::new();
     let s = block_size;
     let y0 = sub * SEC_H;
     let y1 = (y0 + SEC_H).min(CY);
+
+    let (east, west, south, north, snap_y0, _snap_y1) = if let Some(b) = borders {
+        debug_assert_eq!(b.y0, y0, "BorderSnapshot.y0 != sub y0");
+        debug_assert_eq!(b.y1, y1, "BorderSnapshot.y1 != sub y1");
+        (b.east, b.west, b.south, b.north, b.y0, b.y1)
+    } else {
+        (None, None, None, None, y0, y1)
+    };
+
+    let sample = |opt: &Option<Vec<BlockId>>, y: usize, i: usize, stride: usize| -> BlockId {
+        match opt {
+            Some(v) => {
+                let iy = y - snap_y0;
+                v[iy * stride + i]
+            }
+            None => 0,
+        }
+    };
+
+    let east_at  = |y: usize, z: usize| sample(&east,  y, z, CZ);
+    let west_at  = |y: usize, z: usize| sample(&west,  y, z, CZ);
+    let south_at = |y: usize, x: usize| sample(&south, y, x, CX);
+    let north_at = |y: usize, x: usize| sample(&north, y, x, CX);
 
     let get = |x:isize,y:isize,z:isize| -> BlockId {
         if x < 0 || y < 0 || z < 0 || x >= CX as isize || y >= CY as isize || z >= CZ as isize { 0 }
@@ -533,22 +507,26 @@ async fn mesh_subchunk_async(
                     b.quad([[wx,wy,wz],[wx+s,wy,wz],[wx+s,wy,wz+s],[wx,wy,wz+s]],[0.0,-1.0,0.0], uvq(u.u0,u.v0,u.u1,u.v1,false));
                 }
                 // +X (East)
-                if !(get(x as isize+1, y as isize, z as isize) != 0 && reg.opaque(get(x as isize+1, y as isize, z as isize))) {
+                let n_east = if x + 1 < CX { get(x as isize+1, y as isize, z as isize) } else { east_at(y, z) };
+                if !(n_east != 0 && reg.opaque(n_east)) {
                     let u = reg.uv(id, Face::East);
                     b.quad([[wx+s,wy,wz+s],[wx+s,wy,wz],[wx+s,wy+s,wz],[wx+s,wy+s,wz+s]],[1.0,0.0,0.0], uvq(u.u0,u.v0,u.u1,u.v1,true));
                 }
                 // -X (West)
-                if !(get(x as isize-1, y as isize, z as isize) != 0 && reg.opaque(get(x as isize-1, y as isize, z as isize))) {
+                let n_west = if x > 0 { get(x as isize-1, y as isize, z as isize) } else { west_at(y, z) };
+                if !(n_west != 0 && reg.opaque(n_west)) {
                     let u = reg.uv(id, Face::West);
                     b.quad([[wx,wy,wz],[wx,wy,wz+s],[wx,wy+s,wz+s],[wx,wy+s,wz]],[-1.0,0.0,0.0], uvq(u.u0,u.v0,u.u1,u.v1,true));
                 }
                 // +Z (South)
-                if !(get(x as isize, y as isize, z as isize+1) != 0 && reg.opaque(get(x as isize, y as isize, z as isize+1))) {
+                let n_south = if z + 1 < CZ { get(x as isize, y as isize, z as isize+1) } else { south_at(y, x) };
+                if !(n_south != 0 && reg.opaque(n_south)) {
                     let u = reg.uv(id, Face::South);
                     b.quad([[wx,wy,wz+s],[wx+s,wy,wz+s],[wx+s,wy+s,wz+s],[wx,wy+s,wz+s]],[0.0,0.0,1.0], uvq(u.u0,u.v0,u.u1,u.v1,true));
                 }
                 // -Z (North)
-                if !(get(x as isize, y as isize, z as isize-1) != 0 && reg.opaque(get(x as isize, y as isize, z as isize-1))) {
+                let n_north = if z > 0 { get(x as isize, y as isize, z as isize-1) } else { north_at(y, x) };
+                if !(n_north != 0 && reg.opaque(n_north)) {
                     let u = reg.uv(id, Face::North);
                     b.quad([[wx+s,wy,wz],[wx,wy,wz],[wx,wy+s,wz],[wx+s,wy+s,wz]],[0.0,0.0,-1.0], uvq(u.u0,u.v0,u.u1,u.v1,true));
                 }
@@ -557,6 +535,34 @@ async fn mesh_subchunk_async(
     }
 
     by_block.into_iter().map(|(k,b)| (k,b)).collect()
+}
+
+fn snapshot_borders(chunk_map: &ChunkMap, coord: IVec2, y0: usize, y1: usize) -> BorderSnapshot {
+    let mut snap = BorderSnapshot { y0, y1, east: None, west: None, south: None, north: None };
+
+    let take_xz = |c: &ChunkData, x: usize, z: usize, y: usize| -> BlockId { c.get(x,y,z) };
+
+    if let Some(n) = chunk_map.chunks.get(&IVec2::new(coord.x + 1, coord.y)) {
+        let mut v = Vec::with_capacity((y1 - y0) * CZ);
+        for y in y0..y1 { for z in 0..CZ { v.push(take_xz(n, 0, z, y)); } }
+        snap.east = Some(v);
+    }
+    if let Some(n) = chunk_map.chunks.get(&IVec2::new(coord.x - 1, coord.y)) {
+        let mut v = Vec::with_capacity((y1 - y0) * CZ);
+        for y in y0..y1 { for z in 0..CZ { v.push(take_xz(n, CX-1, z, y)); } }
+        snap.west = Some(v);
+    }
+    if let Some(n) = chunk_map.chunks.get(&IVec2::new(coord.x, coord.y + 1)) {
+        let mut v = Vec::with_capacity((y1 - y0) * CX);
+        for y in y0..y1 { for x in 0..CX { v.push(take_xz(n, x, 0, y)); } }
+        snap.south = Some(v);
+    }
+    if let Some(n) = chunk_map.chunks.get(&IVec2::new(coord.x, coord.y - 1)) {
+        let mut v = Vec::with_capacity((y1 - y0) * CX);
+        for y in y0..y1 { for x in 0..CX { v.push(take_xz(n, x, CZ-1, y)); } }
+        snap.north = Some(v);
+    }
+    snap
 }
 
 fn despawn_mesh_set(

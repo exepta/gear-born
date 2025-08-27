@@ -1,7 +1,7 @@
-use std::collections::HashMap;
-use bevy::prelude::*;
 use crate::world::block::BlockId;
 use crate::world::chunk_dim::*;
+use bevy::prelude::*;
+use std::collections::HashMap;
 
 #[inline] pub fn idx(x:usize, y:usize, z:usize) ->usize { (y*CZ + z)*CX + x }
 
@@ -50,7 +50,16 @@ pub struct ChunkMap {
     pub chunks: HashMap<IVec2, ChunkData>,
 }
 
-#[derive(Event)]
+#[derive(Event, Clone, Copy)]
 pub struct ChunkGenerated {
     pub coord: IVec2,
 }
+
+#[derive(Event, Clone, Copy)]
+pub struct SubchunkDirty {
+    pub coord: IVec2,
+    pub sub: usize,
+}
+
+#[derive(SystemSet, Debug, Hash, PartialEq, Eq, Clone)]
+pub enum VoxelStage { Input, WorldEdit, Meshing }

@@ -2,19 +2,25 @@ use bevy::prelude::*;
 use game_core::player::selection::{BlockHit, SelectionState};
 use game_core::states::{AppState, InGameStates};
 use game_core::world::block::{id_any, BlockId, BlockRegistry, Face};
-use game_core::world::chunk::{ChunkData, ChunkMap};
+use game_core::world::chunk::{ChunkData, ChunkMap, SubchunkDirty, VoxelStage};
 use game_core::world::chunk_dim::*;
 
 pub struct LookAtService;
 
 impl Plugin for LookAtService {
     fn build(&self, app: &mut App) {
+        app.configure_sets(Update, (
+            VoxelStage::Input,
+            VoxelStage::WorldEdit,
+            VoxelStage::Meshing,
+        ).chain());
+
         app.add_systems(
             Update,
             (
-                update_selection,
-                draw_selection_gizmo,
-                handle_break_and_place
+                update_selection.in_set(VoxelStage::Input),
+                draw_selection_gizmo.in_set(VoxelStage::Input),
+                handle_break_and_place.in_set(VoxelStage::WorldEdit),
             ).chain().run_if(in_state(AppState::InGame(InGameStates::Game)))
         );
     }
@@ -54,6 +60,7 @@ fn handle_break_and_place(
     mut chunk_map: ResMut<ChunkMap>,
     reg: Res<BlockRegistry>,
     sel: Res<SelectionState>,
+    mut ev_dirty: EventWriter<SubchunkDirty>,
 ) {
     let Some(hit) = sel.hit else { return; };
 
@@ -61,16 +68,16 @@ fn handle_break_and_place(
         if let Some(mut access) = world_access_mut(&mut chunk_map, hit.block_pos) {
             access.set(0);
         }
+        mark_dirty_block_and_neighbors(&mut chunk_map, hit.block_pos, &mut ev_dirty);
     }
 
     if buttons.just_pressed(MouseButton::Right) {
-        let stone = id_any(&reg, &["stone_block", "stone"]);
+        let stone = id_any(&reg, &["stone_block","stone"]);
         if stone != 0 {
             if let Some(mut access) = world_access_mut(&mut chunk_map, hit.place_pos) {
-                if access.get() == 0 {
-                    access.set(stone);
-                }
+                if access.get() == 0 { access.set(stone); }
             }
+            mark_dirty_block_and_neighbors(&mut chunk_map, hit.place_pos, &mut ev_dirty);
         }
     }
 }
@@ -183,3 +190,44 @@ impl<'a> WorldMutAccess<'a> {
 
 // world_y <-> local_y
 #[inline] fn world_y_to_local(wy: i32) -> usize { (wy - Y_MIN) as usize }
+
+fn mark_dirty_block_and_neighbors(
+    chunk_map: &mut ChunkMap,
+    wp: IVec3,
+    ev: &mut EventWriter<SubchunkDirty>,
+) {
+    const OFFS: [IVec3; 7] = [
+        IVec3::new(0, 0, 0),
+        IVec3::new( 1, 0,  0),
+        IVec3::new(-1, 0,  0),
+        IVec3::new( 0, 1,  0),
+        IVec3::new( 0,-1,  0),
+        IVec3::new( 0, 0,  1),
+        IVec3::new( 0, 0, -1),
+    ];
+
+    for o in OFFS {
+        let p = wp + o;
+        if p.y < Y_MIN || p.y > Y_MAX { continue; }
+
+        // immer die Mapper aus chunk_dim benutzen
+        let (coord, local_xz) = world_to_chunk_xz(p.x, p.z);
+        let ly = world_y_to_local(p.y);
+        let sub = ly / SEC_H;
+
+        let mut mark = |c: IVec2, s: usize| {
+            if s < SEC_COUNT {
+                if let Some(ch) = chunk_map.chunks.get_mut(&c) {
+                    ch.mark_dirty_local_y(s);
+                    ev.write(SubchunkDirty { coord: c, sub: s }); // <-- Event
+                }
+            }
+        };
+
+        mark(coord, sub);
+        if ly % SEC_H == 0 && sub > 0            { mark(coord, sub - 1); }
+        if ly % SEC_H == SEC_H - 1 && sub + 1 < SEC_COUNT { mark(coord, sub + 1); }
+
+        let _ = local_xz;
+    }
+}
