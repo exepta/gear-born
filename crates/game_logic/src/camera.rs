@@ -67,8 +67,8 @@ fn spawn_camera(mut commands: Commands) {
         DistanceFog {
             color: fog_color,
             falloff: FogFalloff::Linear {
-                start: 190.0,
-                end: 200.0,
+                start: 300.0,
+                end: 320.0,
             },
             ..default()
         },

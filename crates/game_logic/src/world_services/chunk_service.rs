@@ -164,7 +164,7 @@ fn schedule_chunk_generation(
     );
     let cfg_clone = gen_cfg.clone();
 
-    let mut budget = (MAX_INFLIGHT_GEN.saturating_sub(pending.0.len())).min(8);
+    let mut budget = MAX_INFLIGHT_GEN.saturating_sub(pending.0.len()).min(8);
 
     for dz in -LOAD_RADIUS..=LOAD_RADIUS {
         for dx in -LOAD_RADIUS..=LOAD_RADIUS {
