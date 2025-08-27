@@ -9,7 +9,10 @@ use game_core::states::{AppState, InGameStates};
 use game_core::world::block::{id_any, BlockId, BlockRegistry, Face, UvRect};
 use game_core::world::chunk::*;
 use game_core::world::chunk_dim::*;
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
+
+#[derive(Resource, Default)]
+struct MeshBacklog(VecDeque<(IVec2, usize)>);
 
 #[derive(Resource, Default)]
 struct ChunkMeshIndex {
@@ -119,10 +122,14 @@ pub struct ChunkService;
 const LOAD_RADIUS: i32 = 8;
 const KEEP_RADIUS: i32 = LOAD_RADIUS + 1;
 
+const MAX_INFLIGHT_MESH: usize = 64;
+const MAX_INFLIGHT_GEN:  usize = 32;
+
 impl Plugin for ChunkService {
     fn build(&self, app: &mut App) {
         app
             .init_resource::<ChunkMeshIndex>()
+            .init_resource::<MeshBacklog>()
             .init_resource::<PendingGen>()
             .init_resource::<PendingMesh>()
             .add_systems(Update, (
@@ -130,6 +137,7 @@ impl Plugin for ChunkService {
                 collect_generated_chunks,
                 collect_meshed_subchunks,
                 schedule_remesh_tasks_from_events.in_set(VoxelStage::Meshing),
+                drain_mesh_backlog,
                 unload_far_chunks,
             ).chain()
                 .run_if(in_state(AppState::InGame(InGameStates::Game))));
@@ -147,6 +155,8 @@ fn schedule_chunk_generation(
     let cam_pos = cam.translation();
     let (center_c, _) = world_to_chunk_xz(cam_pos.x.floor() as i32, cam_pos.z.floor() as i32);
 
+    if !can_spawn_gen(&pending) { return; }
+
     let ids = (
         id_any(&reg, &["grass_block","grass"]),
         id_any(&reg, &["dirt_block","dirt"]),
@@ -154,8 +164,11 @@ fn schedule_chunk_generation(
     );
     let cfg_clone = gen_cfg.clone();
 
+    let mut budget = (MAX_INFLIGHT_GEN.saturating_sub(pending.0.len())).min(8);
+
     for dz in -LOAD_RADIUS..=LOAD_RADIUS {
         for dx in -LOAD_RADIUS..=LOAD_RADIUS {
+            if budget == 0 { return; }
             let c = IVec2::new(center_c.x + dx, center_c.y + dz);
             if chunk_map.chunks.contains_key(&c) || pending.0.contains_key(&c) { continue; }
 
@@ -167,13 +180,46 @@ fn schedule_chunk_generation(
                 (c, data)
             });
             pending.0.insert(c, task);
+            budget -= 1;
         }
+    }
+}
+
+fn drain_mesh_backlog(
+    mut backlog: ResMut<MeshBacklog>,
+    mut pending_mesh: ResMut<PendingMesh>,
+    chunk_map: Res<ChunkMap>,
+    reg: Res<BlockRegistry>,
+) {
+    if chunk_map.chunks.is_empty() { backlog.0.clear(); return; }
+
+    let reg_lite = RegLite::from_reg(&reg);
+    let pool = AsyncComputeTaskPool::get();
+
+    while can_spawn_mesh(&pending_mesh) {
+        let Some((coord, sub)) = backlog.0.pop_front() else { break; };
+        if pending_mesh.0.contains_key(&(coord, sub)) { continue; }
+        let Some(chunk) = chunk_map.chunks.get(&coord) else { continue; };
+
+        let chunk_copy = chunk.clone();
+        let reg_copy   = reg_lite.clone();
+        let y0 = sub * SEC_H;
+        let y1 = (y0 + SEC_H).min(CY);
+        let borders = snapshot_borders(&chunk_map, coord, y0, y1);
+
+        let key = (coord, sub);
+        let t = pool.spawn(async move {
+            let builds = mesh_subchunk_async(&chunk_copy, &reg_copy, sub, 1.0, Some(borders)).await;
+            (key, builds)
+        });
+        pending_mesh.0.insert(key, t);
     }
 }
 
 fn collect_generated_chunks(
     mut pending_gen: ResMut<PendingGen>,
     mut pending_mesh: ResMut<PendingMesh>,
+    mut backlog: ResMut<MeshBacklog>,
     mut chunk_map: ResMut<ChunkMap>,
     reg: Res<BlockRegistry>,
 ) {
@@ -184,19 +230,25 @@ fn collect_generated_chunks(
         if let Some((c, data)) = future::block_on(future::poll_once(task)) {
             chunk_map.chunks.insert(c, data.clone());
 
+            // Subchunks dieses Chunks
             let pool = AsyncComputeTaskPool::get();
             for sub in 0..SEC_COUNT {
-                let chunk_copy = data.clone();
-                let reg_copy = reg_lite.clone();
+                let key = (c, sub);
                 let y0 = sub * SEC_H;
                 let y1 = (y0 + SEC_H).min(CY);
                 let borders = snapshot_borders(&chunk_map, c, y0, y1);
 
-                let t = pool.spawn(async move {
-                    let builds = mesh_subchunk_async(&chunk_copy, &reg_copy, sub, 1.0, Some(borders)).await;
-                    ((c, sub), builds)
-                });
-                pending_mesh.0.insert((c, sub), t);
+                if can_spawn_mesh(&pending_mesh) {
+                    let chunk_copy = data.clone();
+                    let reg_copy = reg_lite.clone();
+                    let t = pool.spawn(async move {
+                        let builds = mesh_subchunk_async(&chunk_copy, &reg_copy, sub, 1.0, Some(borders)).await;
+                        ((c, sub), builds)
+                    });
+                    pending_mesh.0.insert(key, t);
+                } else {
+                    enqueue_mesh(&mut backlog, &pending_mesh, key);
+                }
             }
 
             let neigh = [
@@ -209,17 +261,24 @@ fn collect_generated_chunks(
                 if let Some(n_chunk) = chunk_map.chunks.get(&n_coord) {
                     for sub in 0..SEC_COUNT {
                         let key = (n_coord, sub);
-                        //if pending_mesh.0.contains_key(&key) { continue; }
-                        let reg_copy = reg_lite.clone();
-                        let chunk_copy = n_chunk.clone();
+                        if pending_mesh.0.contains_key(&key) { continue; }
+
                         let y0 = sub * SEC_H;
                         let y1 = (y0 + SEC_H).min(CY);
                         let borders = snapshot_borders(&chunk_map, n_coord, y0, y1);
-                        let t = pool.spawn(async move {
-                            let builds = mesh_subchunk_async(&chunk_copy, &reg_copy, sub, 1.0, Some(borders)).await;
-                            (key, builds)
-                        });
-                        pending_mesh.0.insert(key, t);
+
+                        if can_spawn_mesh(&pending_mesh) {
+                            let pool = AsyncComputeTaskPool::get();
+                            let reg_copy = reg_lite.clone();
+                            let chunk_copy = n_chunk.clone();
+                            let t = pool.spawn(async move {
+                                let builds = mesh_subchunk_async(&chunk_copy, &reg_copy, sub, 1.0, Some(borders)).await;
+                                (key, builds)
+                            });
+                            pending_mesh.0.insert(key, t);
+                        } else {
+                            enqueue_mesh(&mut backlog, &pending_mesh, key);
+                        }
                     }
                 }
             }
@@ -287,6 +346,7 @@ fn schedule_remesh_tasks_from_events(
     mut pending_mesh: ResMut<PendingMesh>,
     chunk_map: Res<ChunkMap>,
     reg: Res<BlockRegistry>,
+    mut backlog: ResMut<MeshBacklog>,
     mut ev_dirty: EventReader<SubchunkDirty>,
 ) {
     if chunk_map.chunks.is_empty() {
@@ -300,27 +360,32 @@ fn schedule_remesh_tasks_from_events(
     for e in ev_dirty.read().copied() {
         let coord = e.coord;
         let sub   = e.sub;
+        let key   = (coord, sub);
 
-        let Some(chunk) = chunk_map.chunks.get(&coord) else { continue; };
+        if pending_mesh.0.contains_key(&key) { continue; }
 
-        let key = (coord, sub);
-        if pending_mesh.0.contains_key(&key) {
+        let Some(chunk) = chunk_map.chunks.get(&coord) else {
+            enqueue_mesh(&mut backlog, &pending_mesh, key);
             continue;
-        }
-
-        let chunk_copy = chunk.clone();
-        let reg_copy   = reg_lite.clone();
+        };
 
         let y0 = sub * SEC_H;
         let y1 = (y0 + SEC_H).min(CY);
         let borders = snapshot_borders(&chunk_map, coord, y0, y1);
 
-        let t = pool.spawn(async move {
-            let builds = mesh_subchunk_async(&chunk_copy, &reg_copy, sub, 1.0, Some(borders)).await;
-            (key, builds)
-        });
+        if can_spawn_mesh(&pending_mesh) {
+            let chunk_copy = chunk.clone();
+            let reg_copy   = reg_lite.clone();
 
-        pending_mesh.0.insert(key, t);
+            let t = pool.spawn(async move {
+                let builds = mesh_subchunk_async(&chunk_copy, &reg_copy, sub, 1.0, Some(borders)).await;
+                (key, builds)
+            });
+
+            pending_mesh.0.insert(key, t);
+        } else {
+            enqueue_mesh(&mut backlog, &pending_mesh, key);
+        }
     }
 }
 
@@ -331,6 +396,7 @@ fn unload_far_chunks(
     mut meshes: ResMut<Assets<Mesh>>,
     mut pending_gen: ResMut<PendingGen>,
     mut pending_mesh: ResMut<PendingMesh>,
+    mut backlog: ResMut<MeshBacklog>,
     q_mesh: Query<&Mesh3d>,
     q_cam: Query<&GlobalTransform, With<Camera3d>>,
 ) {
@@ -360,6 +426,7 @@ fn unload_far_chunks(
         despawn_mesh_set(keys, &mut mesh_index, &mut commands, &q_mesh, &mut meshes);
 
         chunk_map.chunks.remove(coord);
+        backlog.0.retain(|(c, _)| c != coord);
     }
 }
 
@@ -580,4 +647,21 @@ fn despawn_mesh_set(
             commands.entity(ent).despawn();
         }
     }
+}
+
+fn can_spawn_mesh(pending_mesh: &PendingMesh) -> bool {
+    pending_mesh.0.len() < MAX_INFLIGHT_MESH
+}
+fn can_spawn_gen(pending_gen: &PendingGen) -> bool {
+    pending_gen.0.len() < MAX_INFLIGHT_GEN
+}
+
+fn backlog_contains(backlog: &MeshBacklog, key: (IVec2, usize)) -> bool {
+    backlog.0.iter().any(|&k| k == key)
+}
+
+fn enqueue_mesh(backlog: &mut MeshBacklog, pending: &PendingMesh, key: (IVec2, usize)) {
+    if pending.0.contains_key(&key) { return; }
+    if backlog_contains(backlog, key) { return; }
+    backlog.0.push_back(key);
 }
