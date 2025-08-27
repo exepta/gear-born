@@ -1,11 +1,11 @@
 {
-  "image": "textures/blocks/grass/grass.png",
+  "image": "dirt.png",
   "tile_size": 64,
-  "columns": 3,
+  "columns": 1,
   "rows": 1,
   "tiles": {
     "dirt": [
-      2,
+      0,
       0
     ]
   }

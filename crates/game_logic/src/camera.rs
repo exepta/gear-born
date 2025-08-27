@@ -4,6 +4,7 @@ use bevy::window::{CursorGrabMode, PrimaryWindow};
 use game_core::configuration::GameConfig;
 use game_core::key_converter::convert;
 use game_core::world::block;
+use game_core::world::block::Blocks;
 
 pub struct CameraPlugin;
 
@@ -32,18 +33,17 @@ struct FpsCamera {
 
 fn spawn_scene(
     mut commands: Commands,
-    meshes: ResMut<Assets<Mesh>>,
-    materials: ResMut<Assets<StandardMaterial>>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
     asset_server: Res<AssetServer>,
 ) {
 
-    block::spawn_block_from_files(
+    block::spawn_block_from_file(
         &mut commands,
-        asset_server,
-        meshes,
-        materials,
-        "textures/blocks/dirt/tileset.json",
-        "blocks/dirt_block.json",
+        &asset_server,
+        &mut meshes,
+        &mut materials,
+        Blocks::Grass,
         Vec3::ZERO,
         1.0,
     );
