@@ -207,6 +207,13 @@ pub fn spawn_block_by_name<P: AsRef<str>>(
     spawn_block_by_id(commands, meshes, reg, id, world_pos, size);
 }
 
+pub fn id_any(reg: &BlockRegistry, names: &[&str]) -> BlockId {
+    for n in names {
+        if let Some(&id) = reg.name_to_id.get(*n) { return id; }
+    }
+    0
+}
+
 // =================================================================
 //                          Internal Struct
 // =================================================================

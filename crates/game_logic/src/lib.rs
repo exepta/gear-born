@@ -3,9 +3,11 @@
 mod camera;
 mod registry;
 mod world_services;
+mod player_services;
 
 use crate::camera::CameraPlugin;
 use bevy::prelude::*;
+use crate::player_services::PlayerServices;
 use crate::registry::block_registry::BlockInternalRegistry;
 use crate::world_services::WorldServices;
 
@@ -17,6 +19,7 @@ impl Plugin for GameLogicPlugin {
         app.add_plugins((
             BlockInternalRegistry,
             WorldServices,
+            PlayerServices,
             CameraPlugin
         ));
     }

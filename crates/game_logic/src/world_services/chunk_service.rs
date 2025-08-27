@@ -4,12 +4,12 @@ use bevy::render::mesh::{Indices, PrimitiveTopology, VertexAttributeValues};
 use bevy::tasks::{AsyncComputeTaskPool, Task};
 use bevy::tasks::futures_lite::future;
 use game_core::states::{AppState, InGameStates};
-use game_core::world::block::{BlockId, BlockRegistry, Face, UvRect};
+use game_core::world::block::{id_any, BlockId, BlockRegistry, Face, UvRect};
 use game_core::world::chunk::*;
 use game_core::world::chunk_dim::*;
 
 #[derive(Resource, Default)]
-pub struct ChunkMeshIndex {
+struct ChunkMeshIndex {
     pub map: HashMap<(IVec2, u8, BlockId), Entity>,
 }
 
@@ -206,7 +206,13 @@ fn collect_meshed_subchunks(
                 &mut meshes,
             );
 
-            let origin = Vec3::new((coord.x * CX as i32) as f32, 0.0, (coord.y * CZ as i32) as f32);
+            let s = 1.0;
+            let origin = Vec3::new(
+                (coord.x * CX as i32) as f32 * s,
+                (Y_MIN as f32) * s,
+                (coord.y * CZ as i32) as f32 * s,
+            );
+
 
             for (bid, mb) in builds {
                 if mb.pos.is_empty() { continue; }
@@ -407,14 +413,6 @@ fn hash2(x: i32, z: i32) -> f32 {
     h = (h ^ (h >> 17)).wrapping_mul(2246822519u32 as i32);
     let v = (h ^ (h >> 15)) as u32;
     (v as f32) / (u32::MAX as f32)
-}
-
-#[inline]
-fn id_any(reg: &BlockRegistry, names: &[&str]) -> BlockId {
-    for n in names {
-        if let Some(&id) = reg.name_to_id.get(*n) { return id; }
-    }
-    0
 }
 
 fn despawn_mesh_set(
