@@ -2,16 +2,22 @@
 
 mod camera;
 mod registry;
+mod world_services;
 
 use crate::camera::CameraPlugin;
 use bevy::prelude::*;
 use crate::registry::block_registry::BlockInternalRegistry;
+use crate::world_services::WorldServices;
 
 pub struct GameLogicPlugin;
 
 impl Plugin for GameLogicPlugin {
     #[coverage(off)]
     fn build(&self, app: &mut App) {
-        app.add_plugins((BlockInternalRegistry, CameraPlugin));
+        app.add_plugins((
+            BlockInternalRegistry,
+            WorldServices,
+            CameraPlugin
+        ));
     }
 }

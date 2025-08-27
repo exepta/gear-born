@@ -9,7 +9,7 @@ use std::path::Path;
 //                          External Struct
 // =================================================================
 
-pub type BlockId = u32;
+pub type BlockId = u16;
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
 pub enum Face { Top, Bottom, North, East, South, West }
@@ -51,6 +51,11 @@ pub struct BlockRegistry {
 }
 
 impl BlockRegistry {
+
+    pub fn material(&self, id: BlockId) -> Handle<StandardMaterial> {
+        self.def(id).material.clone()
+    }
+
     pub fn load_all(
         asset_server: &AssetServer,
         materials: &mut Assets<StandardMaterial>,

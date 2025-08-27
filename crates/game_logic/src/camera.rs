@@ -4,8 +4,7 @@ use bevy::window::{CursorGrabMode, PrimaryWindow};
 use game_core::configuration::GameConfig;
 use game_core::key_converter::convert;
 use game_core::states::{AppState, InGameStates};
-use game_core::world::block;
-use game_core::world::block::{BlockRegistry, Blocks};
+use game_core::world::block::{BlockRegistry};
 
 pub struct CameraPlugin;
 
@@ -34,18 +33,17 @@ struct FpsCamera {
 
 fn spawn_scene(
     mut commands: Commands,
-    mut meshes: ResMut<Assets<Mesh>>,
     block_registry: Res<BlockRegistry>,
 ) {
 
-    block::spawn_block_by_name(
+/*    block::spawn_block_by_name(
         &mut commands,
         &mut meshes,
         &block_registry,
         Blocks::Stone,
         Vec3::ZERO,
         1.0,
-    );
+    );*/
 
     commands.spawn((
         DirectionalLight::default(),
@@ -62,7 +60,7 @@ fn spawn_camera(mut commands: Commands) {
         FpsCamera {
             yaw: 0.0,
             pitch: 0.0,
-            speed: 6.0,
+            speed: 20.0,
             sensitivity: 0.001,
         },
     ));
