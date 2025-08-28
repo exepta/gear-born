@@ -9,7 +9,7 @@ use std::path::Path;
 //                          External Struct
 // =================================================================
 
-pub type BlockId = u32;
+pub type BlockId = u16;
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
 pub enum Face { Top, Bottom, North, East, South, West }
@@ -51,6 +51,11 @@ pub struct BlockRegistry {
 }
 
 impl BlockRegistry {
+
+    pub fn material(&self, id: BlockId) -> Handle<StandardMaterial> {
+        self.def(id).material.clone()
+    }
+
     pub fn load_all(
         asset_server: &AssetServer,
         materials: &mut Assets<StandardMaterial>,
@@ -100,6 +105,10 @@ impl BlockRegistry {
 
             let material = materials.add(StandardMaterial {
                 base_color_texture: Some(image.clone()),
+                alpha_mode: AlphaMode::Opaque,
+                unlit: false,
+                metallic: 0.0,
+                perceptual_roughness: 1.0,
                 ..Default::default()
             });
 
@@ -200,6 +209,13 @@ pub fn spawn_block_by_name<P: AsRef<str>>(
 ) {
     let id = reg.id(block_ref.as_ref());
     spawn_block_by_id(commands, meshes, reg, id, world_pos, size);
+}
+
+pub fn id_any(reg: &BlockRegistry, names: &[&str]) -> BlockId {
+    for n in names {
+        if let Some(&id) = reg.name_to_id.get(*n) { return id; }
+    }
+    0
 }
 
 // =================================================================

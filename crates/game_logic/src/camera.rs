@@ -1,11 +1,11 @@
 use bevy::input::mouse::MouseMotion;
+use bevy::pbr::CascadeShadowConfigBuilder;
 use bevy::prelude::*;
 use bevy::window::{CursorGrabMode, PrimaryWindow};
 use game_core::configuration::GameConfig;
 use game_core::key_converter::convert;
 use game_core::states::{AppState, InGameStates};
-use game_core::world::block;
-use game_core::world::block::{BlockRegistry, Blocks};
+use game_core::world::block::BlockRegistry;
 
 pub struct CameraPlugin;
 
@@ -13,7 +13,7 @@ impl Plugin for CameraPlugin {
     fn build(&self, app: &mut App) {
         app.insert_resource(AmbientLight {
             color: Color::WHITE,
-            brightness: 150.0,
+            brightness: 50.0,
             affects_lightmapped_meshes: false,
         })
             .add_systems(OnEnter(AppState::InGame(InGameStates::Game)), (spawn_scene, spawn_camera))
@@ -34,35 +34,56 @@ struct FpsCamera {
 
 fn spawn_scene(
     mut commands: Commands,
-    mut meshes: ResMut<Assets<Mesh>>,
     block_registry: Res<BlockRegistry>,
 ) {
 
-    block::spawn_block_by_name(
-        &mut commands,
-        &mut meshes,
-        &block_registry,
-        Blocks::Stone,
-        Vec3::ZERO,
-        1.0,
-    );
-
     commands.spawn((
-        DirectionalLight::default(),
-        Transform::from_xyz(4.0, 8.0, 4.0).looking_at(Vec3::ZERO, Vec3::Y),
+        DirectionalLight {
+            shadows_enabled: true,
+            illuminance: 1_000.0,
+            color: Color::WHITE,
+            ..default()
+        },
+        CascadeShadowConfigBuilder {
+            first_cascade_far_bound: 16.0,
+            maximum_distance: 180.0,
+            ..default()
+        }.build(),
+        Transform::from_xyz(4.0, 200.0, 4.0).looking_at(Vec3::ZERO, Vec3::Y),
     ));
 
     info!("content: {:?}", block_registry.name_to_id);
 }
 
-fn spawn_camera(mut commands: Commands) {
+fn spawn_camera(mut commands: Commands, game_config: Res<GameConfig>) {
+    let fog_color = Color::srgb(0.62, 0.72, 0.85);
+    let fog_start = game_config.graphics.chunk_range as f32 * 25.0;
+    let fog_end   = fog_start + 20.0;
+
+    let clip_pad = 0.25;
+    let far_clip = fog_end - clip_pad;
+
     commands.spawn((
         Camera3d::default(),
-        Transform::from_xyz(0.0, 2.0, 6.0).looking_at(Vec3::new(0.0, 2.0, 0.0), Vec3::Y),
+        Projection::Perspective(PerspectiveProjection {
+            near: 0.05,
+            far:  far_clip.max(1.0),
+            ..default()
+        }),
+        Camera {
+            clear_color: ClearColorConfig::Custom(fog_color),
+            ..default()
+        },
+        DistanceFog {
+            color: fog_color,
+            falloff: FogFalloff::Linear { start: fog_start, end: fog_end },
+            ..default()
+        },
+        Transform::from_xyz(0.0, 18.0, 6.0).looking_at(Vec3::new(0.0, 2.0, 0.0), Vec3::Y),
         FpsCamera {
             yaw: 0.0,
             pitch: 0.0,
-            speed: 6.0,
+            speed: 20.0,
             sensitivity: 0.001,
         },
     ));

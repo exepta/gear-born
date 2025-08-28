@@ -25,8 +25,13 @@ features = [
     "bevy_animation",
     "animation",
     "tonemapping_luts",
-    "bevy_window"
+    "bevy_window",
+    "bevy_ui",
+    "bevy_color"
 ]
+
+[dependencies.fastnoise-lite]
+version = "1.1.1"
 
 [dependencies.bevy_rapier3d]
 version = "0.31.0"

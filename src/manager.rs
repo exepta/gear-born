@@ -1,3 +1,4 @@
+use bevy::pbr::DirectionalLightShadowMap;
 use bevy::prelude::*;
 use bevy_rapier3d::prelude::*;
 use game_core::configuration::GameConfig;
@@ -24,8 +25,13 @@ impl Plugin for ManagerPlugin {
             GameLogicPlugin,
         ));
 
+        app.add_systems(Startup, setup_shadow_map);
         app.add_systems(Update, toggle_world_inspector);
     }
+}
+
+fn setup_shadow_map(mut commands: Commands) {
+    commands.insert_resource(DirectionalLightShadowMap { size: 1024 });
 }
 
 #[coverage(off)]
