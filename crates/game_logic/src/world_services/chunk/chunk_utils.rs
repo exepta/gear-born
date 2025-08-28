@@ -1,11 +1,18 @@
 use crate::world_services::chunk::chunk_struct::*;
 use std::collections::HashMap;
+use std::fs;
+use std::io::{Read, Write};
+use std::path::PathBuf;
 use bevy::prelude::*;
 use fastnoise_lite::{FastNoiseLite, FractalType, NoiseType};
 use game_core::configuration::WorldGenConfig;
 use game_core::world::block::{BlockId, Face};
-use game_core::world::chunk::ChunkData;
+use game_core::world::chunk::{ChunkData, ChunkMap, ChunkMeshIndex};
 use game_core::world::chunk_dim::*;
+use game_core::world::save::WorldSave;
+
+pub(crate) const MAX_INFLIGHT_MESH: usize = 64;
+pub(crate) const MAX_INFLIGHT_GEN:  usize = 32;
 
 pub(crate) async fn generate_chunk_async_noise(
     coord: IVec2,
@@ -212,6 +219,125 @@ pub(crate) async fn mesh_subchunk_async(
 
     by_block.into_iter().map(|(k,b)| (k,b)).collect()
 }
+
+pub fn save_chunk_sync(ws: &WorldSave, coord: IVec2, chunk: &ChunkData) -> std::io::Result<()> {
+    let path = chunk_path(ws, coord);
+    let mut raw: Vec<u8> = Vec::with_capacity(32 + CX*CY*CZ*4);
+
+    // Header
+    raw.extend_from_slice(b"VXL1");
+    raw.extend_from_slice(&ws.version.to_le_bytes());
+    raw.extend_from_slice(&(CX as u32).to_le_bytes());
+    raw.extend_from_slice(&(CY as u32).to_le_bytes());
+    raw.extend_from_slice(&(CZ as u32).to_le_bytes());
+
+    for &id in &chunk.blocks {
+        let v = id as u32;
+        raw.extend_from_slice(&v.to_le_bytes());
+    }
+
+    let compressed = lz4_flex::block::compress_prepend_size(&raw);
+
+    let mut f = fs::File::create(path)?;
+    f.write_all(&compressed)?;
+    Ok(())
+}
+
+pub(crate) fn load_chunk_sync(ws: &WorldSave, coord: IVec2) -> std::io::Result<ChunkData> {
+    let path = chunk_path(ws, coord);
+    let mut file = fs::File::open(path)?;
+    let mut buf = Vec::new();
+    file.read_to_end(&mut buf)?;
+
+    let raw = lz4_flex::block::decompress_size_prepended(&buf)
+        .map_err(|_| std::io::Error::new(std::io::ErrorKind::InvalidData, "lz4"))?;
+
+    let mut p = 0;
+    macro_rules! take {
+        ($n:expr) => {{
+            let s = &raw[p..p+$n]; p += $n; s
+        }};
+    }
+
+    if take!(4) != b"VXL1" { return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "magic")); }
+    let _ver = u32::from_le_bytes(take!(4).try_into().unwrap());
+    let cx   = u32::from_le_bytes(take!(4).try_into().unwrap()) as usize;
+    let cy   = u32::from_le_bytes(take!(4).try_into().unwrap()) as usize;
+    let cz   = u32::from_le_bytes(take!(4).try_into().unwrap()) as usize;
+    if cx!=CX || cy!=CY || cz!=CZ {
+        return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "dims mismatch"));
+    }
+
+    let mut c = ChunkData::new();
+    for i in 0..(CX*CY*CZ) {
+        let v = u32::from_le_bytes(take!(4).try_into().unwrap());
+        c.blocks[i] = v as BlockId;
+    }
+    Ok(c)
+}
+
+pub(crate) fn snapshot_borders(chunk_map: &ChunkMap, coord: IVec2, y0: usize, y1: usize) -> BorderSnapshot {
+    let mut snap = BorderSnapshot { y0, y1, east: None, west: None, south: None, north: None };
+
+    let take_xz = |c: &ChunkData, x: usize, z: usize, y: usize| -> BlockId { c.get(x,y,z) };
+
+    if let Some(n) = chunk_map.chunks.get(&IVec2::new(coord.x + 1, coord.y)) {
+        let mut v = Vec::with_capacity((y1 - y0) * CZ);
+        for y in y0..y1 { for z in 0..CZ { v.push(take_xz(n, 0, z, y)); } }
+        snap.east = Some(v);
+    }
+    if let Some(n) = chunk_map.chunks.get(&IVec2::new(coord.x - 1, coord.y)) {
+        let mut v = Vec::with_capacity((y1 - y0) * CZ);
+        for y in y0..y1 { for z in 0..CZ { v.push(take_xz(n, CX-1, z, y)); } }
+        snap.west = Some(v);
+    }
+    if let Some(n) = chunk_map.chunks.get(&IVec2::new(coord.x, coord.y + 1)) {
+        let mut v = Vec::with_capacity((y1 - y0) * CX);
+        for y in y0..y1 { for x in 0..CX { v.push(take_xz(n, x, 0, y)); } }
+        snap.south = Some(v);
+    }
+    if let Some(n) = chunk_map.chunks.get(&IVec2::new(coord.x, coord.y - 1)) {
+        let mut v = Vec::with_capacity((y1 - y0) * CX);
+        for y in y0..y1 { for x in 0..CX { v.push(take_xz(n, x, CZ-1, y)); } }
+        snap.north = Some(v);
+    }
+    snap
+}
+
+pub(crate) fn despawn_mesh_set(
+    keys: impl IntoIterator<Item = (IVec2, u8, BlockId)>,
+    mesh_index: &mut ChunkMeshIndex,
+    commands: &mut Commands,
+    q_mesh: &Query<&Mesh3d>,
+    meshes: &mut Assets<Mesh>,
+) {
+    for key in keys {
+        if let Some(ent) = mesh_index.map.remove(&key) {
+            if let Ok(Mesh3d(handle)) = q_mesh.get(ent) {
+                meshes.remove(handle.id());
+            }
+            commands.entity(ent).despawn();
+        }
+    }
+}
+
+pub(crate) fn can_spawn_mesh(pending_mesh: &PendingMesh) -> bool {
+    pending_mesh.0.len() < MAX_INFLIGHT_MESH
+}
+pub(crate) fn can_spawn_gen(pending_gen: &PendingGen) -> bool {
+    pending_gen.0.len() < MAX_INFLIGHT_GEN
+}
+
+pub(crate) fn backlog_contains(backlog: &MeshBacklog, key: (IVec2, usize)) -> bool {
+    backlog.0.iter().any(|&k| k == key)
+}
+
+pub(crate) fn enqueue_mesh(backlog: &mut MeshBacklog, pending: &PendingMesh, key: (IVec2, usize)) {
+    if pending.0.contains_key(&key) { return; }
+    if backlog_contains(backlog, key) { return; }
+    backlog.0.push_back(key);
+}
+
 #[inline] pub(crate) fn leap(a:f32, b:f32, t:f32) -> f32 { a + (b - a) * t }
 #[inline] pub(crate) fn smoothstep(e0:f32, e1:f32, x:f32) -> f32 {
     let t = ((x - e0) / (e1 - e0)).clamp(0.0, 1.0);
@@ -219,3 +345,7 @@ pub(crate) async fn mesh_subchunk_async(
 }
 
 #[inline] pub(crate) fn map01(x: f32) -> f32 { x * 0.5 + 0.5 }
+
+#[inline] pub(crate) fn chunk_path(world_save: &WorldSave, coord: IVec2) -> PathBuf {
+    world_save.chunk_dir.join(format!("{}_{}.vxl", coord.x, coord.y))
+}

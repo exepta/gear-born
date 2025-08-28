@@ -1,5 +1,5 @@
 mod chunk_service;
-mod chunk_utils;
+pub mod chunk_utils;
 mod chunk_struct;
 
 use bevy::prelude::*;
