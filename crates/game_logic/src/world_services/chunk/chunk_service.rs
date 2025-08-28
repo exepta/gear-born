@@ -14,6 +14,8 @@ use game_core::world::chunk_dim::*;
 use game_core::world::save::{RegionCache, WorldSave};
 use std::collections::HashMap;
 
+const MAX_APPLY_PER_FRAME: usize = 14;
+
 #[derive(Resource, Default)]
 struct ChunkColliderIndex(pub HashMap<(IVec2, u8), Entity>);
 
@@ -47,18 +49,15 @@ fn schedule_chunk_generation(
     gen_cfg: Res<WorldGenConfig>,
     game_config: Res<GameConfig>,
     ws: Res<WorldSave>,
-    mut cache: ResMut<RegionCache>,
     q_cam: Query<&GlobalTransform, With<Camera3d>>,
 ) {
     let cam = if let Ok(t) = q_cam.single() { t } else { return; };
-    let cam_pos = cam.translation();
-    let (center_c, _) = world_to_chunk_xz(cam_pos.x.floor() as i32, cam_pos.z.floor() as i32);
+    let (center_c, _) = world_to_chunk_xz(cam.translation().x.floor() as i32, cam.translation().z.floor() as i32);
 
     if !can_spawn_gen(&pending) { return; }
 
     let load_radius = game_config.graphics.chunk_range;
     let mut budget = MAX_INFLIGHT_GEN.saturating_sub(pending.0.len()).min(8);
-
 
     let ids = (
         id_any(&reg, &["grass_block","grass"]),
@@ -66,6 +65,7 @@ fn schedule_chunk_generation(
         id_any(&reg, &["stone_block","stone"]),
     );
     let cfg_clone = gen_cfg.clone();
+    let ws_root = ws.root.clone();
 
     for dz in -load_radius..=load_radius {
         for dx in -load_radius..=load_radius {
@@ -73,22 +73,15 @@ fn schedule_chunk_generation(
             let c = IVec2::new(center_c.x + dx, center_c.y + dz);
             if chunk_map.chunks.contains_key(&c) || pending.0.contains_key(&c) { continue; }
 
-            if let Ok(Some(data)) = try_load_chunk_sync(&ws, &mut cache, c) {
-                let pool = AsyncComputeTaskPool::get();
-                let data_clone = data.clone();
-                let task = pool.spawn(async move { (c, data_clone) });
-                pending.0.insert(c, task);
-                budget -= 1;
-                continue;
-            }
-
             let pool = AsyncComputeTaskPool::get();
             let ids_copy = ids;
             let cfg = cfg_clone.clone();
+            let root = ws_root.clone();
             let task = pool.spawn(async move {
-                let data = generate_chunk_async_noise(c, ids_copy, cfg).await;
+                let data = load_or_gen_chunk_async(root, c, ids_copy, cfg).await;
                 (c, data)
             });
+
             pending.0.insert(c, task);
             budget -= 1;
         }
@@ -214,8 +207,11 @@ fn collect_meshed_subchunks(
     q_mesh: Query<&Mesh3d>,
 ) {
     let mut done_keys = Vec::new();
+    let mut applied = 0;
 
     for (key, task) in pending_mesh.0.iter_mut() {
+        if applied >= MAX_APPLY_PER_FRAME { break; }
+
         if let Some(((coord, sub), builds)) = future::block_on(future::poll_once(task)) {
             let old_keys: Vec<_> = mesh_index
                 .map
@@ -267,12 +263,9 @@ fn collect_meshed_subchunks(
                 pm.insert_indices(Indices::U32(phys_indices));
 
                 let flags = TriMeshFlags::FIX_INTERNAL_EDGES
-                    | TriMeshFlags::ORIENTED
                     | TriMeshFlags::MERGE_DUPLICATE_VERTICES
                     | TriMeshFlags::DELETE_DEGENERATE_TRIANGLES
-                    | TriMeshFlags::DELETE_DUPLICATE_TRIANGLES
-                    | TriMeshFlags::HALF_EDGE_TOPOLOGY
-                    | TriMeshFlags::CONNECTED_COMPONENTS;
+                    | TriMeshFlags::ORIENTED;
 
                 if let Some(collider) = Collider::from_bevy_mesh(&pm, &ComputedColliderShape::TriMesh(flags)) {
                     let cent = commands
@@ -292,6 +285,7 @@ fn collect_meshed_subchunks(
                 chunk.clear_dirty(sub);
             }
 
+            applied += 1;
             done_keys.push(*key);
         }
     }

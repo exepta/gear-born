@@ -1,14 +1,15 @@
 use crate::world_services::chunk::chunk_struct::*;
-use std::collections::HashMap;
 use bevy::prelude::*;
 use bincode::{config, decode_from_slice, encode_to_vec};
 use fastnoise_lite::{FastNoiseLite, FractalType, NoiseType};
-use lz4_flex::{compress_prepend_size, decompress_size_prepended};
 use game_core::configuration::WorldGenConfig;
 use game_core::world::block::{BlockId, Face};
 use game_core::world::chunk::{ChunkData, ChunkMap, ChunkMeshIndex};
 use game_core::world::chunk_dim::*;
 use game_core::world::save::{RegionCache, RegionFile, WorldSave, REGION_SIZE};
+use lz4_flex::{compress_prepend_size, decompress_size_prepended};
+use std::collections::HashMap;
+use std::path::PathBuf;
 
 pub(crate) const MAX_INFLIGHT_MESH: usize = 64;
 pub(crate) const MAX_INFLIGHT_GEN:  usize = 32;
@@ -227,7 +228,7 @@ pub fn save_chunk_sync(ws: &WorldSave, cache: &mut RegionCache, coord: IVec2, ch
     rf.write_slot_append(idx, &data)
 }
 
-pub fn try_load_chunk_sync(ws: &WorldSave, cache: &mut RegionCache, coord: IVec2) -> std::io::Result<Option<ChunkData>> {
+/*pub fn try_load_chunk_sync(ws: &WorldSave, cache: &mut RegionCache, coord: IVec2) -> std::io::Result<Option<ChunkData>> {
     let (r_coord, idx) = chunk_to_region_slot(coord);
     let path = ws.region_path(r_coord);
     if !path.exists() { return Ok(None); }
@@ -238,6 +239,24 @@ pub fn try_load_chunk_sync(ws: &WorldSave, cache: &mut RegionCache, coord: IVec2
     } else {
         Ok(None)
     }
+}*/
+
+pub async fn load_or_gen_chunk_async(
+    ws_root: PathBuf,
+    coord: IVec2,
+    ids: (BlockId, BlockId, BlockId),
+    cfg: WorldGenConfig,
+) -> ChunkData {
+    let (r_coord, idx) = chunk_to_region_slot(coord);
+    let path = ws_root.join("region").join(format!("r.{}.{}.region", r_coord.x, r_coord.y));
+    if let Ok(mut rf) = RegionFile::open(&path) {
+        if let Ok(Some(buf)) = rf.read_slot(idx) {
+            if let Ok(c) = decode_chunk(&buf) {
+                return c;
+            }
+        }
+    }
+    generate_chunk_async_noise(coord, ids, cfg).await
 }
 
 pub(crate) fn snapshot_borders(chunk_map: &ChunkMap, coord: IVec2, y0: usize, y1: usize) -> BorderSnapshot {
