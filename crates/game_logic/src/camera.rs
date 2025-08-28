@@ -89,10 +89,10 @@ fn spawn_player(mut commands: Commands, game_config: Res<GameConfig>) {
     let clip_pad  = 0.25;
     let far_clip  = fog_end - clip_pad;
 
-    let fov_deg: f32 = 90.0;
+    let fov_deg: f32 = 80.0;
 
     let capsule_radius = 0.4;
-    let capsule_half_height = 0.9;
+    let capsule_half_height = 0.8;
 
     let player = commands
         .spawn((
@@ -119,7 +119,7 @@ fn spawn_player(mut commands: Commands, game_config: Res<GameConfig>) {
             FpsController {
                 yaw: 0.0,
                 pitch: 0.0,
-                speed: 6.0,
+                speed: 10.0,
                 sensitivity: 0.001,
             },
             PlayerKinematics { vel_y: 0.0 },
@@ -146,7 +146,7 @@ fn spawn_player(mut commands: Commands, game_config: Res<GameConfig>) {
                 falloff: FogFalloff::Linear { start: fog_start, end: fog_end },
                 ..default()
             },
-            Transform::from_xyz(0.0, 1.6, 0.0),
+            Transform::from_xyz(0.0, 1.5, 0.0),
             GlobalTransform::default(),
             Name::new("PlayerCamera"),
         ));
@@ -240,14 +240,16 @@ fn player_move_kcc(
 ) {
     let Ok((tf, ctrl, mut kin, mut kcc, kcc_out, mut flight, mut tap)) = q_player.single_mut() else { return; };
 
-    // ---- Tuning ----
-    let ground_speed     = ctrl.speed;
-    let fly_multi        = 4.0;
-    let fly_v_multi      = 4.0;
-    let gravity          = 22.0;
-    let fall_multi       = 2.2;
-    let low_jump_multi   = 3.0;
-    let jump_impulse     = 8.5;
+    // --------- Tuning ----------
+    let ground_speed   = ctrl.speed;
+    let fly_multi      = 4.0;
+    let fly_v_multi    = 4.0;
+
+    let gravity        = 22.0;
+    let fall_multi     = 2.2;
+    const JUMP_HEIGHT: f32 = 1.25;
+    let jump_v0        = (2.0 * gravity * JUMP_HEIGHT).sqrt();
+
     const DOUBLE_TAP_WIN: f32 = 0.28;
 
     let forward_key = convert(game_config.input.move_up.as_str()).expect("Invalid key");
@@ -267,20 +269,19 @@ fn player_move_kcc(
     if keys.pressed(right_key)   { wish += right;   }
     if wish.length_squared() > 0.0 { wish = wish.normalize(); }
 
-    let dt        = time.delta_secs();
-    let now       = time.elapsed_secs();
-    let grounded  = kcc_out.map(|o| o.grounded).unwrap_or(false);
+    let dt       = time.delta_secs();
+    let now      = time.elapsed_secs();
+    let grounded = kcc_out.map(|o| o.grounded).unwrap_or(false);
 
     if keys.just_pressed(KeyCode::Space) {
         if now - tap.last_press <= DOUBLE_TAP_WIN {
-            // Double-tap: Toggle Fly
             flight.flying = !flight.flying;
             tap.last_press = -1_000_000.0;
             kin.vel_y = 0.0;
         } else {
             tap.last_press = now;
             if !flight.flying && grounded {
-                kin.vel_y = jump_impulse;
+                kin.vel_y = jump_v0;
             }
         }
     }
@@ -299,16 +300,11 @@ fn player_move_kcc(
 
         kin.vel_y = 0.0;
     } else {
-        if grounded {
-
+        if grounded && kin.vel_y <= 0.0 {
+            kin.vel_y = 0.0;
         } else {
-            let mut g = gravity;
-            if kin.vel_y < 0.0 {
-                g *= fall_multi;
-            } else if !keys.pressed(KeyCode::Space) {
-                g *= low_jump_multi;
-            }
-            kin.vel_y -= g * dt;
+            let g_eff = if kin.vel_y < 0.0 { gravity * fall_multi } else { gravity };
+            kin.vel_y -= g_eff * dt;
         }
 
         translation += wish * ground_speed * dt;
