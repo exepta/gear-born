@@ -1,4 +1,6 @@
 mod chunk_service;
+mod chunk_utils;
+mod chunk_struct;
 
 use crate::world_services::chunk_service::ChunkService;
 use bevy::prelude::*;

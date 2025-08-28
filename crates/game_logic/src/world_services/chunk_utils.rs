@@ -1,0 +1,221 @@
+use crate::world_services::chunk_struct::*;
+use std::collections::HashMap;
+use bevy::prelude::*;
+use fastnoise_lite::{FastNoiseLite, FractalType, NoiseType};
+use game_core::configuration::WorldGenConfig;
+use game_core::world::block::{BlockId, Face};
+use game_core::world::chunk::ChunkData;
+use game_core::world::chunk_dim::*;
+
+pub(crate) async fn generate_chunk_async_noise(
+    coord: IVec2,
+    ids: (BlockId, BlockId, BlockId),
+    cfg: WorldGenConfig,
+) -> ChunkData {
+    let (grass, dirt, stone) = ids;
+    let mut c = ChunkData::new();
+
+    let mut height_n = FastNoiseLite::with_seed(cfg.seed);
+    height_n.set_noise_type(Option::from(NoiseType::OpenSimplex2));
+    height_n.set_frequency(Option::from(cfg.height_freq));
+    height_n.set_fractal_type(Option::from(FractalType::FBm));
+    height_n.set_fractal_octaves(Option::from(5));
+    height_n.set_fractal_gain(Some(0.5));
+    height_n.set_fractal_lacunarity(Some(2.0));
+
+    let mut warp_n = FastNoiseLite::with_seed(cfg.seed ^ 0x5EED_BA5Ei32);
+    warp_n.set_noise_type(Option::from(NoiseType::OpenSimplex2));
+    warp_n.set_frequency(Option::from(cfg.warp_freq));
+
+    let mut plains_n = FastNoiseLite::with_seed(cfg.seed ^ 0x0B10Ei32);
+    plains_n.set_noise_type(Option::from(NoiseType::OpenSimplex2));
+    plains_n.set_frequency(Option::from(cfg.plains_freq));
+
+    let (_cave_n, _cavern_n, _cave_region_n, _entrance_gate_n) = (None::<FastNoiseLite>, None::<FastNoiseLite>, None::<FastNoiseLite>, None::<FastNoiseLite>);
+
+    for lx in 0..CX {
+        for lz in 0..CZ {
+            let wx = coord.x * CX as i32 + lx as i32;
+            let wz = coord.y * CZ as i32 + lz as i32;
+            let wxf = wx as f32; let wzf = wz as f32;
+
+            let mask_raw = map01(plains_n.get_noise_2d(wxf, wzf));
+            let plains_factor = smoothstep(
+                cfg.plains_threshold - cfg.plains_blend,
+                cfg.plains_threshold + cfg.plains_blend,
+                mask_raw,
+            );
+
+            let amp = leap(cfg.plains_span as f32, cfg.height_span as f32, plains_factor);
+            let warp_amp = leap(cfg.warp_amp_plains, cfg.warp_amp, plains_factor);
+
+            // Domain warp
+            let dx = warp_n.get_noise_2d(wxf, wzf) * warp_amp;
+            let dz = warp_n.get_noise_2d(wxf + 1000.0, wzf - 1000.0) * warp_amp;
+
+            // Basis-Höhe
+            let mut h01 = map01(height_n.get_noise_2d(wxf + dx, wzf + dz));
+
+            let flatten = (1.0 - plains_factor) * cfg.plains_flatten;
+            if flatten > 0.0 {
+                h01 = leap(0.5, h01, 1.0 - flatten);
+            }
+
+            let mut h = cfg.base_height + (h01 * amp) as i32;
+            h = h.clamp(Y_MIN + 1, Y_MAX - 1);
+
+            for ly in 0..CY {
+                let wy = local_y_to_world(ly);
+
+                let id = if wy < h - 2 { stone }
+                else if wy < h { dirt }
+                else if wy == h { grass }
+                else { 0 };
+
+                if id != 0 { c.set(lx, ly, lz, id); }
+            }
+        }
+    }
+
+    c
+}
+
+pub(crate) async fn mesh_subchunk_async(
+    chunk: &ChunkData,
+    reg: &RegLite,
+    sub: usize,
+    block_size: f32,
+    borders: Option<BorderSnapshot>,
+) -> Vec<(BlockId, MeshBuild)> {
+    let mut by_block: HashMap<BlockId, MeshBuild> = HashMap::new();
+    let s = block_size;
+    let y0 = sub * SEC_H;
+    let y1 = (y0 + SEC_H).min(CY);
+
+    let (east, west, south, north, snap_y0, _snap_y1) = if let Some(b) = borders {
+        debug_assert_eq!(b.y0, y0, "BorderSnapshot.y0 != sub y0");
+        debug_assert_eq!(b.y1, y1, "BorderSnapshot.y1 != sub y1");
+        (b.east, b.west, b.south, b.north, b.y0, b.y1)
+    } else {
+        (None, None, None, None, y0, y1)
+    };
+
+    let sample_opt = |opt: &Option<Vec<BlockId>>, y: usize, i: usize, stride: usize| -> Option<BlockId> {
+        opt.as_ref().map(|v| {
+            let iy = y - snap_y0;
+            v[iy * stride + i]
+        })
+    };
+
+    let east_at_opt  = |y: usize, z: usize| sample_opt(&east,  y, z, CZ);
+    let west_at_opt  = |y: usize, z: usize| sample_opt(&west,  y, z, CZ);
+    let south_at_opt = |y: usize, x: usize| sample_opt(&south, y, x, CX);
+    let north_at_opt = |y: usize, x: usize| sample_opt(&north, y, x, CX);
+
+    let get = |x:isize,y:isize,z:isize| -> BlockId {
+        if x < 0 || y < 0 || z < 0 || x >= CX as isize || y >= CY as isize || z >= CZ as isize { 0 }
+        else { chunk.blocks[((y as usize)*CZ + (z as usize))*CX + (x as usize)] }
+    };
+    let uvq = |u0:f32,v0:f32,u1:f32,v1:f32, flip_v:bool| -> [[f32;2];4] {
+        if !flip_v { [[u0,v0],[u1,v0],[u1,v1],[u0,v1]] } else { [[u0,v1],[u1,v1],[u1,v0],[u0,v0]] }
+    };
+
+    for y in y0..y1 {
+        for z in 0..CZ {
+            for x in 0..CX {
+                let id = chunk.get(x,y,z);
+                if id == 0 { continue; }
+
+                let wx = x as f32 * s; let wy = y as f32 * s; let wz = z as f32 * s;
+                let b = by_block.entry(id).or_insert_with(MeshBuild::new);
+
+                // +Y (Top)
+                if !(get(x as isize, y as isize+1, z as isize) != 0 && reg.opaque(get(x as isize, y as isize+1, z as isize))) {
+                    let u = reg.uv(id, Face::Top);
+                    b.quad([[wx,wy+s,wz+s],[wx+s,wy+s,wz+s],[wx+s,wy+s,wz],[wx,wy+s,wz]],[0.0,1.0,0.0], uvq(u.u0,u.v0,u.u1,u.v1,false));
+                }
+                // -Y (Bottom)
+                if !(get(x as isize, y as isize-1, z as isize) != 0 && reg.opaque(get(x as isize, y as isize-1, z as isize))) {
+                    let u = reg.uv(id, Face::Bottom);
+                    b.quad([[wx,wy,wz],[wx+s,wy,wz],[wx+s,wy,wz+s],[wx,wy,wz+s]],[0.0,-1.0,0.0], uvq(u.u0,u.v0,u.u1,u.v1,false));
+                }
+                // +X (East)
+                let n_east = if x + 1 < CX {
+                    Some(get(x as isize + 1, y as isize, z as isize))
+                } else {
+                    east_at_opt(y, z)
+                };
+                if let Some(nei) = n_east {
+                    if !(nei != 0 && reg.opaque(nei)) {
+                        let u = reg.uv(id, Face::East);
+                        b.quad(
+                            [[wx+s,wy,wz+s],[wx+s,wy,wz],[wx+s,wy+s,wz],[wx+s,wy+s,wz+s]],
+                            [1.0,0.0,0.0],
+                            uvq(u.u0,u.v0,u.u1,u.v1,true)
+                        );
+                    }
+                }
+
+                // -X (West)
+                let n_west = if x > 0 {
+                    Some(get(x as isize - 1, y as isize, z as isize))
+                } else {
+                    west_at_opt(y, z)
+                };
+                if let Some(nei) = n_west {
+                    if !(nei != 0 && reg.opaque(nei)) {
+                        let u = reg.uv(id, Face::West);
+                        b.quad(
+                            [[wx,wy,wz],[wx,wy,wz+s],[wx,wy+s,wz+s],[wx,wy+s,wz]],
+                            [-1.0,0.0,0.0],
+                            uvq(u.u0,u.v0,u.u1,u.v1,true)
+                        );
+                    }
+                }
+
+                // +Z (South)
+                let n_south = if z + 1 < CZ {
+                    Some(get(x as isize, y as isize, z as isize + 1))
+                } else {
+                    south_at_opt(y, x)
+                };
+                if let Some(nei) = n_south {
+                    if !(nei != 0 && reg.opaque(nei)) {
+                        let u = reg.uv(id, Face::South);
+                        b.quad(
+                            [[wx,wy,wz+s],[wx+s,wy,wz+s],[wx+s,wy+s,wz+s],[wx,wy+s,wz+s]],
+                            [0.0,0.0,1.0],
+                            uvq(u.u0,u.v0,u.u1,u.v1,true)
+                        );
+                    }
+                }
+
+                // -Z (North)
+                let n_north = if z > 0 {
+                    Some(get(x as isize, y as isize, z as isize - 1))
+                } else {
+                    north_at_opt(y, x)
+                };
+                if let Some(nei) = n_north {
+                    if !(nei != 0 && reg.opaque(nei)) {
+                        let u = reg.uv(id, Face::North);
+                        b.quad(
+                            [[wx+s,wy,wz],[wx,wy,wz],[wx,wy+s,wz],[wx+s,wy+s,wz]],
+                            [0.0,0.0,-1.0],
+                            uvq(u.u0,u.v0,u.u1,u.v1,true)
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    by_block.into_iter().map(|(k,b)| (k,b)).collect()
+}
+#[inline] pub(crate) fn leap(a:f32, b:f32, t:f32) -> f32 { a + (b - a) * t }
+#[inline] pub(crate) fn smoothstep(e0:f32, e1:f32, x:f32) -> f32 {
+    let t = ((x - e0) / (e1 - e0)).clamp(0.0, 1.0);
+    t * t * (3.0 - 2.0 * t)
+}
+
+#[inline] pub(crate) fn map01(x: f32) -> f32 { x * 0.5 + 0.5 }
