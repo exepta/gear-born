@@ -266,7 +266,15 @@ fn collect_meshed_subchunks(
                 pm.insert_attribute(Mesh::ATTRIBUTE_POSITION, phys_positions);
                 pm.insert_indices(Indices::U32(phys_indices));
 
-                if let Some(collider) = Collider::from_bevy_mesh(&pm, &ComputedColliderShape::TriMesh(TriMeshFlags::default())) {
+                let flags = TriMeshFlags::FIX_INTERNAL_EDGES
+                    | TriMeshFlags::ORIENTED
+                    | TriMeshFlags::MERGE_DUPLICATE_VERTICES
+                    | TriMeshFlags::DELETE_DEGENERATE_TRIANGLES
+                    | TriMeshFlags::DELETE_DUPLICATE_TRIANGLES
+                    | TriMeshFlags::HALF_EDGE_TOPOLOGY
+                    | TriMeshFlags::CONNECTED_COMPONENTS;
+
+                if let Some(collider) = Collider::from_bevy_mesh(&pm, &ComputedColliderShape::TriMesh(flags)) {
                     let cent = commands
                         .spawn((
                             RigidBody::Fixed,
@@ -277,6 +285,7 @@ fn collect_meshed_subchunks(
                         .id();
                     collider_index.0.insert((coord, sub as u8), cent);
                 }
+
             }
 
             if let Some(chunk) = chunk_map.chunks.get_mut(&coord) {

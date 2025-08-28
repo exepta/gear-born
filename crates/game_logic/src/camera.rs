@@ -50,6 +50,11 @@ struct FpsController {
 }
 
 #[derive(Component)]
+struct DoubleTapSpace {
+    last_press: f32,
+}
+
+#[derive(Component)]
 struct FlightState { flying: bool }
 
 #[derive(Component)]
@@ -146,6 +151,10 @@ fn spawn_player(mut commands: Commands, game_config: Res<GameConfig>) {
             Name::new("PlayerCamera"),
         ));
     });
+
+    commands
+        .entity(player)
+        .insert(DoubleTapSpace { last_press: -1_000_000.0 });
 }
 
 
@@ -225,19 +234,21 @@ fn player_move_kcc(
         &mut KinematicCharacterController,
         Option<&KinematicCharacterControllerOutput>,
         &mut FlightState,
+        &mut DoubleTapSpace,
     ), With<Player>>,
     game_config: Res<GameConfig>,
 ) {
-    let Ok((tf, ctrl, mut kin, mut kcc, kcc_out, mut flight)) = q_player.single_mut() else { return; };
+    let Ok((tf, ctrl, mut kin, mut kcc, kcc_out, mut flight, mut tap)) = q_player.single_mut() else { return; };
 
-    // ---------- Tuning ----------
-    let ground_speed      = ctrl.speed;
-    let fly_multi = 4.0;
-    let fly_v_multi = 4.0;
-    let gravity           = 22.0;
-    let fall_multi = 2.2;
-    let low_jump_multi = 3.0;
-    let jump_impulse      = 8.5;
+    // ---- Tuning ----
+    let ground_speed     = ctrl.speed;
+    let fly_multi        = 4.0;
+    let fly_v_multi      = 4.0;
+    let gravity          = 22.0;
+    let fall_multi       = 2.2;
+    let low_jump_multi   = 3.0;
+    let jump_impulse     = 8.5;
+    const DOUBLE_TAP_WIN: f32 = 0.28;
 
     let forward_key = convert(game_config.input.move_up.as_str()).expect("Invalid key");
     let back_key    = convert(game_config.input.move_down.as_str()).expect("Invalid key");
@@ -256,20 +267,25 @@ fn player_move_kcc(
     if keys.pressed(right_key)   { wish += right;   }
     if wish.length_squared() > 0.0 { wish = wish.normalize(); }
 
-    let dt = time.delta_secs();
-    let grounded = kcc_out.map(|o| o.grounded).unwrap_or(false);
+    let dt        = time.delta_secs();
+    let now       = time.elapsed_secs();
+    let grounded  = kcc_out.map(|o| o.grounded).unwrap_or(false);
 
-    if grounded {
-        flight.flying = false;
-    } else if keys.just_pressed(KeyCode::Space) && !flight.flying {
-        flight.flying = true;
+    if keys.just_pressed(KeyCode::Space) {
+        if now - tap.last_press <= DOUBLE_TAP_WIN {
+            // Double-tap: Toggle Fly
+            flight.flying = !flight.flying;
+            tap.last_press = -1_000_000.0;
+            kin.vel_y = 0.0;
+        } else {
+            tap.last_press = now;
+            if !flight.flying && grounded {
+                kin.vel_y = jump_impulse;
+            }
+        }
     }
 
-    kcc.snap_to_ground = if flight.flying {
-        None
-    } else {
-        Some(CharacterLength::Absolute(0.2))
-    };
+    kcc.snap_to_ground = if flight.flying { None } else { Some(CharacterLength::Absolute(0.2)) };
 
     let mut translation = Vec3::ZERO;
 
@@ -284,10 +300,7 @@ fn player_move_kcc(
         kin.vel_y = 0.0;
     } else {
         if grounded {
-            kin.vel_y = 0.0;
-            if keys.just_pressed(KeyCode::Space) {
-                kin.vel_y = jump_impulse;
-            }
+
         } else {
             let mut g = gravity;
             if kin.vel_y < 0.0 {
