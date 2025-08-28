@@ -1,13 +1,13 @@
 use crate::world_services::chunk::chunk_utils::*;
 use bevy::prelude::*;
-use bevy::tasks::{AsyncComputeTaskPool, IoTaskPool};
+use bevy::tasks::AsyncComputeTaskPool;
 use bevy::tasks::futures_lite::future;
 use game_core::configuration::{GameConfig, WorldGenConfig};
 use game_core::states::{AppState, InGameStates};
 use game_core::world::block::{id_any, BlockRegistry};
 use game_core::world::chunk::*;
 use game_core::world::chunk_dim::*;
-use game_core::world::save::{PendingSave, WorldSave};
+use game_core::world::save::{RegionCache, WorldSave};
 use crate::world_services::chunk::chunk_struct::*;
 
 pub struct ChunkService;
@@ -25,7 +25,6 @@ impl Plugin for ChunkService {
                 collect_meshed_subchunks,
                 schedule_remesh_tasks_from_events.in_set(VoxelStage::Meshing),
                 drain_mesh_backlog,
-                collect_finished_saves,
                 unload_far_chunks,
             ).chain()
                 .run_if(in_state(AppState::InGame(InGameStates::Game))));
@@ -40,6 +39,7 @@ fn schedule_chunk_generation(
     gen_cfg: Res<WorldGenConfig>,
     game_config: Res<GameConfig>,
     ws: Res<WorldSave>,
+    mut cache: ResMut<RegionCache>,
     q_cam: Query<&GlobalTransform, With<Camera3d>>,
 ) {
     let cam = if let Ok(t) = q_cam.single() { t } else { return; };
@@ -51,38 +51,36 @@ fn schedule_chunk_generation(
     let load_radius = game_config.graphics.chunk_range;
     let mut budget = MAX_INFLIGHT_GEN.saturating_sub(pending.0.len()).min(8);
 
-    let ids_gen = (
+
+    let ids = (
         id_any(&reg, &["grass_block","grass"]),
         id_any(&reg, &["dirt_block","dirt"]),
         id_any(&reg, &["stone_block","stone"]),
     );
     let cfg_clone = gen_cfg.clone();
 
-    let io_pool = IoTaskPool::get();
-    let cpu_pool = AsyncComputeTaskPool::get();
-
     for dz in -load_radius..=load_radius {
         for dx in -load_radius..=load_radius {
             if budget == 0 { return; }
-
             let c = IVec2::new(center_c.x + dx, center_c.y + dz);
             if chunk_map.chunks.contains_key(&c) || pending.0.contains_key(&c) { continue; }
 
-            let task = if chunk_path(&ws, c).exists() {
-                let ws = ws.clone();
-                io_pool.spawn(async move {
-                    let data = load_chunk_sync(&ws, c).unwrap_or_else(|_| ChunkData::new());
-                    (c, data)
-                })
-            } else {
-                let ids = ids_gen;
-                let cfg = cfg_clone.clone();
-                cpu_pool.spawn(async move {
-                    let data = generate_chunk_async_noise(c, ids, cfg).await;
-                    (c, data)
-                })
-            };
+            if let Ok(Some(data)) = try_load_chunk_sync(&ws, &mut cache, c) {
+                let pool = AsyncComputeTaskPool::get();
+                let data_clone = data.clone();
+                let task = pool.spawn(async move { (c, data_clone) });
+                pending.0.insert(c, task);
+                budget -= 1;
+                continue;
+            }
 
+            let pool = AsyncComputeTaskPool::get();
+            let ids_copy = ids;
+            let cfg = cfg_clone.clone();
+            let task = pool.spawn(async move {
+                let data = generate_chunk_async_noise(c, ids_copy, cfg).await;
+                (c, data)
+            });
             pending.0.insert(c, task);
             budget -= 1;
         }
@@ -298,17 +296,6 @@ fn schedule_remesh_tasks_from_events(
 }
 
 //System
-fn collect_finished_saves(mut pending_save: ResMut<PendingSave>) {
-    let mut done = Vec::new();
-    for (coord, task) in pending_save.0.iter_mut() {
-        if let Some((_c, _ok)) = future::block_on(future::poll_once(task)) {
-            done.push(*coord);
-        }
-    }
-    for c in done { pending_save.0.remove(&c); }
-}
-
-//System
 fn unload_far_chunks(
     mut commands: Commands,
     mut chunk_map: ResMut<ChunkMap>,
@@ -316,10 +303,10 @@ fn unload_far_chunks(
     mut meshes: ResMut<Assets<Mesh>>,
     mut pending_gen: ResMut<PendingGen>,
     mut pending_mesh: ResMut<PendingMesh>,
-    mut pending_save: ResMut<PendingSave>,
     mut backlog: ResMut<MeshBacklog>,
-    ws: Res<WorldSave>,
     game_config: Res<GameConfig>,
+    ws: Res<WorldSave>,
+    mut cache: ResMut<RegionCache>,
     q_mesh: Query<&Mesh3d>,
     q_cam: Query<&GlobalTransform, With<Camera3d>>,
 ) {
@@ -338,34 +325,20 @@ fn unload_far_chunks(
         .cloned()
         .collect();
 
-    let io_pool = IoTaskPool::get();
-
     for coord in &to_remove {
-        pending_gen.0.remove(coord);
-        pending_mesh.0.retain(|(c,_), _| c != coord);
-        backlog.0.retain(|(c, _)| c != coord);
-
-        if let Some(ch) = chunk_map.chunks.get(coord) {
-            if !pending_save.0.contains_key(coord) {
-                let ws_cl = ws.clone();
-                let c  = *coord;
-                let chunk_clone = ch.clone();
-                let task = io_pool.spawn(async move {
-                    let ok = save_chunk_sync(&ws_cl, c, &chunk_clone).is_ok();
-                    (c, ok)
-                });
-                pending_save.0.insert(*coord, task);
-            }
+        if let Some(chunk) = chunk_map.chunks.get(coord) {
+            let _ = save_chunk_sync(&ws, &mut cache, *coord, chunk);
         }
 
+        pending_gen.0.remove(coord);
+        pending_mesh.0.retain(|(c,_), _| c != coord);
+
         let keys: Vec<_> = mesh_index.map
-            .keys()
-            .cloned()
-            .filter(|(c, _, _)| c == coord)
-            .collect();
+            .keys().cloned().filter(|(c, _, _)| c == coord).collect();
         despawn_mesh_set(keys, &mut mesh_index, &mut commands, &q_mesh, &mut meshes);
 
         chunk_map.chunks.remove(coord);
+        backlog.0.retain(|(c, _)| c != coord);
     }
 }
 
