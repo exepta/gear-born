@@ -48,6 +48,6 @@ features = ["alloc"]
 version = "0.31.0"
 features = [
     "default",
-    "simd-stable",
-    "debug-render-3d"
+    "dim3",
+    "debug-render"
 ]

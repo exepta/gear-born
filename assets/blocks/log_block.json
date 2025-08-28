@@ -1,0 +1,18 @@
+{
+  "name": "log_block",
+  "texture_dir": "textures/blocks/log",
+  "texture": {
+    "top": "log_top",
+    "bottom": "log_bottom",
+    "west": "log_side",
+    "north": "log_side",
+    "east": "log_side",
+    "south": "log_side"
+  },
+  "stats": {
+    "hardness": 1.0,
+    "blast_resistance": 1.5,
+    "opaque": true,
+    "emissive": 0.0
+  }
+}

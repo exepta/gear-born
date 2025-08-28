@@ -72,7 +72,7 @@ fn handle_break_and_place(
     }
 
     if buttons.just_pressed(MouseButton::Right) {
-        let stone = id_any(&reg, &["stone_block","stone"]);
+        let stone = id_any(&reg, &["log_block","log"]);
         if stone != 0 {
             if let Some(mut access) = world_access_mut(&mut chunk_map, hit.place_pos) {
                 if access.get() == 0 { access.set(stone); }
