@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use crate::world_services::chunk_utils::*;
+use crate::world_services::chunk::chunk_utils::*;
 use bevy::prelude::*;
 use bevy::tasks::AsyncComputeTaskPool;
 use bevy::tasks::futures_lite::future;
@@ -8,7 +8,7 @@ use game_core::states::{AppState, InGameStates};
 use game_core::world::block::{id_any, BlockId, BlockRegistry};
 use game_core::world::chunk::*;
 use game_core::world::chunk_dim::*;
-use crate::world_services::chunk_struct::*;
+use crate::world_services::chunk::chunk_struct::*;
 
 const MAX_INFLIGHT_MESH: usize = 64;
 const MAX_INFLIGHT_GEN:  usize = 32;

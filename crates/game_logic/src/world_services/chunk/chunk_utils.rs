@@ -1,4 +1,4 @@
-use crate::world_services::chunk_struct::*;
+use crate::world_services::chunk::chunk_struct::*;
 use std::collections::HashMap;
 use bevy::prelude::*;
 use fastnoise_lite::{FastNoiseLite, FractalType, NoiseType};
