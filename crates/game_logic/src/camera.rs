@@ -55,21 +55,28 @@ fn spawn_scene(
     info!("content: {:?}", block_registry.name_to_id);
 }
 
-fn spawn_camera(mut commands: Commands) {
+fn spawn_camera(mut commands: Commands, game_config: Res<GameConfig>) {
     let fog_color = Color::srgb(0.62, 0.72, 0.85);
+    let fog_start = game_config.graphics.chunk_range as f32 * 25.0;
+    let fog_end   = fog_start + 20.0;
+
+    let clip_pad = 0.25;
+    let far_clip = fog_end - clip_pad;
 
     commands.spawn((
         Camera3d::default(),
+        Projection::Perspective(PerspectiveProjection {
+            near: 0.05,
+            far:  far_clip.max(1.0),
+            ..default()
+        }),
         Camera {
             clear_color: ClearColorConfig::Custom(fog_color),
             ..default()
         },
         DistanceFog {
             color: fog_color,
-            falloff: FogFalloff::Linear {
-                start: 300.0,
-                end: 320.0,
-            },
+            falloff: FogFalloff::Linear { start: fog_start, end: fog_end },
             ..default()
         },
         Transform::from_xyz(0.0, 18.0, 6.0).looking_at(Vec3::new(0.0, 2.0, 0.0), Vec3::Y),

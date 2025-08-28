@@ -4,7 +4,7 @@ use bevy::render::mesh::{Indices, PrimitiveTopology, VertexAttributeValues};
 use bevy::tasks::futures_lite::future;
 use bevy::tasks::{AsyncComputeTaskPool, Task};
 use fastnoise_lite::{FastNoiseLite, FractalType, NoiseType};
-use game_core::configuration::WorldGenConfig;
+use game_core::configuration::{GameConfig, WorldGenConfig};
 use game_core::states::{AppState, InGameStates};
 use game_core::world::block::{id_any, BlockId, BlockRegistry, Face, UvRect};
 use game_core::world::chunk::*;
@@ -119,9 +119,6 @@ struct BorderSnapshot {
 
 pub struct ChunkService;
 
-const LOAD_RADIUS: i32 = 8;
-const KEEP_RADIUS: i32 = LOAD_RADIUS + 1;
-
 const MAX_INFLIGHT_MESH: usize = 64;
 const MAX_INFLIGHT_GEN:  usize = 32;
 
@@ -149,6 +146,7 @@ fn schedule_chunk_generation(
     chunk_map: Res<ChunkMap>,
     reg: Res<BlockRegistry>,
     gen_cfg: Res<WorldGenConfig>,
+    game_config: Res<GameConfig>,
     q_cam: Query<&GlobalTransform, With<Camera3d>>,
 ) {
     let cam = if let Ok(t) = q_cam.single() { t } else { return; };
@@ -165,9 +163,10 @@ fn schedule_chunk_generation(
     let cfg_clone = gen_cfg.clone();
 
     let mut budget = MAX_INFLIGHT_GEN.saturating_sub(pending.0.len()).min(8);
+    let load_radius = game_config.graphics.chunk_range;
 
-    for dz in -LOAD_RADIUS..=LOAD_RADIUS {
-        for dx in -LOAD_RADIUS..=LOAD_RADIUS {
+    for dz in -load_radius..=load_radius {
+        for dx in -load_radius..=load_radius {
             if budget == 0 { return; }
             let c = IVec2::new(center_c.x + dx, center_c.y + dz);
             if chunk_map.chunks.contains_key(&c) || pending.0.contains_key(&c) { continue; }
@@ -397,6 +396,7 @@ fn unload_far_chunks(
     mut pending_gen: ResMut<PendingGen>,
     mut pending_mesh: ResMut<PendingMesh>,
     mut backlog: ResMut<MeshBacklog>,
+    game_config: Res<GameConfig>,
     q_mesh: Query<&Mesh3d>,
     q_cam: Query<&GlobalTransform, With<Camera3d>>,
 ) {
@@ -404,11 +404,13 @@ fn unload_far_chunks(
     let cam_pos = cam.translation();
     let (center_c, _) = world_to_chunk_xz(cam_pos.x.floor() as i32, cam_pos.z.floor() as i32);
 
+    let keep_radius = game_config.graphics.chunk_range + 1;
+
     let to_remove: Vec<IVec2> = chunk_map.chunks
         .keys()
         .filter(|coord| {
-            (coord.x - center_c.x).abs() > KEEP_RADIUS
-                || (coord.y - center_c.y).abs() > KEEP_RADIUS
+            (coord.x - center_c.x).abs() > keep_radius
+                || (coord.y - center_c.y).abs() > keep_radius
         })
         .cloned()
         .collect();

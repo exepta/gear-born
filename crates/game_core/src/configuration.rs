@@ -97,6 +97,8 @@ pub struct GraphicsConfig {
 
     /// Identifier for the graphics backend to use (e.g., "wgpu", "OpenGL", "Vulkan").
     pub graphic_backend: String,
+    
+    pub chunk_range: i32
 }
 
 impl Default for GraphicsConfig {
@@ -106,7 +108,8 @@ impl Default for GraphicsConfig {
             window_height: 720.0,
             fullscreen: false,
             vsync: true,
-            graphic_backend: String::from("AUTO")
+            graphic_backend: String::from("AUTO"),
+            chunk_range: 8
         }
     }
 }

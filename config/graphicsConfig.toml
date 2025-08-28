@@ -3,3 +3,5 @@ window_height = 720.0
 fullscreen = false
 vsync = true
 graphic_backend = "auto"
+
+chunk_range = 8
