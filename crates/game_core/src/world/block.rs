@@ -5,6 +5,8 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 
+pub const VOXEL_SIZE: f32 = 1.5;
+
 // =================================================================
 //                          External Struct
 // =================================================================
@@ -219,6 +221,9 @@ pub fn id_any(reg: &BlockRegistry, names: &[&str]) -> BlockId {
     }
     0
 }
+
+#[inline] pub fn to_block_space(v: Vec3) -> Vec3 { v / VOXEL_SIZE }
+#[inline] pub fn to_world_space(v: Vec3) -> Vec3 { v * VOXEL_SIZE }
 
 // =================================================================
 //                          Internal Struct

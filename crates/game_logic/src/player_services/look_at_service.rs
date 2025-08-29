@@ -1,7 +1,7 @@
 use bevy::prelude::*;
 use game_core::player::selection::{BlockHit, SelectionState};
 use game_core::states::{AppState, InGameStates};
-use game_core::world::block::{id_any, BlockId, BlockRegistry, Face};
+use game_core::world::block::{id_any, BlockId, BlockRegistry, Face, VOXEL_SIZE};
 use game_core::world::chunk::{ChunkData, ChunkMap, SubchunkDirty, VoxelStage};
 use game_core::world::chunk_dim::*;
 
@@ -42,12 +42,14 @@ fn update_selection(
     chunk_map: Res<ChunkMap>,
 ) {
     let (tf, _cam) = if let Ok(v) = q_cam.single() { v } else { return; };
-    let origin = tf.translation();
-    let dir = tf.forward();
 
-    let max_dist = 8.0;
+    let origin_bs = tf.translation() / VOXEL_SIZE;
 
-    sel.hit = ray_cast_voxels(origin, *dir, max_dist, &chunk_map);
+    let dir_bs: Vec3 = tf.forward().into();
+
+    let max_dist_blocks = 8.0;
+
+    sel.hit = ray_cast_voxels(origin_bs, dir_bs, max_dist_blocks, &chunk_map);
 }
 
 fn draw_selection_gizmo(
@@ -55,12 +57,13 @@ fn draw_selection_gizmo(
     mut gizmos: Gizmos<SelectionGizmoGroup>,
 ) {
     if let Some(hit) = sel.hit {
+        let s = VOXEL_SIZE;
         let center = Vec3::new(
-            hit.block_pos.x as f32 + 0.5,
-            hit.block_pos.y as f32 + 0.5,
-            hit.block_pos.z as f32 + 0.5,
+            (hit.block_pos.x as f32 + 0.5) * s,
+            (hit.block_pos.y as f32 + 0.5) * s,
+            (hit.block_pos.z as f32 + 0.5) * s,
         );
-        let size = Vec3::splat(1.001);
+        let size = Vec3::splat(1.002 * s);
         gizmos.cuboid(Transform::from_translation(center).with_scale(size), Color::BLACK);
     }
 }

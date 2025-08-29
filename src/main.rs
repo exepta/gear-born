@@ -8,7 +8,7 @@ use bevy::log::{BoxedLayer, Level, LogPlugin};
 use bevy::prelude::*;
 use bevy::render::settings::{Backends, RenderCreation, WgpuFeatures, WgpuSettings};
 use bevy::render::RenderPlugin;
-use bevy::window::{WindowMode, WindowResolution};
+use bevy::window::{PresentMode, WindowMode, WindowResolution};
 use bevy_inspector_egui::bevy_egui::EguiPlugin;
 use bevy_inspector_egui::quick::WorldInspectorPlugin;
 use chrono::Utc;
@@ -16,6 +16,7 @@ use dotenvy::dotenv;
 use game_core::configuration::GameConfig;
 use game_core::debug::WorldInspectorState;
 use game_core::states::AppState;
+use game_core::BuildInfo;
 use std::env;
 use std::fs::{File, OpenOptions};
 use std::io::Write;
@@ -58,14 +59,22 @@ fn main() {
 /// A mutable reference to the initialized [`App`] instance.
 #[coverage(off)]
 fn init_bevy_app(app: &mut App, config: &GameConfig) {
+    let build = BuildInfo {
+        app_name: "Version",
+        app_version: env!("CARGO_PKG_VERSION"),
+        bevy_version: "0.16.1",
+    };
+
     app
         .insert_resource(config.clone())
+        .insert_resource(build)
         .add_plugins(DefaultPlugins.set(
         WindowPlugin {
             primary_window: Some(Window {
-                title: String::from("Bevy Client"),
+                title: String::from("Gear Born"),
                 mode: if config.graphics.fullscreen { WindowMode::BorderlessFullscreen(MonitorSelection::Primary) } else { WindowMode::Windowed }, //BorderlessFullscreen(MonitorSelection::Primary)
                 resolution: WindowResolution::new(config.graphics.window_width, config.graphics.window_height),
+                present_mode: PresentMode::AutoVsync,
                 ..default()
             }),
             ..default()

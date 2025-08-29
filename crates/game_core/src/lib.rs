@@ -11,6 +11,13 @@ use crate::configuration::{CrosshairConfig, WorldGenConfig};
 use crate::player::PlayerModule;
 use bevy::prelude::*;
 
+#[derive(Resource, Clone)]
+pub struct BuildInfo {
+    pub app_name: &'static str,
+    pub app_version: &'static str,
+    pub bevy_version: &'static str,
+}
+
 pub struct GameCorePlugin;
 
 impl Plugin for GameCorePlugin {

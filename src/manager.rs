@@ -46,5 +46,6 @@ fn toggle_world_inspector(
         .expect("Invalid key for world inspector");
     if keyboard.just_pressed(key) {
         debug_context.0 = !debug_context.0;
+        info!("World Inspector: {}", debug_context.0);
     }
 }

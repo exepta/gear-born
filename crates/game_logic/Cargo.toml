@@ -27,7 +27,8 @@ features = [
     "tonemapping_luts",
     "bevy_window",
     "bevy_ui",
-    "bevy_color"
+    "bevy_color",
+    "bevy_gizmos",
 ]
 
 [dependencies.fastnoise-lite]
@@ -43,6 +44,9 @@ version = "2.6.1"
 version = "2.0.1"
 default-features = false
 features = ["alloc"]
+
+[dependencies.sysinfo]
+version = "0.37.0"
 
 [dependencies.bevy_rapier3d]
 version = "0.31.0"
