@@ -27,7 +27,7 @@ pub enum AppState {
 
     /// Represents asset loading logic (e.g., loading models, textures, data).
     /// Contains its own `AssetLoadState`.
-    AssetsLoad(AssetLoadState),
+    Loading,
 
     /// State after loading and fetching is done, but before entering gameplay.
     PostLoad,
@@ -61,20 +61,6 @@ pub enum FetchState {
     Fetching,
     /// Network fetching is complete.
     FetchingComplete,
-}
-
-/// State for asset loading (such as models, textures, and levels).
-///
-/// Used as a substate of `AppState::AssetsLoad`.
-#[derive(States, Default, Debug, Clone, Eq, PartialEq, Hash)]
-pub enum AssetLoadState {
-    /// Currently loading assets.
-    #[default]
-    EnvPreLoad,
-    EnvLoad,
-    Loading,
-    /// All assets finished loading.
-    Finished,
 }
 
 /// Main in-game state and relevant substates.
@@ -124,21 +110,4 @@ pub fn is_state_in_game(state: Res<State<AppState>>) -> bool {
 /// `true` if the current app state matches `AppState::Screen(_)`, otherwise `false`.
 pub fn is_state_in_ui(state: Res<State<AppState>>) -> bool {
     matches!(*state.get(), AppState::Screen(_))
-}
-
-/// Returns `true` if the application is currently in any asset‐loading state.
-///
-/// This run‐condition reads the global `State<AppState>` resource and checks
-/// whether it is the `AssetsLoad` variant, regardless of which loading stage
-/// it contains.
-///
-/// # Parameters
-///
-/// - `state`: A Res‐injected Bevy resource of type `State<AppState>`.
-///
-/// # Returns
-///
-/// `true` if the current app state matches `AppState::AssetsLoad(_)`, otherwise `false`.
-pub fn is_state_loading(state: Res<State<AppState>>) -> bool {
-    matches!(*state.get(), AppState::AssetsLoad(_))
 }

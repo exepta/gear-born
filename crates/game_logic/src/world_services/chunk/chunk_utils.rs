@@ -1,11 +1,18 @@
 use crate::world_services::chunk::chunk_struct::*;
-use std::collections::HashMap;
 use bevy::prelude::*;
+use bincode::{config, decode_from_slice, encode_to_vec};
 use fastnoise_lite::{FastNoiseLite, FractalType, NoiseType};
 use game_core::configuration::WorldGenConfig;
 use game_core::world::block::{BlockId, Face};
-use game_core::world::chunk::ChunkData;
+use game_core::world::chunk::{ChunkData, ChunkMap, ChunkMeshIndex};
 use game_core::world::chunk_dim::*;
+use game_core::world::save::{RegionCache, RegionFile, WorldSave, REGION_SIZE};
+use lz4_flex::{compress_prepend_size, decompress_size_prepended};
+use std::collections::HashMap;
+use std::path::PathBuf;
+
+pub(crate) const MAX_INFLIGHT_MESH: usize = 64;
+pub(crate) const MAX_INFLIGHT_GEN:  usize = 32;
 
 pub(crate) async fn generate_chunk_async_noise(
     coord: IVec2,
@@ -212,6 +219,154 @@ pub(crate) async fn mesh_subchunk_async(
 
     by_block.into_iter().map(|(k,b)| (k,b)).collect()
 }
+
+pub fn save_chunk_sync(ws: &WorldSave, cache: &mut RegionCache, coord: IVec2, ch: &ChunkData) -> std::io::Result<()> {
+    let (r_coord, idx) = chunk_to_region_slot(coord);
+    let path = ws.region_path(r_coord);
+    let rf = cache.0.entry(r_coord).or_insert(RegionFile::open(&path)?);
+    let data = encode_chunk(ch);
+    rf.write_slot_append(idx, &data)
+}
+
+/*pub fn try_load_chunk_sync(ws: &WorldSave, cache: &mut RegionCache, coord: IVec2) -> std::io::Result<Option<ChunkData>> {
+    let (r_coord, idx) = chunk_to_region_slot(coord);
+    let path = ws.region_path(r_coord);
+    if !path.exists() { return Ok(None); }
+    let rf = cache.0.entry(r_coord).or_insert(RegionFile::open(&path)?);
+    if let Some(buf) = rf.read_slot(idx)? {
+        let c = decode_chunk(&buf)?;
+        Ok(Some(c))
+    } else {
+        Ok(None)
+    }
+}*/
+
+pub async fn load_or_gen_chunk_async(
+    ws_root: PathBuf,
+    coord: IVec2,
+    ids: (BlockId, BlockId, BlockId),
+    cfg: WorldGenConfig,
+) -> ChunkData {
+    let (r_coord, idx) = chunk_to_region_slot(coord);
+    let path = ws_root.join("region").join(format!("r.{}.{}.region", r_coord.x, r_coord.y));
+    if let Ok(mut rf) = RegionFile::open(&path) {
+        if let Ok(Some(buf)) = rf.read_slot(idx) {
+            if let Ok(c) = decode_chunk(&buf) {
+                return c;
+            }
+        }
+    }
+    generate_chunk_async_noise(coord, ids, cfg).await
+}
+
+pub(crate) fn snapshot_borders(chunk_map: &ChunkMap, coord: IVec2, y0: usize, y1: usize) -> BorderSnapshot {
+    let mut snap = BorderSnapshot { y0, y1, east: None, west: None, south: None, north: None };
+
+    let take_xz = |c: &ChunkData, x: usize, z: usize, y: usize| -> BlockId { c.get(x,y,z) };
+
+    if let Some(n) = chunk_map.chunks.get(&IVec2::new(coord.x + 1, coord.y)) {
+        let mut v = Vec::with_capacity((y1 - y0) * CZ);
+        for y in y0..y1 { for z in 0..CZ { v.push(take_xz(n, 0, z, y)); } }
+        snap.east = Some(v);
+    }
+    if let Some(n) = chunk_map.chunks.get(&IVec2::new(coord.x - 1, coord.y)) {
+        let mut v = Vec::with_capacity((y1 - y0) * CZ);
+        for y in y0..y1 { for z in 0..CZ { v.push(take_xz(n, CX-1, z, y)); } }
+        snap.west = Some(v);
+    }
+    if let Some(n) = chunk_map.chunks.get(&IVec2::new(coord.x, coord.y + 1)) {
+        let mut v = Vec::with_capacity((y1 - y0) * CX);
+        for y in y0..y1 { for x in 0..CX { v.push(take_xz(n, x, 0, y)); } }
+        snap.south = Some(v);
+    }
+    if let Some(n) = chunk_map.chunks.get(&IVec2::new(coord.x, coord.y - 1)) {
+        let mut v = Vec::with_capacity((y1 - y0) * CX);
+        for y in y0..y1 { for x in 0..CX { v.push(take_xz(n, x, CZ-1, y)); } }
+        snap.north = Some(v);
+    }
+    snap
+}
+
+pub(crate) fn area_ready(
+    center: IVec2,
+    radius: i32,
+    chunk_map: &ChunkMap,
+    pending_gen: &PendingGen,
+    pending_mesh: &PendingMesh,
+    backlog: &MeshBacklog,
+) -> bool {
+    for dz in -radius..=radius {
+        for dx in -radius..=radius {
+            let c = IVec2::new(center.x + dx, center.y + dz);
+            if !chunk_map.chunks.contains_key(&c) { return false; }
+            if pending_gen.0.contains_key(&c) { return false; }
+            if pending_mesh.0.keys().any(|(cc, _)| *cc == c) { return false; }
+            if backlog.0.iter().any(|(cc, _)| *cc == c) { return false; }
+        }
+    }
+    true
+}
+
+pub(crate) fn despawn_mesh_set(
+    keys: impl IntoIterator<Item = (IVec2, u8, BlockId)>,
+    mesh_index: &mut ChunkMeshIndex,
+    commands: &mut Commands,
+    q_mesh: &Query<&Mesh3d>,
+    meshes: &mut Assets<Mesh>,
+) {
+    for key in keys {
+        if let Some(ent) = mesh_index.map.remove(&key) {
+            if let Ok(Mesh3d(handle)) = q_mesh.get(ent) {
+                meshes.remove(handle.id());
+            }
+            commands.entity(ent).despawn();
+        }
+    }
+}
+
+pub(crate) fn can_spawn_mesh(pending_mesh: &PendingMesh) -> bool {
+    pending_mesh.0.len() < MAX_INFLIGHT_MESH
+}
+pub(crate) fn can_spawn_gen(pending_gen: &PendingGen) -> bool {
+    pending_gen.0.len() < MAX_INFLIGHT_GEN
+}
+
+pub(crate) fn backlog_contains(backlog: &MeshBacklog, key: (IVec2, usize)) -> bool {
+    backlog.0.iter().any(|&k| k == key)
+}
+
+pub(crate) fn enqueue_mesh(backlog: &mut MeshBacklog, pending: &PendingMesh, key: (IVec2, usize)) {
+    if pending.0.contains_key(&key) { return; }
+    if backlog_contains(backlog, key) { return; }
+    backlog.0.push_back(key);
+}
+
+pub fn encode_chunk(ch: &ChunkData) -> Vec<u8> {
+    let cfg = config::standard();
+    let ser = encode_to_vec(&ch.blocks, cfg).expect("encode blocks");
+    compress_prepend_size(&ser)
+}
+
+fn decode_chunk(buf: &[u8]) -> std::io::Result<ChunkData> {
+    let de = decompress_size_prepended(buf)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+    config::standard();
+
+    let (blocks, _len): (Vec<BlockId>, usize) = decode_from_slice(&de, config::standard())
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string()))?;
+
+    if blocks.len() != CX * CY * CZ {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "block array size mismatch",
+        ));
+    }
+
+    let mut c = ChunkData::new();
+    c.blocks.copy_from_slice(&blocks);
+    Ok(c)
+}
+
 #[inline] pub(crate) fn leap(a:f32, b:f32, t:f32) -> f32 { a + (b - a) * t }
 #[inline] pub(crate) fn smoothstep(e0:f32, e1:f32, x:f32) -> f32 {
     let t = ((x - e0) / (e1 - e0)).clamp(0.0, 1.0);
@@ -219,3 +374,16 @@ pub(crate) async fn mesh_subchunk_async(
 }
 
 #[inline] pub(crate) fn map01(x: f32) -> f32 { x * 0.5 + 0.5 }
+
+#[inline]
+pub fn chunk_to_region_slot(c: IVec2) -> (IVec2, usize) {
+    let rx = div_floor(c.x, REGION_SIZE);
+    let rz = div_floor(c.y, REGION_SIZE);
+    let lx = mod_floor(c.x, REGION_SIZE) as usize;
+    let lz = mod_floor(c.y, REGION_SIZE) as usize;
+    let idx = lz * (REGION_SIZE as usize) + lx;
+    (IVec2::new(rx, rz), idx)
+}
+
+#[inline] fn div_floor(a: i32, b: i32) -> i32 { (a as f32 / b as f32).floor() as i32 }
+#[inline] fn mod_floor(a: i32, b: i32) -> i32 { a - div_floor(a,b)*b }

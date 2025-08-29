@@ -1,22 +1,23 @@
-use std::collections::HashMap;
+use crate::world_services::chunk::chunk_struct::*;
 use crate::world_services::chunk::chunk_utils::*;
+use bevy::asset::RenderAssetUsages;
 use bevy::prelude::*;
-use bevy::tasks::AsyncComputeTaskPool;
+use bevy::render::mesh::*;
 use bevy::tasks::futures_lite::future;
+use bevy::tasks::AsyncComputeTaskPool;
+use bevy_rapier3d::prelude::*;
 use game_core::configuration::{GameConfig, WorldGenConfig};
 use game_core::states::{AppState, InGameStates};
-use game_core::world::block::{id_any, BlockId, BlockRegistry};
+use game_core::world::block::{id_any, BlockRegistry};
 use game_core::world::chunk::*;
 use game_core::world::chunk_dim::*;
-use crate::world_services::chunk::chunk_struct::*;
+use game_core::world::save::{RegionCache, WorldSave};
+use std::collections::HashMap;
 
-const MAX_INFLIGHT_MESH: usize = 64;
-const MAX_INFLIGHT_GEN:  usize = 32;
+const MAX_APPLY_PER_FRAME: usize = 14;
 
 #[derive(Resource, Default)]
-struct ChunkMeshIndex {
-    map: HashMap<(IVec2, u8, BlockId), Entity>,
-}
+struct ChunkColliderIndex(pub HashMap<(IVec2, u8), Entity>);
 
 pub struct ChunkService;
 
@@ -27,6 +28,7 @@ impl Plugin for ChunkService {
             .init_resource::<MeshBacklog>()
             .init_resource::<PendingGen>()
             .init_resource::<PendingMesh>()
+            .init_resource::<ChunkColliderIndex>()
             .add_systems(Update, (
                 schedule_chunk_generation,
                 collect_generated_chunks,
@@ -34,8 +36,34 @@ impl Plugin for ChunkService {
                 schedule_remesh_tasks_from_events.in_set(VoxelStage::Meshing),
                 drain_mesh_backlog,
                 unload_far_chunks,
-            ).chain()
-                .run_if(in_state(AppState::InGame(InGameStates::Game))));
+            )
+                .chain()
+                .run_if(in_state(AppState::Loading)
+                    .or(in_state(AppState::InGame(InGameStates::Game)))));
+
+        app.add_systems(
+            Update,
+            check_initial_world_ready
+                .run_if(in_state(AppState::Loading))
+        );
+    }
+}
+
+fn check_initial_world_ready(
+    game_config: Res<GameConfig>,
+    load_center: Res<LoadCenter>,
+    chunk_map: Res<ChunkMap>,
+    pending_gen: Res<PendingGen>,
+    pending_mesh: Res<PendingMesh>,
+    backlog: Res<MeshBacklog>,
+    mut next: ResMut<NextState<AppState>>,
+    mut commands: Commands,
+) {
+    let initial_radius = game_config.graphics.chunk_range.min(3);
+
+    if area_ready(load_center.world_xz, initial_radius, &chunk_map, &pending_gen, &pending_mesh, &backlog) {
+        commands.remove_resource::<LoadCenter>();
+        next.set(AppState::InGame(InGameStates::Game));
     }
 }
 
@@ -46,13 +74,23 @@ fn schedule_chunk_generation(
     reg: Res<BlockRegistry>,
     gen_cfg: Res<WorldGenConfig>,
     game_config: Res<GameConfig>,
+    ws: Res<WorldSave>,
     q_cam: Query<&GlobalTransform, With<Camera3d>>,
+    load_center: Option<Res<LoadCenter>>,
 ) {
-    let cam = if let Ok(t) = q_cam.single() { t } else { return; };
-    let cam_pos = cam.translation();
-    let (center_c, _) = world_to_chunk_xz(cam_pos.x.floor() as i32, cam_pos.z.floor() as i32);
+    let center_c = if let Ok(t) = q_cam.single() {
+        let (c, _) = world_to_chunk_xz(t.translation().x.floor() as i32, t.translation().z.floor() as i32);
+        c
+    } else if let Some(lc) = load_center {
+        lc.world_xz
+    } else {
+        IVec2::ZERO
+    };
 
     if !can_spawn_gen(&pending) { return; }
+
+    let load_radius = game_config.graphics.chunk_range;
+    let mut budget = MAX_INFLIGHT_GEN.saturating_sub(pending.0.len()).min(8);
 
     let ids = (
         id_any(&reg, &["grass_block","grass"]),
@@ -60,9 +98,8 @@ fn schedule_chunk_generation(
         id_any(&reg, &["stone_block","stone"]),
     );
     let cfg_clone = gen_cfg.clone();
-
-    let mut budget = MAX_INFLIGHT_GEN.saturating_sub(pending.0.len()).min(8);
-    let load_radius = game_config.graphics.chunk_range;
+    let ws_root = ws.root.clone();
+    let pool = AsyncComputeTaskPool::get();
 
     for dz in -load_radius..=load_radius {
         for dx in -load_radius..=load_radius {
@@ -70,11 +107,11 @@ fn schedule_chunk_generation(
             let c = IVec2::new(center_c.x + dx, center_c.y + dz);
             if chunk_map.chunks.contains_key(&c) || pending.0.contains_key(&c) { continue; }
 
-            let pool = AsyncComputeTaskPool::get();
             let ids_copy = ids;
             let cfg = cfg_clone.clone();
+            let root = ws_root.clone();
             let task = pool.spawn(async move {
-                let data = generate_chunk_async_noise(c, ids_copy, cfg).await;
+                let data = load_or_gen_chunk_async(root, c, ids_copy, cfg).await;
                 (c, data)
             });
             pending.0.insert(c, task);
@@ -195,22 +232,30 @@ fn collect_meshed_subchunks(
     mut commands: Commands,
     mut pending_mesh: ResMut<PendingMesh>,
     mut mesh_index: ResMut<ChunkMeshIndex>,
+    mut collider_index: ResMut<ChunkColliderIndex>,
     mut meshes: ResMut<Assets<Mesh>>,
     reg: Res<BlockRegistry>,
     mut chunk_map: ResMut<ChunkMap>,
     q_mesh: Query<&Mesh3d>,
 ) {
     let mut done_keys = Vec::new();
+    let mut applied = 0;
 
     for (key, task) in pending_mesh.0.iter_mut() {
+        if applied >= MAX_APPLY_PER_FRAME { break; }
+
         if let Some(((coord, sub), builds)) = future::block_on(future::poll_once(task)) {
-            let old_keys: Vec<_> = mesh_index.map
+            let old_keys: Vec<_> = mesh_index
+                .map
                 .keys()
                 .cloned()
                 .filter(|(c, s, _)| c == &coord && *s as usize == sub)
                 .collect();
-
             despawn_mesh_set(old_keys, &mut mesh_index, &mut commands, &q_mesh, &mut meshes);
+
+            if let Some(ent) = collider_index.0.remove(&(coord, sub as u8)) {
+                commands.entity(ent).despawn();
+            }
 
             let s = 1.0;
             let origin = Vec3::new(
@@ -219,28 +264,67 @@ fn collect_meshed_subchunks(
                 (coord.y * CZ as i32) as f32 * s,
             );
 
+            let mut phys_positions: Vec<[f32; 3]> = Vec::new();
+            let mut phys_indices:   Vec<u32>       = Vec::new();
+
             for (bid, mb) in builds {
                 if mb.pos.is_empty() { continue; }
+
+                {
+                    let base = phys_positions.len() as u32;
+                    phys_positions.extend_from_slice(&mb.pos);
+                    phys_indices.extend(mb.idx.iter().map(|i| base + *i));
+                }
+
                 let mesh = mb.into_mesh();
-                let ent = commands.spawn((
-                    Mesh3d(meshes.add(mesh)),
-                    MeshMaterial3d(reg.material(bid)),
-                    Transform::from_translation(origin),
-                    SubchunkMesh { coord, sub: sub as u8, block: bid },
-                    Name::new(format!("chunk({},{}) sub{} block{}", coord.x, coord.y, sub, bid)),
-                )).id();
+                let ent = commands
+                    .spawn((
+                        Mesh3d(meshes.add(mesh)),
+                        MeshMaterial3d(reg.material(bid)),
+                        Transform::from_translation(origin),
+                        SubchunkMesh { coord, sub: sub as u8, block: bid },
+                        Name::new(format!("chunk({},{}) sub{} block{}", coord.x, coord.y, sub, bid)),
+                    ))
+                    .id();
                 mesh_index.map.insert((coord, sub as u8, bid), ent);
+            }
+
+            if !phys_positions.is_empty() {
+                let mut pm = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::RENDER_WORLD);
+                pm.insert_attribute(Mesh::ATTRIBUTE_POSITION, phys_positions);
+                pm.insert_indices(Indices::U32(phys_indices));
+
+                let flags = TriMeshFlags::FIX_INTERNAL_EDGES
+                    | TriMeshFlags::MERGE_DUPLICATE_VERTICES
+                    | TriMeshFlags::DELETE_DEGENERATE_TRIANGLES
+                    | TriMeshFlags::ORIENTED;
+
+                if let Some(collider) = Collider::from_bevy_mesh(&pm, &ComputedColliderShape::TriMesh(flags)) {
+                    let cent = commands
+                        .spawn((
+                            RigidBody::Fixed,
+                            collider,
+                            Transform::from_translation(origin),
+                            Name::new(format!("collider chunk({},{}) sub{}", coord.x, coord.y, sub)),
+                        ))
+                        .id();
+                    collider_index.0.insert((coord, sub as u8), cent);
+                }
+
             }
 
             if let Some(chunk) = chunk_map.chunks.get_mut(&coord) {
                 chunk.clear_dirty(sub);
             }
 
+            applied += 1;
             done_keys.push(*key);
         }
     }
 
-    for k in done_keys { pending_mesh.0.remove(&k); }
+    for k in done_keys {
+        pending_mesh.0.remove(&k);
+    }
 }
 
 //System
@@ -296,11 +380,14 @@ fn unload_far_chunks(
     mut commands: Commands,
     mut chunk_map: ResMut<ChunkMap>,
     mut mesh_index: ResMut<ChunkMeshIndex>,
+    mut collider_index: ResMut<ChunkColliderIndex>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut pending_gen: ResMut<PendingGen>,
     mut pending_mesh: ResMut<PendingMesh>,
     mut backlog: ResMut<MeshBacklog>,
     game_config: Res<GameConfig>,
+    ws: Res<WorldSave>,
+    mut cache: ResMut<RegionCache>,
     q_mesh: Query<&Mesh3d>,
     q_cam: Query<&GlobalTransform, With<Camera3d>>,
 ) {
@@ -310,7 +397,8 @@ fn unload_far_chunks(
 
     let keep_radius = game_config.graphics.chunk_range + 1;
 
-    let to_remove: Vec<IVec2> = chunk_map.chunks
+    let to_remove: Vec<IVec2> = chunk_map
+        .chunks
         .keys()
         .filter(|coord| {
             (coord.x - center_c.x).abs() > keep_radius
@@ -320,80 +408,35 @@ fn unload_far_chunks(
         .collect();
 
     for coord in &to_remove {
-        pending_gen.0.remove(coord);
-        pending_mesh.0.retain(|(c,_), _| c != coord);
+        if let Some(chunk) = chunk_map.chunks.get(coord) {
+            let _ = save_chunk_sync(&ws, &mut cache, *coord, chunk);
+        }
 
-        let keys: Vec<_> = mesh_index.map
+        pending_gen.0.remove(coord);
+        pending_mesh.0.retain(|(c, _), _| c != coord);
+
+        let keys: Vec<_> = mesh_index
+            .map
             .keys()
             .cloned()
             .filter(|(c, _, _)| c == coord)
             .collect();
-
         despawn_mesh_set(keys, &mut mesh_index, &mut commands, &q_mesh, &mut meshes);
+
+        let col_keys: Vec<_> = collider_index
+            .0
+            .keys()
+            .cloned()
+            .filter(|(c, _)| c == coord)
+            .collect();
+        for k in col_keys {
+            if let Some(ent) = collider_index.0.remove(&k) {
+                commands.entity(ent).despawn();
+            }
+        }
 
         chunk_map.chunks.remove(coord);
         backlog.0.retain(|(c, _)| c != coord);
     }
 }
 
-fn snapshot_borders(chunk_map: &ChunkMap, coord: IVec2, y0: usize, y1: usize) -> BorderSnapshot {
-    let mut snap = BorderSnapshot { y0, y1, east: None, west: None, south: None, north: None };
-
-    let take_xz = |c: &ChunkData, x: usize, z: usize, y: usize| -> BlockId { c.get(x,y,z) };
-
-    if let Some(n) = chunk_map.chunks.get(&IVec2::new(coord.x + 1, coord.y)) {
-        let mut v = Vec::with_capacity((y1 - y0) * CZ);
-        for y in y0..y1 { for z in 0..CZ { v.push(take_xz(n, 0, z, y)); } }
-        snap.east = Some(v);
-    }
-    if let Some(n) = chunk_map.chunks.get(&IVec2::new(coord.x - 1, coord.y)) {
-        let mut v = Vec::with_capacity((y1 - y0) * CZ);
-        for y in y0..y1 { for z in 0..CZ { v.push(take_xz(n, CX-1, z, y)); } }
-        snap.west = Some(v);
-    }
-    if let Some(n) = chunk_map.chunks.get(&IVec2::new(coord.x, coord.y + 1)) {
-        let mut v = Vec::with_capacity((y1 - y0) * CX);
-        for y in y0..y1 { for x in 0..CX { v.push(take_xz(n, x, 0, y)); } }
-        snap.south = Some(v);
-    }
-    if let Some(n) = chunk_map.chunks.get(&IVec2::new(coord.x, coord.y - 1)) {
-        let mut v = Vec::with_capacity((y1 - y0) * CX);
-        for y in y0..y1 { for x in 0..CX { v.push(take_xz(n, x, CZ-1, y)); } }
-        snap.north = Some(v);
-    }
-    snap
-}
-
-fn despawn_mesh_set(
-    keys: impl IntoIterator<Item = (IVec2, u8, BlockId)>,
-    mesh_index: &mut ChunkMeshIndex,
-    commands: &mut Commands,
-    q_mesh: &Query<&Mesh3d>,
-    meshes: &mut Assets<Mesh>,
-) {
-    for key in keys {
-        if let Some(ent) = mesh_index.map.remove(&key) {
-            if let Ok(Mesh3d(handle)) = q_mesh.get(ent) {
-                meshes.remove(handle.id());
-            }
-            commands.entity(ent).despawn();
-        }
-    }
-}
-
-fn can_spawn_mesh(pending_mesh: &PendingMesh) -> bool {
-    pending_mesh.0.len() < MAX_INFLIGHT_MESH
-}
-fn can_spawn_gen(pending_gen: &PendingGen) -> bool {
-    pending_gen.0.len() < MAX_INFLIGHT_GEN
-}
-
-fn backlog_contains(backlog: &MeshBacklog, key: (IVec2, usize)) -> bool {
-    backlog.0.iter().any(|&k| k == key)
-}
-
-fn enqueue_mesh(backlog: &mut MeshBacklog, pending: &PendingMesh, key: (IVec2, usize)) {
-    if pending.0.contains_key(&key) { return; }
-    if backlog_contains(backlog, key) { return; }
-    backlog.0.push_back(key);
-}

@@ -6,6 +6,7 @@ use game_core::debug::WorldInspectorState;
 use game_core::key_converter::convert;
 use game_core::GameCorePlugin;
 use game_logic::GameLogicPlugin;
+use game_ui::GameUiPlugin;
 use game_world::GameWorldPlugin;
 
 pub struct ManagerPlugin;
@@ -22,6 +23,7 @@ impl Plugin for ManagerPlugin {
         app.add_plugins((
             GameCorePlugin,
             GameWorldPlugin,
+            GameUiPlugin,
             GameLogicPlugin,
         ));
 

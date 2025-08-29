@@ -975,6 +975,7 @@ dependencies = [
  "bevy_ecs",
  "bevy_input",
  "bevy_math",
+ "bevy_mesh",
  "bevy_platform",
  "bevy_reflect",
  "bevy_render",
@@ -982,6 +983,7 @@ dependencies = [
  "bevy_transform",
  "bevy_utils",
  "bevy_window",
+ "crossbeam-channel",
  "tracing",
  "uuid",
 ]
@@ -1382,6 +1384,16 @@ dependencies = [
  "wasm-bindgen",
  "web-sys",
  "winit",
+]
+
+[[package]]
+name = "bincode"
+version = "2.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "36eaf5d7b090263e8150820482d5d93cd964a81e4019913c972f4edcc6edb740"
+dependencies = [
+ "serde",
+ "unty",
 ]
 
 [[package]]
@@ -2311,7 +2323,18 @@ version = "0.1.0"
 dependencies = [
  "bevy",
  "bevy_rapier3d",
+ "bincode",
  "fastnoise-lite",
+ "futures-lite",
+ "game_core",
+ "lz4_flex",
+]
+
+[[package]]
+name = "game_ui"
+version = "0.1.0"
+dependencies = [
+ "bevy",
  "game_core",
 ]
 
@@ -2335,6 +2358,7 @@ dependencies = [
  "dotenvy",
  "game_core",
  "game_logic",
+ "game_ui",
  "game_world",
  "serial_test",
  "tracing-subscriber",
@@ -2640,6 +2664,8 @@ dependencies = [
  "num-traits",
  "png",
  "tiff",
+ "zune-core",
+ "zune-jpeg",
 ]
 
 [[package]]
@@ -2838,6 +2864,15 @@ name = "log"
 version = "0.4.27"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "13dc2df351e3202783a1fe0d44375f7295ffb4049267b0f3018346dc122a1d94"
+
+[[package]]
+name = "lz4_flex"
+version = "0.11.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "08ab2867e3eeeca90e844d1940eab391c9dc5228783db2ed999acbc0a9ed375a"
+dependencies = [
+ "twox-hash",
+]
 
 [[package]]
 name = "malloc_buf"
@@ -4772,6 +4807,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ebc1c04c71510c7f702b52b7c350734c9ff1295c464a03335b00bb84fc54f853"
 
 [[package]]
+name = "unty"
+version = "0.0.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6d49784317cd0d1ee7ec5c716dd598ec5b4483ea832a2dced265471cc0f690ae"
+
+[[package]]
 name = "uuid"
 version = "1.18.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5706,4 +5747,19 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn",
+]
+
+[[package]]
+name = "zune-core"
+version = "0.4.12"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3f423a2c17029964870cfaabb1f13dfab7d092a62a29a89264f4d36990ca414a"
+
+[[package]]
+name = "zune-jpeg"
+version = "0.4.20"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fc1f7e205ce79eb2da3cd71c5f55f3589785cb7c79f6a03d1c8d1491bda5d089"
+dependencies = [
+ "zune-core",
 ]

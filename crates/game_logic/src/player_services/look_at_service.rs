@@ -5,15 +5,19 @@ use game_core::world::block::{id_any, BlockId, BlockRegistry, Face};
 use game_core::world::chunk::{ChunkData, ChunkMap, SubchunkDirty, VoxelStage};
 use game_core::world::chunk_dim::*;
 
+
+#[derive(Resource, Default, GizmoConfigGroup, Reflect)]
+struct SelectionGizmoGroup;
+
 pub struct LookAtService;
 
 impl Plugin for LookAtService {
     fn build(&self, app: &mut App) {
-        app.configure_sets(Update, (
-            VoxelStage::Input,
-            VoxelStage::WorldEdit,
-            VoxelStage::Meshing,
-        ).chain());
+        app.init_resource::<GizmoConfigStore>()
+            .init_gizmo_group::<SelectionGizmoGroup>()
+            .add_systems(Startup, setup_selection_gizmo_config);
+
+        app.configure_sets(Update, (VoxelStage::Input, VoxelStage::WorldEdit, VoxelStage::Meshing).chain());
 
         app.add_systems(
             Update,
@@ -24,6 +28,12 @@ impl Plugin for LookAtService {
             ).chain().run_if(in_state(AppState::InGame(InGameStates::Game)))
         );
     }
+}
+
+fn setup_selection_gizmo_config(mut store: ResMut<GizmoConfigStore>) {
+    let (cfg, _) = store.config_mut::<SelectionGizmoGroup>();
+    cfg.line = GizmoLineConfig { width: 5.0, ..default() };
+    cfg.depth_bias = 0.0;
 }
 
 fn update_selection(
@@ -42,7 +52,7 @@ fn update_selection(
 
 fn draw_selection_gizmo(
     sel: Res<SelectionState>,
-    mut gizmos: Gizmos,
+    mut gizmos: Gizmos<SelectionGizmoGroup>,
 ) {
     if let Some(hit) = sel.hit {
         let center = Vec3::new(
@@ -50,7 +60,7 @@ fn draw_selection_gizmo(
             hit.block_pos.y as f32 + 0.5,
             hit.block_pos.z as f32 + 0.5,
         );
-        let size = Vec3::splat(1.002);
+        let size = Vec3::splat(1.001);
         gizmos.cuboid(Transform::from_translation(center).with_scale(size), Color::BLACK);
     }
 }
@@ -72,7 +82,7 @@ fn handle_break_and_place(
     }
 
     if buttons.just_pressed(MouseButton::Right) {
-        let stone = id_any(&reg, &["stone_block","stone"]);
+        let stone = id_any(&reg, &["log_block","log"]);
         if stone != 0 {
             if let Some(mut access) = world_access_mut(&mut chunk_map, hit.place_pos) {
                 if access.get() == 0 { access.set(stone); }

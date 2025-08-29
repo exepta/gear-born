@@ -149,7 +149,8 @@ impl BlockRegistry {
 pub enum Blocks {
     Dirt,
     Grass,
-    Stone
+    Stone,
+    Log,
 }
 
 impl Blocks {
@@ -157,7 +158,8 @@ impl Blocks {
         match self {
             Blocks::Dirt  => "dirt_block",
             Blocks::Grass => "grass_block",
-            Blocks::Stone => "stone_block"
+            Blocks::Stone => "stone_block",
+            Blocks::Log   => "log_block",
         }
     }
 }
