@@ -60,7 +60,7 @@ fn main() {
 #[coverage(off)]
 fn init_bevy_app(app: &mut App, config: &GameConfig) {
     let build = BuildInfo {
-        app_name: "Version",
+        app_name: "Game Version",
         app_version: env!("CARGO_PKG_VERSION"),
         bevy_version: "0.16.1",
     };

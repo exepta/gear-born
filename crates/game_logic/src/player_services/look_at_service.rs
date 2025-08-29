@@ -1,13 +1,12 @@
 use bevy::prelude::*;
+use bevy::render::view::RenderLayers;
+use game_core::debug::SelectionGizmoGroup;
 use game_core::player::selection::{BlockHit, SelectionState};
 use game_core::states::{AppState, InGameStates};
-use game_core::world::block::{id_any, BlockId, BlockRegistry, Face, VOXEL_SIZE};
+use game_core::world::block::{get_block_world, id_any, BlockId, BlockRegistry, Face, VOXEL_SIZE};
 use game_core::world::chunk::{ChunkData, ChunkMap, SubchunkDirty, VoxelStage};
 use game_core::world::chunk_dim::*;
 
-
-#[derive(Resource, Default, GizmoConfigGroup, Reflect)]
-struct SelectionGizmoGroup;
 
 pub struct LookAtService;
 
@@ -33,6 +32,7 @@ impl Plugin for LookAtService {
 fn setup_selection_gizmo_config(mut store: ResMut<GizmoConfigStore>) {
     let (cfg, _) = store.config_mut::<SelectionGizmoGroup>();
     cfg.line = GizmoLineConfig { width: 5.0, ..default() };
+    cfg.render_layers = RenderLayers::layer(2);
     cfg.depth_bias = 0.0;
 }
 
@@ -163,17 +163,6 @@ fn ray_cast_voxels(origin: Vec3, dir_in: Vec3, max_dist: f32, chunk_map: &ChunkM
     None
 }
 
-#[inline]
-fn get_block_world(chunk_map: &ChunkMap, wp: IVec3) -> BlockId {
-    if wp.y < Y_MIN || wp.y > Y_MAX { return 0; }
-    let (cc, local) = world_to_chunk_xz(wp.x, wp.z);
-    let Some(chunk) = chunk_map.chunks.get(&cc) else { return 0; };
-    let lx = local.x as usize;
-    let lz = local.y as usize;
-    let ly = world_y_to_local(wp.y);
-    chunk.get(lx, ly, lz)
-}
-
 fn world_access_mut(chunk_map: &'_ mut ChunkMap, wp: IVec3)
                     -> Option<WorldMutAccess<'_>>
 {
@@ -201,9 +190,6 @@ impl<'a> WorldMutAccess<'a> {
     }
 }
 
-// world_y <-> local_y
-#[inline] fn world_y_to_local(wy: i32) -> usize { (wy - Y_MIN) as usize }
-
 fn mark_dirty_block_and_neighbors(
     chunk_map: &mut ChunkMap,
     wp: IVec3,
@@ -223,7 +209,6 @@ fn mark_dirty_block_and_neighbors(
         let p = wp + o;
         if p.y < Y_MIN || p.y > Y_MAX { continue; }
 
-        // immer die Mapper aus chunk_dim benutzen
         let (coord, local_xz) = world_to_chunk_xz(p.x, p.z);
         let ly = world_y_to_local(p.y);
         let sub = ly / SEC_H;

@@ -2314,6 +2314,7 @@ dependencies = [
  "bevy_rapier3d",
  "serde",
  "serde_json",
+ "sysinfo",
  "toml",
 ]
 
@@ -2323,11 +2324,8 @@ version = "0.1.0"
 dependencies = [
  "bevy",
  "bevy_rapier3d",
- "bincode",
- "fastnoise-lite",
- "futures-lite",
  "game_core",
- "lz4_flex",
+ "game_world",
  "sysinfo",
 ]
 
@@ -2345,7 +2343,11 @@ version = "0.1.0"
 dependencies = [
  "bevy",
  "bevy_rapier3d",
+ "bincode",
+ "fastnoise-lite",
+ "futures-lite",
  "game_core",
+ "lz4_flex",
 ]
 
 [[package]]
@@ -2642,7 +2644,7 @@ dependencies = [
  "js-sys",
  "log",
  "wasm-bindgen",
- "windows-core 0.58.0",
+ "windows-core 0.61.2",
 ]
 
 [[package]]

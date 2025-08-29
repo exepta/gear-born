@@ -179,8 +179,9 @@ pub struct InputConfig {
 
     // Debug
 
-    /// Toggle Rapier 3d grid layout.
-    pub rapier_debug: String,
+    pub debug_overlay: String,
+
+    pub chunk_grid: String,
 
     /// Toggle world inspector.
     pub world_inspector: String,
@@ -208,7 +209,8 @@ impl Default for InputConfig {
             ui_inventory: String::from("B"),
             ui_close_back: String::from("Escape"),
 
-            rapier_debug: String::from("F3"),
+            debug_overlay: String::from("F3"),
+            chunk_grid: String::from("F9"),
             world_inspector: String::from("F1"),
         }
     }

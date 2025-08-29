@@ -3,10 +3,12 @@ use bevy::prelude::*;
 use bevy::render::renderer::RenderAdapterInfo;
 use bevy::render::view::RenderLayers;
 use game_core::configuration::GameConfig;
-use game_core::debug::ChunkGridGizmos;
+use game_core::debug::*;
+use game_core::key_converter::convert;
 use game_core::player::selection::SelectionState;
 use game_core::states::{AppState, InGameStates};
-use game_core::world::block::VOXEL_SIZE;
+use game_core::world::block::{block_name_from_registry, get_block_world, BlockRegistry, VOXEL_SIZE};
+use game_core::world::chunk::ChunkMap;
 use game_core::world::chunk_dim::*;
 use game_core::BuildInfo;
 use sysinfo::{CpuRefreshKind, MemoryRefreshKind, Pid, ProcessesToUpdate, RefreshKind, System};
@@ -25,8 +27,8 @@ impl Plugin for DebugOverlayPlugin {
             .add_systems(
                 Update,
                 (
-                    toggle_overlay_with_f5,
-                    toggle_grid_with_f6,
+                    toggle_overlay,
+                    toggle_grid,
                     poll_sys_info,
                     ensure_overlay_exists,
                     update_debug_text,
@@ -34,40 +36,6 @@ impl Plugin for DebugOverlayPlugin {
                 )
                     .run_if(in_state(AppState::InGame(InGameStates::Game))),
             );
-    }
-}
-
-#[derive(Resource, Default)]
-struct DebugOverlayState {
-    show: bool,
-    root: Option<Entity>,
-    text: Option<Entity>,
-}
-
-#[derive(Resource, Default)]
-struct DebugGridState {
-    show: bool,
-    plane_y: f32,
-}
-
-#[derive(Resource)]
-struct SysStats {
-    sys: System,
-    cpu_percent: f32,
-    app_cpu_percent: f32,
-    app_mem_bytes: u64,
-    timer: Timer,
-}
-
-impl Default for SysStats {
-    fn default() -> Self {
-        Self {
-            sys: System::new(),
-            cpu_percent: 0.0,
-            app_cpu_percent: 0.0,
-            app_mem_bytes: 0,
-            timer: Timer::from_seconds(0.5, TimerMode::Repeating),
-        }
     }
 }
 
@@ -100,18 +68,29 @@ fn setup_sys_info(mut stats: ResMut<SysStats>) {
 
 /* ---------- Toggles ---------- */
 
-fn toggle_overlay_with_f5(keys: Res<ButtonInput<KeyCode>>, mut state: ResMut<DebugOverlayState>) {
-    if keys.just_pressed(KeyCode::F5) {
+fn toggle_overlay(
+    keys: Res<ButtonInput<KeyCode>>,
+    mut state: ResMut<DebugOverlayState>,
+    game_config: Res<GameConfig>
+) {
+    let key = convert(game_config.input.debug_overlay.as_str())
+        .expect("Invalid key for debugger overlay");
+
+    if keys.just_pressed(key) {
         state.show = !state.show;
     }
 }
 
-fn toggle_grid_with_f6(
+fn toggle_grid(
     keys: Res<ButtonInput<KeyCode>>,
     mut state: ResMut<DebugGridState>,
     q_cam: Query<&GlobalTransform, With<Camera3d>>,
+    game_config: Res<GameConfig>
 ) {
-    if keys.just_pressed(KeyCode::F6) {
+    let key = convert(game_config.input.chunk_grid.as_str())
+        .expect("Invalid key for debugger overlay");
+
+    if keys.just_pressed(key) {
         state.show = !state.show;
         if state.show {
             if let Ok(tf) = q_cam.single() {
@@ -196,35 +175,40 @@ fn update_debug_text(
     mut q_text: Query<&mut Text>,
     build: Option<Res<BuildInfo>>,
     game_config: Res<GameConfig>,
-    backend: Res<RenderAdapterInfo>
+    backend: Res<RenderAdapterInfo>,
+    reg: Res<BlockRegistry>,
+    chunk_map: Res<ChunkMap>,
 ) {
     if !state.show { return; }
     let Some(text_e) = state.text else { return; };
 
-    let fps = diag
-        .get(&FrameTimeDiagnosticsPlugin::FPS)
+    let fps = diag.get(&FrameTimeDiagnosticsPlugin::FPS)
         .and_then(|d| d.smoothed())
         .unwrap_or(0.0);
 
     let pos = q_cam.single().map(|t| t.translation()).unwrap_or(Vec3::ZERO);
     let (cc, _local) = world_to_chunk_xz(pos.x.floor() as i32, pos.z.floor() as i32);
 
-    let (hit_str, place_str) = if let Some(sel) = sel {
+    let (hit_str, _, block_line) = if let Some(sel) = sel {
         if let Some(h) = sel.hit {
+            let id = get_block_world(&chunk_map, h.block_pos);
+            let name = if id != 0 { block_name_from_registry(&reg, id) } else { "air".into() };
             (
                 format!("{:?} at ({},{},{})", h.face, h.block_pos.x, h.block_pos.y, h.block_pos.z),
                 format!("place: ({},{},{})", h.place_pos.x, h.place_pos.y, h.place_pos.z),
+                format!("Block: {}", name),
             )
-        } else { ("—".into(), "—".into()) }
-    } else { ("—".into(), "—".into()) };
+        } else {
+            ("—".into(), "—".into(), "Block: —".into())
+        }
+    } else {
+        ("—".into(), "—".into(), "Block: —".into())
+    };
 
     let mem_str = fmt_mem_from_bytes(stats.app_mem_bytes);
-
     let (app_name, app_ver, bevy_ver) = if let Some(b) = build {
         (b.app_name, b.app_version, b.bevy_version)
-    } else {
-        ("<app>", "?", "0.16.1")
-    };
+    } else { ("<app>", "?", "0.16.1") };
 
     let backend_str = backend_to_str(backend.backend.to_str());
     let chunk_range = game_config.graphics.chunk_range;
@@ -236,9 +220,9 @@ fn update_debug_text(
          CPU: {:>4.1}%  RAM(proc): {}  Backend: {}\n\
          Location: ({:.2}, {:.2}, {:.2})\n\
          Chunk: ({}, {})  (size: {}x{}, range: {})\n\
-         Looking at: {}\n\
          {}\n\
-         F5: Toggle Debug Overlay   F6: Toggle Chunk Grid",
+         {}\n\
+         {}: Toggle Debug Overlay   {}: Toggle Chunk Grid",
         fps,
         backend.name,
         stats.cpu_percent,
@@ -246,8 +230,10 @@ fn update_debug_text(
         backend_str,
         pos.x, pos.y, pos.z,
         cc.x, cc.y, CX, CZ, chunk_range,
+        block_line,
         hit_str,
-        place_str,
+        game_config.input.debug_overlay.as_str(),
+        game_config.input.chunk_grid.as_str(),
         app = app_name,
         app_ver = app_ver,
         bevy_ver = bevy_ver,
@@ -285,8 +271,8 @@ fn draw_chunk_grid(
     let y_top    = Y_MAX as f32 * s - eps;
     let height   = y_top - y_bottom;
 
-    let col_edge   = Color::srgb_u8(255, 165, 0);
-    let col_corner = Color::srgb_u8(255, 235, 59);
+    let col_edge   = Color::srgb_u8(255, 235, 59);
+    let col_corner = Color::srgb_u8(255, 165, 0);
 
     const LEVEL_STEP: i32 = SEC_H as i32;
 

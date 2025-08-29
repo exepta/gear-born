@@ -11,6 +11,9 @@ path = "src/lib.rs"
 [dependencies.game_core]
 path = "../game_core"
 
+[dependencies.game_world]
+path = "../game_world"
+
 [dependencies.bevy]
 version = "0.16.1"
 default-features = false
@@ -30,20 +33,6 @@ features = [
     "bevy_color",
     "bevy_gizmos",
 ]
-
-[dependencies.fastnoise-lite]
-version = "1.1.1"
-
-[dependencies.lz4_flex]
-version = "0.11.5"
-
-[dependencies.futures-lite]
-version = "2.6.1"
-
-[dependencies.bincode]
-version = "2.0.1"
-default-features = false
-features = ["alloc"]
 
 [dependencies.sysinfo]
 version = "0.37.0"

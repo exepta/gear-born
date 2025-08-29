@@ -6,13 +6,23 @@ use bevy::window::{CursorGrabMode, PrimaryWindow};
 use bevy_rapier3d::prelude::*;
 use game_core::configuration::GameConfig;
 use game_core::key_converter::convert;
+use game_core::player::{FlightState, FpsController, Player, PlayerCamera};
 use game_core::states::{AppState, InGameStates};
 use game_core::world::block::BlockRegistry;
 
+#[derive(Component)]
+struct DoubleTapSpace {
+    last_press: f32,
+}
 
-pub struct CameraPlugin;
+#[derive(Component)]
+struct PlayerKinematics {
+    vel_y: f32,
+}
 
-impl Plugin for CameraPlugin {
+pub struct PlayerInitialize;
+
+impl Plugin for PlayerInitialize {
     fn build(&self, app: &mut App) {
         app.insert_resource(AmbientLight {
             color: Color::WHITE,
@@ -36,34 +46,7 @@ impl Plugin for CameraPlugin {
     }
 }
 
-#[derive(Component)]
-struct Player;
-
-#[derive(Component)]
-struct PlayerCamera;
-
-#[derive(Component)]
-struct FpsController {
-    yaw: f32,
-    pitch: f32,
-    speed: f32,
-    sensitivity: f32,
-}
-
-#[derive(Component)]
-struct DoubleTapSpace {
-    last_press: f32,
-}
-
-#[derive(Component)]
-struct FlightState { flying: bool }
-
-#[derive(Component)]
-struct PlayerKinematics {
-    vel_y: f32,
-}
-
-fn spawn_scene(mut commands: Commands, block_registry: Res<BlockRegistry>) {
+fn spawn_scene(mut commands: Commands) {
     commands.spawn((
         DirectionalLight {
             shadows_enabled: true,
@@ -79,8 +62,6 @@ fn spawn_scene(mut commands: Commands, block_registry: Res<BlockRegistry>) {
             .build(),
         Transform::from_xyz(4.0, 200.0, 4.0).looking_at(Vec3::ZERO, Vec3::Y),
     ));
-
-    info!("content: {:?}", block_registry.name_to_id);
 }
 
 fn spawn_player(mut commands: Commands, game_config: Res<GameConfig>) {
@@ -131,7 +112,7 @@ fn spawn_player(mut commands: Commands, game_config: Res<GameConfig>) {
     commands.entity(player).with_children(|c| {
         c.spawn((
             PlayerCamera,
-            RenderLayers::from_layers(&[0, 1]),
+            RenderLayers::from_layers(&[0, 1, 2]),
             Camera3d::default(),
             Projection::Perspective(PerspectiveProjection {
                 fov: fov_deg.to_radians(),
@@ -240,7 +221,9 @@ fn player_move_kcc(
     ), With<Player>>,
     game_config: Res<GameConfig>,
 ) {
-    let Ok((tf, ctrl, mut kin, mut kcc, kcc_out, mut flight, mut tap)) = q_player.single_mut() else { return; };
+    let Ok((tf, ctrl, mut kin, mut kcc,
+               kcc_out, mut flight, mut tap))
+        = q_player.single_mut() else { return; };
 
     // --------- Tuning ----------
     let ground_speed   = ctrl.speed;
@@ -249,7 +232,7 @@ fn player_move_kcc(
 
     let gravity        = 22.0;
     let fall_multi     = 2.2;
-    const JUMP_HEIGHT: f32 = 1.25;
+    const JUMP_HEIGHT: f32 = 1.65;
     let jump_v0        = (2.0 * gravity * JUMP_HEIGHT).sqrt();
 
     const DOUBLE_TAP_WIN: f32 = 0.28;

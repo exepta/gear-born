@@ -1,3 +1,5 @@
+use crate::world::chunk::ChunkMap;
+use crate::world::chunk_dim::{world_to_chunk_xz, Y_MAX, Y_MIN};
 use bevy::prelude::*;
 use bevy::render::mesh::{Indices, PrimitiveTopology};
 use serde::Deserialize;
@@ -156,7 +158,7 @@ pub enum Blocks {
 }
 
 impl Blocks {
-    pub const fn name(self) -> &'static str {
+    pub const fn localized_name(self) -> &'static str {
         match self {
             Blocks::Dirt  => "dirt_block",
             Blocks::Grass => "grass_block",
@@ -168,7 +170,7 @@ impl Blocks {
 
 impl AsRef<str> for Blocks {
     fn as_ref(&self) -> &str {
-        self.name()
+        self.localized_name()
     }
 }
 
@@ -224,6 +226,27 @@ pub fn id_any(reg: &BlockRegistry, names: &[&str]) -> BlockId {
 
 #[inline] pub fn to_block_space(v: Vec3) -> Vec3 { v / VOXEL_SIZE }
 #[inline] pub fn to_world_space(v: Vec3) -> Vec3 { v * VOXEL_SIZE }
+
+#[inline]
+pub fn get_block_world(chunk_map: &ChunkMap, wp: IVec3) -> BlockId {
+    if wp.y < Y_MIN || wp.y > Y_MAX { return 0; }
+    let (cc, local) = world_to_chunk_xz(wp.x, wp.z);
+    let Some(chunk) = chunk_map.chunks.get(&cc) else { return 0; };
+    let lx = local.x as usize;
+    let lz = local.y as usize;
+    let ly = world_y_to_local(wp.y);
+    chunk.get(lx, ly, lz)
+}
+
+
+#[inline]
+pub fn block_name_from_registry(reg: &BlockRegistry, id: BlockId) -> String {
+    reg.name_to_id
+        .iter()
+        .find(|&(_, &bid)| bid == id)
+        .map(|(name, _)| name.clone())
+        .unwrap_or_else(|| format!("#{id}"))
+}
 
 // =================================================================
 //                          Internal Struct
@@ -419,3 +442,5 @@ fn cube_mesh_with_face_uvs(f: &FaceUvRects, size: f32) -> Mesh {
     mesh.insert_indices(Indices::U32(idx));
     mesh
 }
+
+#[inline] fn world_y_to_local(wy: i32) -> usize { (wy - Y_MIN) as usize }

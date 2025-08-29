@@ -1,9 +1,9 @@
-use std::collections::{HashMap, VecDeque};
 use bevy::prelude::*;
 use game_core::states::{AppState, InGameStates};
 use game_core::world::chunk::{ChunkMap, SubchunkDirty};
 use game_core::world::save::*;
-use crate::world_services::chunk::chunk_utils::encode_chunk;
+use game_world::chunk::chunk_utils::encode_chunk;
+use std::collections::{HashMap, VecDeque};
 
 pub struct WorldSaveService;
 
