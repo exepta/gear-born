@@ -158,7 +158,7 @@ pub enum Blocks {
 }
 
 impl Blocks {
-    pub const fn name(self) -> &'static str {
+    pub const fn localized_name(self) -> &'static str {
         match self {
             Blocks::Dirt  => "dirt_block",
             Blocks::Grass => "grass_block",
@@ -170,7 +170,7 @@ impl Blocks {
 
 impl AsRef<str> for Blocks {
     fn as_ref(&self) -> &str {
-        self.name()
+        self.localized_name()
     }
 }
 

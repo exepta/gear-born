@@ -1,5 +1,5 @@
-use crate::world_services::chunk::chunk_struct::*;
-use crate::world_services::chunk::chunk_utils::*;
+use crate::chunk::chunk_struct::*;
+use crate::chunk::chunk_utils::*;
 use bevy::asset::RenderAssetUsages;
 use bevy::prelude::*;
 use bevy::render::mesh::*;
@@ -19,9 +19,9 @@ const MAX_APPLY_PER_FRAME: usize = 14;
 #[derive(Resource, Default)]
 struct ChunkColliderIndex(pub HashMap<(IVec2, u8), Entity>);
 
-pub struct ChunkService;
+pub struct ChunkBuilder;
 
-impl Plugin for ChunkService {
+impl Plugin for ChunkBuilder {
     fn build(&self, app: &mut App) {
         app
             .init_resource::<ChunkMeshIndex>()

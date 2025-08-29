@@ -69,13 +69,13 @@ fn setup_sys_info(mut stats: ResMut<SysStats>) {
 /* ---------- Toggles ---------- */
 
 fn toggle_overlay(
-    keys: Res<ButtonInput<KeyCode>>, 
+    keys: Res<ButtonInput<KeyCode>>,
     mut state: ResMut<DebugOverlayState>,
     game_config: Res<GameConfig>
 ) {
     let key = convert(game_config.input.debug_overlay.as_str())
         .expect("Invalid key for debugger overlay");
-    
+
     if keys.just_pressed(key) {
         state.show = !state.show;
     }
@@ -89,7 +89,7 @@ fn toggle_grid(
 ) {
     let key = convert(game_config.input.chunk_grid.as_str())
         .expect("Invalid key for debugger overlay");
-    
+
     if keys.just_pressed(key) {
         state.show = !state.show;
         if state.show {
@@ -192,7 +192,7 @@ fn update_debug_text(
     let (hit_str, _, block_line) = if let Some(sel) = sel {
         if let Some(h) = sel.hit {
             let id = get_block_world(&chunk_map, h.block_pos);
-            let name = if id != 0 { block_name_from_registry(&reg, id) } else { "Air".into() };
+            let name = if id != 0 { block_name_from_registry(&reg, id) } else { "air".into() };
             (
                 format!("{:?} at ({},{},{})", h.face, h.block_pos.x, h.block_pos.y, h.block_pos.z),
                 format!("place: ({},{},{})", h.place_pos.x, h.place_pos.y, h.place_pos.z),

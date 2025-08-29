@@ -24,6 +24,22 @@ impl Plugin for CrosshairPlugin {
     }
 }
 
+/// Spawns (if necessary) a dedicated 2D overlay camera and a ring-shaped crosshair mesh
+/// rendered on an isolated render layer.
+///
+/// Behavior:
+/// - Ensures a single `Camera` exists for overlays; if none is found, spawns one
+///   with `order = 1`, `clear_color = None`, and `RenderLayers::layer(3)`.
+/// - Builds a torus-like (ring) 2D mesh using [`build_ring_mesh`] with the
+///   configured outer radius, inner radius (`radius - thickness`, clamped at 0),
+///   and segment count.
+/// - Spawns the crosshair entity using `ColorMaterial` on the same render layer (3),
+///   with `NoFrustumCulling` to keep it always visible.
+///
+/// Expects a user-defined:
+/// - `CrosshairConfig` resource providing: `radius`, `thickness`, `segments`, `color`,
+///   and `visible_when_unlocked`.
+/// - `Crosshair` marker component.
 fn setup_crosshair(
     mut commands: Commands,
     cfg: Res<CrosshairConfig>,
@@ -64,6 +80,13 @@ fn setup_crosshair(
     ));
 }
 
+/// Toggles the `Visibility` of the crosshair based on the cursor grab state.
+///
+/// Visible when:
+/// - The primary window has `CursorGrabMode::Locked` (typical FPS mode), **or**
+/// - `cfg.visible_when_unlocked` is `true`.
+///
+/// If no crosshair or window exists yet, the system exits early.
 fn toggle_crosshair_visibility(
     mut q_cross: Query<&mut Visibility, With<Crosshair>>,
     windows: Query<&Window, With<bevy::window::PrimaryWindow>>,
@@ -80,6 +103,17 @@ fn toggle_crosshair_visibility(
     };
 }
 
+/// Builds a 2D ring mesh (triangle list) lying on the XY-plane with outward-facing normals.
+///
+/// - `outer_r`: outer radius of the ring (must be ≥ 0).
+/// - `inner_r`: inner radius of the ring (will be treated as-is; pass 0 for a filled disk).
+/// - `segments`: number of radial segments (clamped to at least 8).
+///
+/// The mesh layout:
+/// - Two concentric vertex loops (outer and inner), each with `segments + 1` vertices
+///   to close the loop.
+/// - Indices form quads between successive pairs, split into two triangles.
+/// - Normals point toward +Z; UVs are stubbed to (0.5, 0.5) for all vert (not used by `ColorMaterial`).
 fn build_ring_mesh(outer_r: f32, inner_r: f32, segments: usize) -> Mesh {
     let segments = segments.max(8);
     let mut positions: Vec<[f32; 3]> = Vec::with_capacity((segments + 1) * 2);

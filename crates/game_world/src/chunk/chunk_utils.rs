@@ -1,4 +1,4 @@
-use crate::world_services::chunk::chunk_struct::*;
+use crate::chunk::chunk_struct::*;
 use bevy::prelude::*;
 use bincode::{config, decode_from_slice, encode_to_vec};
 use fastnoise_lite::{FastNoiseLite, FractalType, NoiseType};
@@ -11,10 +11,10 @@ use lz4_flex::{compress_prepend_size, decompress_size_prepended};
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-pub(crate) const MAX_INFLIGHT_MESH: usize = 64;
-pub(crate) const MAX_INFLIGHT_GEN:  usize = 32;
+pub const MAX_INFLIGHT_MESH: usize = 64;
+pub const MAX_INFLIGHT_GEN:  usize = 32;
 
-pub(crate) async fn generate_chunk_async_noise(
+pub async fn generate_chunk_async_noise(
     coord: IVec2,
     ids: (BlockId, BlockId, BlockId),
     cfg: WorldGenConfig,
@@ -87,7 +87,7 @@ pub(crate) async fn generate_chunk_async_noise(
     c
 }
 
-pub(crate) async fn mesh_subchunk_async(
+pub async fn mesh_subchunk_async(
     chunk: &ChunkData,
     reg: &RegLite,
     sub: usize,
@@ -259,7 +259,7 @@ pub async fn load_or_gen_chunk_async(
     generate_chunk_async_noise(coord, ids, cfg).await
 }
 
-pub(crate) fn snapshot_borders(chunk_map: &ChunkMap, coord: IVec2, y0: usize, y1: usize) -> BorderSnapshot {
+pub fn snapshot_borders(chunk_map: &ChunkMap, coord: IVec2, y0: usize, y1: usize) -> BorderSnapshot {
     let mut snap = BorderSnapshot { y0, y1, east: None, west: None, south: None, north: None };
 
     let take_xz = |c: &ChunkData, x: usize, z: usize, y: usize| -> BlockId { c.get(x,y,z) };
@@ -287,7 +287,7 @@ pub(crate) fn snapshot_borders(chunk_map: &ChunkMap, coord: IVec2, y0: usize, y1
     snap
 }
 
-pub(crate) fn area_ready(
+pub fn area_ready(
     center: IVec2,
     radius: i32,
     chunk_map: &ChunkMap,
@@ -307,7 +307,7 @@ pub(crate) fn area_ready(
     true
 }
 
-pub(crate) fn despawn_mesh_set(
+pub fn despawn_mesh_set(
     keys: impl IntoIterator<Item = (IVec2, u8, BlockId)>,
     mesh_index: &mut ChunkMeshIndex,
     commands: &mut Commands,
@@ -324,18 +324,18 @@ pub(crate) fn despawn_mesh_set(
     }
 }
 
-pub(crate) fn can_spawn_mesh(pending_mesh: &PendingMesh) -> bool {
+pub fn can_spawn_mesh(pending_mesh: &PendingMesh) -> bool {
     pending_mesh.0.len() < MAX_INFLIGHT_MESH
 }
-pub(crate) fn can_spawn_gen(pending_gen: &PendingGen) -> bool {
+pub fn can_spawn_gen(pending_gen: &PendingGen) -> bool {
     pending_gen.0.len() < MAX_INFLIGHT_GEN
 }
 
-pub(crate) fn backlog_contains(backlog: &MeshBacklog, key: (IVec2, usize)) -> bool {
+pub fn backlog_contains(backlog: &MeshBacklog, key: (IVec2, usize)) -> bool {
     backlog.0.iter().any(|&k| k == key)
 }
 
-pub(crate) fn enqueue_mesh(backlog: &mut MeshBacklog, pending: &PendingMesh, key: (IVec2, usize)) {
+pub fn enqueue_mesh(backlog: &mut MeshBacklog, pending: &PendingMesh, key: (IVec2, usize)) {
     if pending.0.contains_key(&key) { return; }
     if backlog_contains(backlog, key) { return; }
     backlog.0.push_back(key);
@@ -367,13 +367,13 @@ fn decode_chunk(buf: &[u8]) -> std::io::Result<ChunkData> {
     Ok(c)
 }
 
-#[inline] pub(crate) fn leap(a:f32, b:f32, t:f32) -> f32 { a + (b - a) * t }
-#[inline] pub(crate) fn smoothstep(e0:f32, e1:f32, x:f32) -> f32 {
+#[inline] pub fn leap(a:f32, b:f32, t:f32) -> f32 { a + (b - a) * t }
+#[inline] pub fn smoothstep(e0:f32, e1:f32, x:f32) -> f32 {
     let t = ((x - e0) / (e1 - e0)).clamp(0.0, 1.0);
     t * t * (3.0 - 2.0 * t)
 }
 
-#[inline] pub(crate) fn map01(x: f32) -> f32 { x * 0.5 + 0.5 }
+#[inline] pub fn map01(x: f32) -> f32 { x * 0.5 + 0.5 }
 
 #[inline]
 pub fn chunk_to_region_slot(c: IVec2) -> (IVec2, usize) {
