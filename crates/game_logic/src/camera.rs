@@ -1,6 +1,7 @@
 use bevy::input::mouse::MouseMotion;
 use bevy::pbr::CascadeShadowConfigBuilder;
 use bevy::prelude::*;
+use bevy::render::view::RenderLayers;
 use bevy::window::{CursorGrabMode, PrimaryWindow};
 use bevy_rapier3d::prelude::*;
 use game_core::configuration::GameConfig;
@@ -130,6 +131,7 @@ fn spawn_player(mut commands: Commands, game_config: Res<GameConfig>) {
     commands.entity(player).with_children(|c| {
         c.spawn((
             PlayerCamera,
+            RenderLayers::from_layers(&[0, 1]),
             Camera3d::default(),
             Projection::Perspective(PerspectiveProjection {
                 fov: fov_deg.to_radians(),

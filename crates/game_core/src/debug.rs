@@ -1,6 +1,6 @@
 #![coverage(off)]
 
-use bevy::prelude::Resource;
+use bevy::prelude::{GizmoConfigGroup, Reflect, Resource};
 
 /// Represents the state of the World Inspector UI.
 ///
@@ -17,3 +17,6 @@ use bevy::prelude::Resource;
 ///   - `false`: The World Inspector is hidden.
 #[derive(Resource, Default, Debug)]
 pub struct WorldInspectorState(pub bool);
+
+#[derive(Resource, Default, GizmoConfigGroup, Reflect)]
+pub struct ChunkGridGizmos;
