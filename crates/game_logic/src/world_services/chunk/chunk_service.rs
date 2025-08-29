@@ -8,7 +8,7 @@ use bevy::tasks::AsyncComputeTaskPool;
 use bevy_rapier3d::prelude::*;
 use game_core::configuration::{GameConfig, WorldGenConfig};
 use game_core::states::{AppState, InGameStates};
-use game_core::world::block::{id_any, BlockRegistry};
+use game_core::world::block::{id_any, BlockRegistry, VOXEL_SIZE};
 use game_core::world::chunk::*;
 use game_core::world::chunk_dim::*;
 use game_core::world::save::{RegionCache, WorldSave};
@@ -79,7 +79,7 @@ fn schedule_chunk_generation(
     load_center: Option<Res<LoadCenter>>,
 ) {
     let center_c = if let Ok(t) = q_cam.single() {
-        let (c, _) = world_to_chunk_xz(t.translation().x.floor() as i32, t.translation().z.floor() as i32);
+        let (c, _) = world_to_chunk_xz((t.translation().x / VOXEL_SIZE).floor() as i32, (t.translation().z / VOXEL_SIZE).floor() as i32);
         c
     } else if let Some(lc) = load_center {
         lc.world_xz
@@ -145,7 +145,7 @@ fn drain_mesh_backlog(
 
         let key = (coord, sub);
         let t = pool.spawn(async move {
-            let builds = mesh_subchunk_async(&chunk_copy, &reg_copy, sub, 1.0, Some(borders)).await;
+            let builds = mesh_subchunk_async(&chunk_copy, &reg_copy, sub, VOXEL_SIZE, Some(borders)).await;
             (key, builds)
         });
         pending_mesh.0.insert(key, t);
@@ -179,7 +179,8 @@ fn collect_generated_chunks(
                     let chunk_copy = data.clone();
                     let reg_copy = reg_lite.clone();
                     let t = pool.spawn(async move {
-                        let builds = mesh_subchunk_async(&chunk_copy, &reg_copy, sub, 1.0, Some(borders)).await;
+                        let builds = mesh_subchunk_async(&chunk_copy, &reg_copy, sub, VOXEL_SIZE
+                                                         , Some(borders)).await;
                         ((c, sub), builds)
                     });
                     pending_mesh.0.insert(key, t);
@@ -209,7 +210,7 @@ fn collect_generated_chunks(
                             let reg_copy = reg_lite.clone();
                             let chunk_copy = n_chunk.clone();
                             let t = pool.spawn(async move {
-                                let builds = mesh_subchunk_async(&chunk_copy, &reg_copy, sub, 1.0, Some(borders)).await;
+                                let builds = mesh_subchunk_async(&chunk_copy, &reg_copy, sub, VOXEL_SIZE, Some(borders)).await;
                                 (key, builds)
                             });
                             pending_mesh.0.insert(key, t);
@@ -257,7 +258,7 @@ fn collect_meshed_subchunks(
                 commands.entity(ent).despawn();
             }
 
-            let s = 1.0;
+            let s = VOXEL_SIZE;
             let origin = Vec3::new(
                 (coord.x * CX as i32) as f32 * s,
                 (Y_MIN as f32) * s,
@@ -364,7 +365,7 @@ fn schedule_remesh_tasks_from_events(
             let reg_copy   = reg_lite.clone();
 
             let t = pool.spawn(async move {
-                let builds = mesh_subchunk_async(&chunk_copy, &reg_copy, sub, 1.0, Some(borders)).await;
+                let builds = mesh_subchunk_async(&chunk_copy, &reg_copy, sub, VOXEL_SIZE, Some(borders)).await;
                 (key, builds)
             });
 
@@ -393,7 +394,10 @@ fn unload_far_chunks(
 ) {
     let cam = if let Ok(t) = q_cam.single() { t } else { return; };
     let cam_pos = cam.translation();
-    let (center_c, _) = world_to_chunk_xz(cam_pos.x.floor() as i32, cam_pos.z.floor() as i32);
+    let (center_c, _) = world_to_chunk_xz(
+        (cam_pos.x / VOXEL_SIZE).floor() as i32,
+        (cam_pos.z / VOXEL_SIZE).floor() as i32,
+    );
 
     let keep_radius = game_config.graphics.chunk_range + 1;
 

@@ -35,7 +35,7 @@ fn setup_crosshair(
         commands.spawn((
             Camera2d,
             Camera {
-                order: 10, // on top
+                order: 1,
                 ..default()
             },
             Name::new("OverlayCamera2D"),

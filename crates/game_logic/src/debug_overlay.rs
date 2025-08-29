@@ -1,10 +1,12 @@
 use bevy::diagnostic::{DiagnosticsStore, EntityCountDiagnosticsPlugin, FrameTimeDiagnosticsPlugin};
 use bevy::prelude::*;
+use bevy::render::renderer::RenderAdapterInfo;
 use bevy::render::view::RenderLayers;
 use game_core::configuration::GameConfig;
 use game_core::debug::ChunkGridGizmos;
 use game_core::player::selection::SelectionState;
 use game_core::states::{AppState, InGameStates};
+use game_core::world::block::VOXEL_SIZE;
 use game_core::world::chunk_dim::*;
 use game_core::BuildInfo;
 use sysinfo::{CpuRefreshKind, MemoryRefreshKind, Pid, ProcessesToUpdate, RefreshKind, System};
@@ -192,7 +194,9 @@ fn update_debug_text(
     sel: Option<Res<SelectionState>>,
     q_cam: Query<&GlobalTransform, With<Camera3d>>,
     mut q_text: Query<&mut Text>,
-    build: Option<Res<BuildInfo>>
+    build: Option<Res<BuildInfo>>,
+    game_config: Res<GameConfig>,
+    backend: Res<RenderAdapterInfo>
 ) {
     if !state.show { return; }
     let Some(text_e) = state.text else { return; };
@@ -222,20 +226,26 @@ fn update_debug_text(
         ("<app>", "?", "0.16.1")
     };
 
+    let backend_str = backend_to_str(backend.backend.to_str());
+    let chunk_range = game_config.graphics.chunk_range;
+
     let txt = format!(
-        "{app} v{app_ver}  (Bevy {bevy_ver})\n\
-     FPS: {:>5.1}\n\
-     CPU: {:>4.1}%  RAM(proc): {}\n\
-     Location: ({:.2}, {:.2}, {:.2})\n\
-     Chunk: ({}, {})  (size: {}x{})\n\
-     Looking at: {}\n\
-     {}\n\
-     F5: Toggle Debug Overlay   F6: Toggle Chunk Grid",
+        "{app} {app_ver}  (Bevy {bevy_ver})\n\
+         FPS: {:>5.1}\n\
+         Graphic: {}\n\
+         CPU: {:>4.1}%  RAM(proc): {}  Backend: {}\n\
+         Location: ({:.2}, {:.2}, {:.2})\n\
+         Chunk: ({}, {})  (size: {}x{}, range: {})\n\
+         Looking at: {}\n\
+         {}\n\
+         F5: Toggle Debug Overlay   F6: Toggle Chunk Grid",
         fps,
+        backend.name,
         stats.cpu_percent,
         mem_str,
+        backend_str,
         pos.x, pos.y, pos.z,
-        cc.x, cc.y, CX, CZ,
+        cc.x, cc.y, CX, CZ, chunk_range,
         hit_str,
         place_str,
         app = app_name,
@@ -259,16 +269,20 @@ fn draw_chunk_grid(
     if !grid.show { return; }
     let Ok(cam_tf) = q_cam.single() else { return; };
 
+    let s = VOXEL_SIZE;
+    let w = CX as f32 * s;
+    let d = CZ as f32 * s;
+
     let cam_pos = cam_tf.translation();
-    let (center_c, _) = world_to_chunk_xz(cam_pos.x.floor() as i32, cam_pos.z.floor() as i32);
+    let cam_block_x = (cam_pos.x / s).floor() as i32;
+    let cam_block_z = (cam_pos.z / s).floor() as i32;
+    let (center_c, _) = world_to_chunk_xz(cam_block_x, cam_block_z);
 
     let radius   = cfg.graphics.chunk_range;
-    let w        = CX as f32;
-    let d        = CZ as f32;
 
     let eps      = 0.02;
-    let y_bottom = Y_MIN as f32 + eps;
-    let y_top    = Y_MAX as f32 - eps;
+    let y_bottom = Y_MIN as f32 * s + eps;
+    let y_top    = Y_MAX as f32 * s - eps;
     let height   = y_top - y_bottom;
 
     let col_edge   = Color::srgb_u8(255, 165, 0);
@@ -278,7 +292,11 @@ fn draw_chunk_grid(
 
     for cz in (center_c.y - radius)..=(center_c.y + radius) {
         for cx in (center_c.x - radius)..=(center_c.x + radius) {
-            let base_b = Vec3::new((cx * CX as i32) as f32, y_bottom, (cz * CZ as i32) as f32);
+            let base_b = Vec3::new(
+                (cx * CX as i32) as f32 * s,
+                y_bottom,
+                (cz * CZ as i32) as f32 * s,
+            );
 
             let p0b = base_b;
             let p1b = base_b + Vec3::X * w;
@@ -297,8 +315,13 @@ fn draw_chunk_grid(
 
             let mut y_i = Y_MIN;
             while y_i <= Y_MAX {
-                let y = y_i as f32 + eps;
-                let base = Vec3::new((cx * CX as i32) as f32, y, (cz * CZ as i32) as f32);
+                let y = (y_i as f32) * s + eps;
+
+                let base = Vec3::new(
+                    (cx * CX as i32) as f32 * s,
+                    y,
+                    (cz * CZ as i32) as f32 * s,
+                );
 
                 let q0 = base;
                 let q1 = base + Vec3::X * w;
@@ -324,5 +347,16 @@ fn fmt_mem_from_bytes(bytes: u64) -> String {
         format!("{:.1} GB", b / BYTES_PER_GIB)
     } else {
         format!("{:.0} MB", b / BYTES_PER_MIB)
+    }
+}
+
+fn backend_to_str(b: &str) -> &'static str {
+    match b {
+        "vulkan" => "Vulkan",
+        "gl" => "OpenGL",
+        "metal" => "Metal",
+        "dx12" | "DX12" => "DirectX12",
+        "dx11" | "DX11" => "DirectX11",
+        _ => "Unknown",
     }
 }

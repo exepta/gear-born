@@ -28,7 +28,7 @@ features = [
     "bevy_window",
     "bevy_ui",
     "bevy_color",
-    "bevy_gizmos"
+    "bevy_gizmos",
 ]
 
 [dependencies.fastnoise-lite]
