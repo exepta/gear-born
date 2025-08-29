@@ -2314,6 +2314,7 @@ dependencies = [
  "bevy_rapier3d",
  "serde",
  "serde_json",
+ "sysinfo",
  "toml",
 ]
 

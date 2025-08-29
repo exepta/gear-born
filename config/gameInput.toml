@@ -17,5 +17,6 @@ ui_menu = "Escape"
 ui_inventory = "B"
 ui_close_back = "Escape"
 
-rapier_debug = "F3"
+debug_overlay = "F3"
+chunk_grid = "F9"
 world_inspector = "F1"

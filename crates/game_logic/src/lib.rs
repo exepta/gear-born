@@ -1,12 +1,10 @@
 #![feature(coverage_attribute)]
 
-mod camera;
 mod registry;
 mod world_services;
 mod player_services;
 mod debug_overlay;
 
-use crate::camera::CameraPlugin;
 use crate::debug_overlay::DebugOverlayPlugin;
 use crate::player_services::PlayerServices;
 use crate::registry::block_registry::BlockInternalRegistry;
@@ -22,7 +20,6 @@ impl Plugin for GameLogicPlugin {
             BlockInternalRegistry,
             WorldServices,
             PlayerServices,
-            CameraPlugin,
             DebugOverlayPlugin
         ));
     }

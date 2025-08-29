@@ -1,4 +1,5 @@
 use bevy::prelude::*;
+use bevy::render::view::RenderLayers;
 use game_core::states::AppState;
 use game_core::world::chunk::LoadCenter;
 
@@ -32,6 +33,7 @@ fn spawn_loading_ui(mut commands: Commands) {
             ..default()
         },
         LoadingScreenRoot,
+        RenderLayers::layer(3),
         Name::new("LoadingCamera"),
     ));
 
@@ -43,6 +45,7 @@ fn spawn_loading_ui(mut commands: Commands) {
             justify_content: JustifyContent::Center,
             ..default()
         },
+        RenderLayers::layer(3),
         BackgroundColor(Color::NONE),
         LoadingScreenRoot,
         Name::new("LoadingRoot"),
@@ -54,6 +57,7 @@ fn spawn_loading_ui(mut commands: Commands) {
                 font_size: 36.0,
                 ..default()
             },
+            RenderLayers::layer(3),
             Name::new("LoadingText"),
         ));
     });

@@ -1,5 +1,5 @@
 use bevy::prelude::*;
-use bevy::render::view::NoFrustumCulling;
+use bevy::render::view::{NoFrustumCulling, RenderLayers};
 use game_core::configuration::CrosshairConfig;
 use game_core::states::{AppState, InGameStates};
 use std::f32::consts::TAU;
@@ -36,8 +36,10 @@ fn setup_crosshair(
             Camera2d,
             Camera {
                 order: 1,
+                clear_color: ClearColorConfig::None,
                 ..default()
             },
+            RenderLayers::layer(3),
             Name::new("OverlayCamera2D"),
         ));
     }
@@ -56,6 +58,7 @@ fn setup_crosshair(
         MeshMaterial2d(mat_h),
         NoFrustumCulling,
         Transform::from_xyz(0.0, 0.0, 0.0),
+        RenderLayers::layer(3),
         Crosshair,
         Name::new("CrosshairRing"),
     ));
