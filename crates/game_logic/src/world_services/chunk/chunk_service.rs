@@ -36,8 +36,34 @@ impl Plugin for ChunkService {
                 schedule_remesh_tasks_from_events.in_set(VoxelStage::Meshing),
                 drain_mesh_backlog,
                 unload_far_chunks,
-            ).chain()
-                .run_if(in_state(AppState::InGame(InGameStates::Game))));
+            )
+                .chain()
+                .run_if(in_state(AppState::Loading)
+                    .or(in_state(AppState::InGame(InGameStates::Game)))));
+
+        app.add_systems(
+            Update,
+            check_initial_world_ready
+                .run_if(in_state(AppState::Loading))
+        );
+    }
+}
+
+fn check_initial_world_ready(
+    game_config: Res<GameConfig>,
+    load_center: Res<LoadCenter>,
+    chunk_map: Res<ChunkMap>,
+    pending_gen: Res<PendingGen>,
+    pending_mesh: Res<PendingMesh>,
+    backlog: Res<MeshBacklog>,
+    mut next: ResMut<NextState<AppState>>,
+    mut commands: Commands,
+) {
+    let initial_radius = game_config.graphics.chunk_range.min(3);
+
+    if area_ready(load_center.world_xz, initial_radius, &chunk_map, &pending_gen, &pending_mesh, &backlog) {
+        commands.remove_resource::<LoadCenter>();
+        next.set(AppState::InGame(InGameStates::Game));
     }
 }
 
@@ -50,9 +76,16 @@ fn schedule_chunk_generation(
     game_config: Res<GameConfig>,
     ws: Res<WorldSave>,
     q_cam: Query<&GlobalTransform, With<Camera3d>>,
+    load_center: Option<Res<LoadCenter>>,
 ) {
-    let cam = if let Ok(t) = q_cam.single() { t } else { return; };
-    let (center_c, _) = world_to_chunk_xz(cam.translation().x.floor() as i32, cam.translation().z.floor() as i32);
+    let center_c = if let Ok(t) = q_cam.single() {
+        let (c, _) = world_to_chunk_xz(t.translation().x.floor() as i32, t.translation().z.floor() as i32);
+        c
+    } else if let Some(lc) = load_center {
+        lc.world_xz
+    } else {
+        IVec2::ZERO
+    };
 
     if !can_spawn_gen(&pending) { return; }
 
@@ -66,6 +99,7 @@ fn schedule_chunk_generation(
     );
     let cfg_clone = gen_cfg.clone();
     let ws_root = ws.root.clone();
+    let pool = AsyncComputeTaskPool::get();
 
     for dz in -load_radius..=load_radius {
         for dx in -load_radius..=load_radius {
@@ -73,7 +107,6 @@ fn schedule_chunk_generation(
             let c = IVec2::new(center_c.x + dx, center_c.y + dz);
             if chunk_map.chunks.contains_key(&c) || pending.0.contains_key(&c) { continue; }
 
-            let pool = AsyncComputeTaskPool::get();
             let ids_copy = ids;
             let cfg = cfg_clone.clone();
             let root = ws_root.clone();
@@ -81,7 +114,6 @@ fn schedule_chunk_generation(
                 let data = load_or_gen_chunk_async(root, c, ids_copy, cfg).await;
                 (c, data)
             });
-
             pending.0.insert(c, task);
             budget -= 1;
         }

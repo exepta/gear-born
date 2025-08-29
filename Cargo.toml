@@ -12,6 +12,7 @@ path = "src/main.rs"
 members = [
     "crates/game_core",
     "crates/game_logic",
+    "crates/game_ui",
     "crates/game_world",
 ]
 
@@ -34,6 +35,9 @@ path = "crates/game_core"
 
 [dependencies.game_logic]
 path = "crates/game_logic"
+
+[dependencies.game_ui]
+path = "crates/game_ui"
 
 [dependencies.game_world]
 path = "crates/game_world"

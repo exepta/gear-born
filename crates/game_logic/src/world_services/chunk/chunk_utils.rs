@@ -287,6 +287,26 @@ pub(crate) fn snapshot_borders(chunk_map: &ChunkMap, coord: IVec2, y0: usize, y1
     snap
 }
 
+pub(crate) fn area_ready(
+    center: IVec2,
+    radius: i32,
+    chunk_map: &ChunkMap,
+    pending_gen: &PendingGen,
+    pending_mesh: &PendingMesh,
+    backlog: &MeshBacklog,
+) -> bool {
+    for dz in -radius..=radius {
+        for dx in -radius..=radius {
+            let c = IVec2::new(center.x + dx, center.y + dz);
+            if !chunk_map.chunks.contains_key(&c) { return false; }
+            if pending_gen.0.contains_key(&c) { return false; }
+            if pending_mesh.0.keys().any(|(cc, _)| *cc == c) { return false; }
+            if backlog.0.iter().any(|(cc, _)| *cc == c) { return false; }
+        }
+    }
+    true
+}
+
 pub(crate) fn despawn_mesh_set(
     keys: impl IntoIterator<Item = (IVec2, u8, BlockId)>,
     mesh_index: &mut ChunkMeshIndex,

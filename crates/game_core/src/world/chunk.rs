@@ -63,3 +63,6 @@ pub struct SubchunkDirty {
 
 #[derive(SystemSet, Debug, Hash, PartialEq, Eq, Clone)]
 pub enum VoxelStage { Input, WorldEdit, Meshing }
+
+#[derive(Resource, Clone, Copy)]
+pub struct LoadCenter { pub world_xz: IVec2 }

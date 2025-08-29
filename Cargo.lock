@@ -975,6 +975,7 @@ dependencies = [
  "bevy_ecs",
  "bevy_input",
  "bevy_math",
+ "bevy_mesh",
  "bevy_platform",
  "bevy_reflect",
  "bevy_render",
@@ -982,6 +983,7 @@ dependencies = [
  "bevy_transform",
  "bevy_utils",
  "bevy_window",
+ "crossbeam-channel",
  "tracing",
  "uuid",
 ]
@@ -2329,6 +2331,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "game_ui"
+version = "0.1.0"
+dependencies = [
+ "bevy",
+ "game_core",
+]
+
+[[package]]
 name = "game_world"
 version = "0.1.0"
 dependencies = [
@@ -2348,6 +2358,7 @@ dependencies = [
  "dotenvy",
  "game_core",
  "game_logic",
+ "game_ui",
  "game_world",
  "serial_test",
  "tracing-subscriber",
@@ -2653,6 +2664,8 @@ dependencies = [
  "num-traits",
  "png",
  "tiff",
+ "zune-core",
+ "zune-jpeg",
 ]
 
 [[package]]
@@ -5734,4 +5747,19 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn",
+]
+
+[[package]]
+name = "zune-core"
+version = "0.4.12"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3f423a2c17029964870cfaabb1f13dfab7d092a62a29a89264f4d36990ca414a"
+
+[[package]]
+name = "zune-jpeg"
+version = "0.4.20"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fc1f7e205ce79eb2da3cd71c5f55f3589785cb7c79f6a03d1c8d1491bda5d089"
+dependencies = [
+ "zune-core",
 ]
