@@ -9,6 +9,11 @@ pub const REGION_SIZE: i32 = 64;
 
 pub const GBW_MAGIC: [u8; 4] = *b"GBW1";
 
+const SLOT_MAGIC: u32 = 0x5653_4C54;
+pub const TAG_BLK1:   u32 = 0x314B_4C42;
+pub const TAG_WAT1:   u32 = 0x3154_4157;
+
+
 /// Number of addressable slots per region file (`REGION_SIZE^2`).
 const REGION_SLOTS: usize = (REGION_SIZE as usize) * (REGION_SIZE as usize);
 
@@ -125,6 +130,20 @@ impl RegionFile {
         self.flush_header()
     }
 
+    pub fn write_slot_replace(&mut self, idx: usize, data: &[u8]) -> std::io::Result<()> {
+        let s = self.hdr[idx];
+        if s.off != 0 && (s.len as usize) >= data.len() {
+            // overwrite in place
+            self.f.seek(SeekFrom::Start(s.off))?;
+            self.f.write_all(data)?;
+            self.hdr[idx].len = data.len() as u32;
+            self.flush_header()
+        } else {
+            // fallback: append
+            self.write_slot_append(idx, data)
+        }
+    }
+
     /// Reads a chunk payload by its **world** chunk coordinate `coord`.
     ///
     /// Internally computes the region-relative slot index and reads that slot.
@@ -228,6 +247,18 @@ impl RegionCache {
         let rf = self.get_or_open(ws, rc)?;
         rf.write_chunk(coord, data)
     }
+
+    pub fn write_chunk_replace(
+        &mut self,
+        ws: &WorldSave,
+        coord: IVec2,
+        data: &[u8],
+    ) -> std::io::Result<()> {
+        let rc = chunk_to_region(coord);
+        let rf = self.get_or_open(ws, rc)?;
+        let idx = RegionFile::slot_index_for_chunk(coord);
+        rf.write_slot_replace(idx, data)
+    }
 }
 
 /// Maps a **world** chunk coordinate to its **region** coordinate (`REGION_SIZE` grid).
@@ -277,4 +308,83 @@ pub fn unpack_slot_bytes(buf: &[u8]) -> (Option<&[u8]>, Option<&[u8]>) {
         return (None, None);
     }
     (Some(buf), None)
+}
+
+pub fn container_find(buf: &[u8], tag: u32) -> Option<&[u8]> {
+    if !slot_is_container(buf) { return None; }
+    let count = u32::from_le_bytes(buf[4..8].try_into().ok()?) as usize;
+    let mut p = 8usize;
+    for _ in 0..count {
+        if p + 8 > buf.len() { return None; }
+        let t  = u32::from_le_bytes(buf[p..p+4].try_into().ok()?); p += 4;
+        let ln = u32::from_le_bytes(buf[p..p+4].try_into().ok()?); p += 4;
+        if p + ln as usize > buf.len() { return None; }
+        if t == tag {
+            return Some(&buf[p..p+ln as usize]);
+        }
+        p += ln as usize;
+    }
+    None
+}
+
+pub fn container_upsert(existing: Option<&[u8]>, tag: u32, payload: &[u8]) -> Vec<u8> {
+    if existing.is_none() {
+        let mut out = Vec::with_capacity(8 + 8 + payload.len());
+        out.extend_from_slice(&SLOT_MAGIC.to_le_bytes());
+        out.extend_from_slice(&1u32.to_le_bytes());
+        out.extend_from_slice(&tag.to_le_bytes());
+        out.extend_from_slice(&(payload.len() as u32).to_le_bytes());
+        out.extend_from_slice(payload);
+        return out;
+    }
+    let src = existing.unwrap();
+
+    if !slot_is_container(src) {
+        let mut out = Vec::with_capacity(8 + 2*8 + src.len() + payload.len());
+        out.extend_from_slice(&SLOT_MAGIC.to_le_bytes());
+        out.extend_from_slice(&2u32.to_le_bytes());
+        // Record 1: BLK1 = raw
+        out.extend_from_slice(&TAG_BLK1.to_le_bytes());
+        out.extend_from_slice(&(src.len() as u32).to_le_bytes());
+        out.extend_from_slice(src);
+        // Record 2: inserted tag
+        out.extend_from_slice(&tag.to_le_bytes());
+        out.extend_from_slice(&(payload.len() as u32).to_le_bytes());
+        out.extend_from_slice(payload);
+        return out;
+    }
+
+    let count = u32::from_le_bytes(src[4..8].try_into().unwrap()) as usize;
+    let mut p = 8usize;
+    let mut recs: Vec<(u32, &[u8])> = Vec::with_capacity(count + 1);
+    let mut had = false;
+    for _ in 0..count {
+        let t  = u32::from_le_bytes(src[p..p+4].try_into().unwrap()); p += 4;
+        let ln = u32::from_le_bytes(src[p..p+4].try_into().unwrap()) as usize; p += 4;
+        let data = &src[p..p+ln]; p += ln;
+        if t == tag {
+            recs.push((t, payload));
+            had = true;
+        } else {
+            recs.push((t, data));
+        }
+    }
+    if !had { recs.push((tag, payload)); }
+
+    // encode
+    let total_len: usize = 8 + recs.iter().map(|(_,d)| 8 + d.len()).sum::<usize>();
+    let mut out = Vec::with_capacity(total_len);
+    out.extend_from_slice(&SLOT_MAGIC.to_le_bytes());
+    out.extend_from_slice(&(recs.len() as u32).to_le_bytes());
+    for (t, d) in recs {
+        out.extend_from_slice(&t.to_le_bytes());
+        out.extend_from_slice(&(d.len() as u32).to_le_bytes());
+        out.extend_from_slice(d);
+    }
+    out
+}
+
+#[inline]
+pub fn slot_is_container(buf: &[u8]) -> bool {
+    buf.len() >= 8 && u32::from_le_bytes(buf[0..4].try_into().unwrap()) == SLOT_MAGIC
 }

@@ -5,9 +5,10 @@ use game_core::world::block::VOXEL_SIZE;
 use game_core::world::chunk::{ChunkData, ChunkMap};
 use game_core::world::chunk_dim::*;
 use game_core::world::fluid::{FluidChunk, FluidMap, WaterMeshIndex};
-use game_core::world::save::{chunk_to_region, pack_slot_bytes, unpack_slot_bytes, RegionCache, WorldSave};
+use game_core::world::save::{container_find, container_upsert, slot_is_container, RegionCache, WorldSave, TAG_WAT1};
 
-const WATER_MAGIC: u32 = 0x3152_5457;
+const WATER_MAGIC: u32 = 0x3154_4157;
+const EMPTY_I16: i16 = i16::MIN;
 
 pub(crate) fn generate_water_for_chunk(
     coord: IVec2,
@@ -185,33 +186,32 @@ pub(crate) fn build_water_mesh_subchunk(
     Some(m)
 }
 
-pub fn save_water_chunk_sync(ws: &WorldSave, cache: &mut RegionCache, coord: IVec2, w: &FluidChunk) {
-    let rc = chunk_to_region(coord);
-    let rf = match cache.get_or_open(ws, rc) {
-        Ok(rf) => rf,
-        Err(e) => { warn!("save_water_chunk_sync: open failed: {}", e); return; }
-    };
+pub fn save_water_chunk_sync(
+    ws: &WorldSave,
+    cache: &mut RegionCache,
+    coord: IVec2,
+    w: &FluidChunk,
+) {
+    let wat = encode_fluid_chunk(w);
+    let old = cache.read_chunk(ws, coord).ok().flatten();
+    let merged = container_upsert(old.as_deref(), TAG_WAT1, &wat);
+    let _ = cache.write_chunk_replace(ws, coord, &merged);
+}
 
-    let existing = rf.read_chunk(coord).unwrap_or_else(|e| {
-        warn!("read_slot failed: {}", e);
-        None
-    });
-    let (old_chunk, _old_water) = if let Some(ref buf) = existing { unpack_slot_bytes(buf) } else { (None, None) };
-
-    let w_bytes = encode_fluid_chunk(w);
-    let packed = pack_slot_bytes(old_chunk, Some(&w_bytes));
-    if let Err(e) = rf.write_chunk(coord, &packed) {
-        warn!("save_water_chunk_sync: write failed: {}", e);
+pub fn load_water_chunk_sync(
+    ws: &WorldSave,
+    cache: &mut RegionCache,
+    coord: IVec2,
+) -> Option<FluidChunk> {
+    if let Ok(Some(buf)) = cache.read_chunk(ws, coord) {
+        if !slot_is_container(&buf) { return None; }
+        if let Some(rec) = container_find(&buf, TAG_WAT1) {
+            return decode_fluid_chunk(rec);
+        }
     }
+    None
 }
 
-pub fn load_water_chunk_sync(ws: &WorldSave, cache: &mut RegionCache, coord: IVec2) -> Option<FluidChunk> {
-    let rc = chunk_to_region(coord);
-    let rf = cache.get_or_open(ws, rc).ok()?;
-    let buf = rf.read_chunk(coord).ok()??;
-    let (_cb, wb) = unpack_slot_bytes(&buf);
-    if let Some(wb) = wb { decode_fluid_chunk(wb) } else { None }
-}
 #[inline]
 fn col_rand_f01(x: i32, z: i32, seed: u32) -> f32 {
     (col_rand_u32(x,z,seed) as f32) / (u32::MAX as f32)
@@ -264,54 +264,56 @@ pub(crate) fn despawn_water_mesh(
 }
 
 fn encode_fluid_chunk(w: &FluidChunk) -> Vec<u8> {
-    let total_bits = CX * CY * CZ;
-    let n_words = (total_bits + 63) / 64;
-    let mut words = vec![0u64; n_words];
+    let mut out = Vec::with_capacity(8 + CX*CZ*4);
+    out.extend_from_slice(&WATER_MAGIC.to_le_bytes());
+    out.extend_from_slice(&w.sea_level.to_le_bytes());
 
-    let mut i = 0usize;
-    for y in 0..CY { for z in 0..CZ { for x in 0..CX {
-        if w.get(x,y,z) {
-            words[i >> 6] |= 1u64 << (i & 63);
+    for z in 0..CZ {
+        for x in 0..CX {
+            let mut y0: i16 = EMPTY_I16;
+            let mut y1: i16 = EMPTY_I16;
+
+            for ly in 0..CY {
+                if w.get(x, ly, z) {
+                    y0 = (Y_MIN + ly as i32) as i16;
+                    break;
+                }
+            }
+            if y0 != EMPTY_I16 {
+                for ly in (0..CY).rev() {
+                    if w.get(x, ly, z) {
+                        y1 = (Y_MIN + ly as i32) as i16;
+                        break;
+                    }
+                }
+            }
+            out.extend_from_slice(&y0.to_le_bytes());
+            out.extend_from_slice(&y1.to_le_bytes());
         }
-        i += 1;
-    }}}
-
-    let mut buf = Vec::with_capacity(12 + n_words * 8);
-    buf.extend_from_slice(&WATER_MAGIC.to_le_bytes());
-    buf.extend_from_slice(&w.sea_level.to_le_bytes());
-    buf.extend_from_slice(&(n_words as u32).to_le_bytes());
-    for w64 in words { buf.extend_from_slice(&w64.to_le_bytes()); }
-    buf
+    }
+    out
 }
 
-fn decode_fluid_chunk(bytes: &[u8]) -> Option<FluidChunk> {
-    if bytes.len() < 12 { return None; }
-    let mut p = 0usize;
+fn decode_fluid_chunk(buf: &[u8]) -> Option<FluidChunk> {
+    if buf.len() < 8 { return None; }
+    let magic = u32::from_le_bytes(buf[0..4].try_into().ok()?);
+    if magic != WATER_MAGIC { return None; }
+    let sea_level = i32::from_le_bytes(buf[4..8].try_into().ok()?);
 
-    let mut b4 = [0u8;4]; b4.copy_from_slice(&bytes[p..p+4]); p+=4;
-    if u32::from_le_bytes(b4) != WATER_MAGIC { return None; }
+    let expected = 8 + CX*CZ*4;
+    if buf.len() < expected { return None; }
 
-    let mut b_sea = [0u8;4]; b_sea.copy_from_slice(&bytes[p..p+4]); p+=4;
-    let sea_level = i32::from_le_bytes(b_sea);
+    let mut w = FluidChunk::new(sea_level);
+    let mut p = 8;
 
-    let mut b_n = [0u8;4]; b_n.copy_from_slice(&bytes[p..p+4]); p+=4;
-    let n_words = u32::from_le_bytes(b_n) as usize;
-
-    if bytes.len() < p + n_words*8 { return None; }
-
-    let mut words = Vec::with_capacity(n_words);
-    for _ in 0..n_words {
-        let mut w64b = [0u8;8];
-        w64b.copy_from_slice(&bytes[p..p+8]); p+=8;
-        words.push(u64::from_le_bytes(w64b));
+    for z in 0..CZ {
+        for x in 0..CX {
+            let y0 = i16::from_le_bytes(buf[p..p+2].try_into().ok()?); p += 2;
+            let y1 = i16::from_le_bytes(buf[p..p+2].try_into().ok()?); p += 2;
+            if y0 != EMPTY_I16 && y1 != EMPTY_I16 {
+                w.fill_column(x, z, y0 as i32, y1 as i32);
+            }
+        }
     }
-
-    let mut fc = FluidChunk::new(sea_level);
-    let mut i = 0usize;
-    for y in 0..CY { for z in 0..CZ { for x in 0..CX {
-        let wi = i >> 6; let bi = i & 63;
-        if wi < words.len() && ((words[wi] >> bi) & 1) == 1 { fc.set(x,y,z,true); }
-        i += 1;
-    }}}
-    Some(fc)
+    Some(w)
 }

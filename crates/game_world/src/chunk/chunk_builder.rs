@@ -14,7 +14,8 @@ use game_core::world::chunk_dim::*;
 use game_core::world::save::{RegionCache, WorldSave};
 use std::collections::HashMap;
 
-const MAX_APPLY_PER_FRAME: usize = 14;
+const MAX_APPLY_PER_FRAME: usize = 8;
+const MAX_COLLIDERS_PER_FRAME: usize = 4;
 
 #[derive(Resource, Default)]
 struct ChunkColliderIndex(pub HashMap<(IVec2, u8), Entity>);
@@ -167,10 +168,10 @@ fn collect_generated_chunks(
     for (coord, task) in pending_gen.0.iter_mut() {
         if let Some((c, data)) = future::block_on(future::poll_once(task)) {
             chunk_map.chunks.insert(c, data.clone());
-
-            // Subchunks dieses Chunks
+            
             let pool = AsyncComputeTaskPool::get();
-            for sub in 0..SEC_COUNT {
+            let order = sub_priority_order(&data);
+            for sub in order {
                 let key = (c, sub);
                 let y0 = sub * SEC_H;
                 let y1 = (y0 + SEC_H).min(CY);
@@ -178,10 +179,9 @@ fn collect_generated_chunks(
 
                 if can_spawn_mesh(&pending_mesh) {
                     let chunk_copy = data.clone();
-                    let reg_copy = reg_lite.clone();
+                    let reg_copy   = reg_lite.clone();
                     let t = pool.spawn(async move {
-                        let builds = mesh_subchunk_async(&chunk_copy, &reg_copy, sub, VOXEL_SIZE
-                                                         , Some(borders)).await;
+                        let builds = mesh_subchunk_async(&chunk_copy, &reg_copy, sub, VOXEL_SIZE, Some(borders)).await;
                         ((c, sub), builds)
                     });
                     pending_mesh.0.insert(key, t);
@@ -198,7 +198,8 @@ fn collect_generated_chunks(
             ];
             for n_coord in neigh {
                 if let Some(n_chunk) = chunk_map.chunks.get(&n_coord) {
-                    for sub in 0..SEC_COUNT {
+                    let order_n = sub_priority_order(n_chunk);
+                    for sub in order_n {
                         let key = (n_coord, sub);
                         if pending_mesh.0.contains_key(&key) { continue; }
 
@@ -208,11 +209,11 @@ fn collect_generated_chunks(
 
                         if can_spawn_mesh(&pending_mesh) {
                             let pool = AsyncComputeTaskPool::get();
-                            let reg_copy = reg_lite.clone();
+                            let reg_copy  = reg_lite.clone();
                             let chunk_copy = n_chunk.clone();
                             let t = pool.spawn(async move {
                                 let builds = mesh_subchunk_async(&chunk_copy, &reg_copy, sub, VOXEL_SIZE, Some(borders)).await;
-                                (key, builds)
+                                ((n_coord, sub), builds)
                             });
                             pending_mesh.0.insert(key, t);
                         } else {
@@ -226,7 +227,9 @@ fn collect_generated_chunks(
         }
     }
 
-    for c in finished { pending_gen.0.remove(&c); }
+    for c in finished {
+        pending_gen.0.remove(&c);
+    }
 }
 
 //System
@@ -242,6 +245,7 @@ fn collect_meshed_subchunks(
 ) {
     let mut done_keys = Vec::new();
     let mut applied = 0;
+    let mut collider_budget = MAX_COLLIDERS_PER_FRAME;
 
     for (key, task) in pending_mesh.0.iter_mut() {
         if applied >= MAX_APPLY_PER_FRAME { break; }
@@ -265,6 +269,11 @@ fn collect_meshed_subchunks(
                 (Y_MIN as f32) * s,
                 (coord.y * CZ as i32) as f32 * s,
             );
+
+            let should_build_collider = if let Some(chunk) = chunk_map.chunks.get(&coord) {
+                let surf = estimate_surface_sub_fast(chunk);
+                sub.abs_diff(surf) <= 1 && collider_budget > 0
+            } else { collider_budget > 0 };
 
             let mut phys_positions: Vec<[f32; 3]> = Vec::new();
             let mut phys_indices:   Vec<u32>       = Vec::new();
@@ -291,7 +300,9 @@ fn collect_meshed_subchunks(
                 mesh_index.map.insert((coord, sub as u8, bid), ent);
             }
 
-            if !phys_positions.is_empty() {
+
+
+            if should_build_collider && !phys_positions.is_empty() {
                 let mut pm = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::RENDER_WORLD);
                 pm.insert_attribute(Mesh::ATTRIBUTE_POSITION, phys_positions);
                 pm.insert_indices(Indices::U32(phys_indices));
@@ -311,6 +322,7 @@ fn collect_meshed_subchunks(
                         ))
                         .id();
                     collider_index.0.insert((coord, sub as u8), cent);
+                    collider_budget = collider_budget.saturating_sub(1);
                 }
 
             }
@@ -446,5 +458,47 @@ fn unload_far_chunks(
         chunk_map.chunks.remove(coord);
         backlog.0.retain(|(c, _)| c != coord);
     }
+}
+
+#[inline]
+fn estimate_surface_sub_fast(chunk: &ChunkData) -> usize {
+    let mut max_wy = Y_MIN - 1;
+    for z in (0..CZ).step_by(4) {
+        for x in (0..CX).step_by(4) {
+            for ly in (0..CY).rev() {
+                if chunk.get(x, ly, z) != 0 {
+                    let wy = Y_MIN + ly as i32;
+                    if wy > max_wy { max_wy = wy; }
+                    break;
+                }
+            }
+        }
+    }
+    let ly = (max_wy - Y_MIN).max(0) as usize;
+    (ly / SEC_H).clamp(0, SEC_COUNT.saturating_sub(1))
+}
+
+fn sub_priority_order(chunk: &ChunkData) -> Vec<usize> {
+    let mut out = Vec::with_capacity(SEC_COUNT);
+    let mut used = vec![false; SEC_COUNT];
+    let mid = estimate_surface_sub_fast(chunk);
+
+    out.push(mid); used[mid] = true;
+
+    let mut off = 1isize;
+    while out.len() < SEC_COUNT {
+        let below = mid as isize - off;
+        if below >= 0 && !used[below as usize] {
+            out.push(below as usize);
+            used[below as usize] = true;
+        }
+        let above = mid as isize + off;
+        if above < SEC_COUNT as isize && !used[above as usize] {
+            out.push(above as usize);
+            used[above as usize] = true;
+        }
+        off += 1;
+    }
+    out
 }
 

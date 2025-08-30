@@ -5,7 +5,7 @@ use game_core::configuration::WorldGenConfig;
 use game_core::world::block::{BlockId, Face};
 use game_core::world::chunk::{ChunkData, ChunkMap, ChunkMeshIndex};
 use game_core::world::chunk_dim::*;
-use game_core::world::save::{chunk_to_region, pack_slot_bytes, region_slot_index, unpack_slot_bytes, RegionCache, RegionFile, WorldSave, REGION_SIZE};
+use game_core::world::save::*;
 use lz4_flex::{compress_prepend_size, decompress_size_prepended};
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -452,19 +452,12 @@ pub fn save_chunk_sync(
     coord: IVec2,
     ch: &ChunkData,
 ) -> std::io::Result<()> {
-    let rc = chunk_to_region(coord);
-    let rf = cache.get_or_open(ws, rc)?;
+    let blocks = encode_chunk(ch);
 
-    let existing = rf.read_chunk(coord)?; // Option<Vec<u8>>
-    let (_old_chunk, old_water) = if let Some(ref buf) = existing {
-        unpack_slot_bytes(buf)
-    } else {
-        (None, None)
-    };
+    let old = cache.read_chunk(ws, coord).ok().flatten();
+    let merged = container_upsert(old.as_deref(), TAG_BLK1, &blocks);
 
-    let data = encode_chunk(ch);
-    let packed = pack_slot_bytes(Some(&data), old_water);
-    rf.write_chunk(coord, &packed)
+    cache.write_chunk_replace(ws, coord, &merged)
 }
 
 pub async fn load_or_gen_chunk_async(
@@ -473,19 +466,17 @@ pub async fn load_or_gen_chunk_async(
     ids: (BlockId, BlockId, BlockId, BlockId),
     cfg: WorldGenConfig,
 ) -> ChunkData {
-    use std::path::Path;
-    let (r_coord, idx) = (chunk_to_region(coord), region_slot_index(coord));
-    let path = Path::new(&ws_root).join("region").join(format!("r.{}.{}.region", r_coord.x, r_coord.y));
-
+    let (r_coord, _) = chunk_to_region_slot(coord);
+    let path = ws_root.join("region").join(format!("r.{}.{}.region", r_coord.x, r_coord.y));
     if let Ok(mut rf) = RegionFile::open(&path) {
-        if let Ok(Some(buf)) = rf.read_slot(idx) {
-            let (chunk_bytes_opt, _water_bytes_opt) = unpack_slot_bytes(&buf);
-            if let Some(cb) = chunk_bytes_opt {
-                if let Ok(c) = decode_chunk(cb) {
-                    return c;
-                }
+        if let Ok(Some(buf)) = rf.read_chunk(coord) {
+            let data = if slot_is_container(&buf) {
+                container_find(&buf, TAG_BLK1).map(|b| b.to_vec())
             } else {
-                if let Ok(c) = decode_chunk(&buf) {
+                Some(buf)
+            };
+            if let Some(b) = data {
+                if let Ok(c) = decode_chunk(&b) {
                     return c;
                 }
             }
