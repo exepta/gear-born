@@ -7,6 +7,8 @@ use std::path::{Path, PathBuf};
 /// Side length of a region in chunks (region is `REGION_SIZE x REGION_SIZE`).
 pub const REGION_SIZE: i32 = 64;
 
+pub const GBW_MAGIC: [u8; 4] = *b"GBW1";
+
 /// Number of addressable slots per region file (`REGION_SIZE^2`).
 const REGION_SLOTS: usize = (REGION_SIZE as usize) * (REGION_SIZE as usize);
 
@@ -93,6 +95,9 @@ impl RegionFile {
     /// # Errors
     /// Propagates any I/O error during seek or read?
     pub fn read_slot(&mut self, idx: usize) -> std::io::Result<Option<Vec<u8>>> {
+        if idx >= self.hdr.len() {
+            return Ok(None);
+        }
         let s = self.hdr[idx];
         if s.off == 0 || s.len == 0 { return Ok(None); }
         self.f.seek(SeekFrom::Start(s.off))?;
@@ -111,6 +116,9 @@ impl RegionFile {
     /// # Errors
     /// Propagates any I/O error during a seek, write, or header flush.
     pub fn write_slot_append(&mut self, idx: usize, data: &[u8]) -> std::io::Result<()> {
+        if idx >= self.hdr.len() {
+            return Err(Error::new(ErrorKind::Other, "slot OOB"));
+        }
         let end = self.f.seek(SeekFrom::End(0))?;
         self.f.write_all(data)?;
         self.hdr[idx] = Slot { off: end, len: data.len() as u32 };
@@ -240,4 +248,33 @@ pub fn region_slot_index(coord: IVec2) -> usize {
     let rx = coord.x.rem_euclid(REGION_SIZE) as usize; // 0..REGION_SIZE-1
     let rz = coord.y.rem_euclid(REGION_SIZE) as usize;
     rz * (REGION_SIZE as usize) + rx
+}
+
+#[inline]
+pub fn pack_slot_bytes(chunk_bytes: Option<&[u8]>, water_bytes: Option<&[u8]>) -> Vec<u8> {
+    let cb = chunk_bytes.unwrap_or(&[]);
+    let wb = water_bytes.unwrap_or(&[]);
+    let mut out = Vec::with_capacity(12 + cb.len() + wb.len());
+    out.extend_from_slice(&GBW_MAGIC);
+    out.extend_from_slice(&(cb.len() as u32).to_le_bytes());
+    out.extend_from_slice(&(wb.len() as u32).to_le_bytes());
+    out.extend_from_slice(cb);
+    out.extend_from_slice(wb);
+    out
+}
+
+#[inline]
+pub fn unpack_slot_bytes(buf: &[u8]) -> (Option<&[u8]>, Option<&[u8]>) {
+    if buf.len() >= 12 && &buf[0..4] == &GBW_MAGIC {
+        let cl = u32::from_le_bytes(buf[4..8].try_into().unwrap()) as usize;
+        let wl = u32::from_le_bytes(buf[8..12].try_into().unwrap()) as usize;
+        let need = 12 + cl + wl;
+        if need <= buf.len() {
+            let c = if cl > 0 { Some(&buf[12..12+cl]) } else { None };
+            let w = if wl > 0 { Some(&buf[12+cl..12+cl+wl]) } else { None };
+            return (c, w);
+        }
+        return (None, None);
+    }
+    (Some(buf), None)
 }

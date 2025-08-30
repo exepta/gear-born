@@ -5,7 +5,7 @@ use game_core::configuration::WorldGenConfig;
 use game_core::world::block::{BlockId, Face};
 use game_core::world::chunk::{ChunkData, ChunkMap, ChunkMeshIndex};
 use game_core::world::chunk_dim::*;
-use game_core::world::save::{RegionCache, RegionFile, WorldSave, REGION_SIZE};
+use game_core::world::save::{chunk_to_region, pack_slot_bytes, region_slot_index, unpack_slot_bytes, RegionCache, RegionFile, WorldSave, REGION_SIZE};
 use lz4_flex::{compress_prepend_size, decompress_size_prepended};
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -446,12 +446,25 @@ pub async fn mesh_subchunk_async(
     by_block.into_iter().map(|(k,b)| (k,b)).collect()
 }
 
-pub fn save_chunk_sync(ws: &WorldSave, cache: &mut RegionCache, coord: IVec2, ch: &ChunkData) -> std::io::Result<()> {
-    let (r_coord, idx) = chunk_to_region_slot(coord);
-    let path = ws.region_path(r_coord);
-    let rf = cache.0.entry(r_coord).or_insert(RegionFile::open(&path)?);
+pub fn save_chunk_sync(
+    ws: &WorldSave,
+    cache: &mut RegionCache,
+    coord: IVec2,
+    ch: &ChunkData,
+) -> std::io::Result<()> {
+    let rc = chunk_to_region(coord);
+    let rf = cache.get_or_open(ws, rc)?;
+
+    let existing = rf.read_chunk(coord)?; // Option<Vec<u8>>
+    let (_old_chunk, old_water) = if let Some(ref buf) = existing {
+        unpack_slot_bytes(buf)
+    } else {
+        (None, None)
+    };
+
     let data = encode_chunk(ch);
-    rf.write_slot_append(idx, &data)
+    let packed = pack_slot_bytes(Some(&data), old_water);
+    rf.write_chunk(coord, &packed)
 }
 
 pub async fn load_or_gen_chunk_async(
@@ -460,12 +473,21 @@ pub async fn load_or_gen_chunk_async(
     ids: (BlockId, BlockId, BlockId, BlockId),
     cfg: WorldGenConfig,
 ) -> ChunkData {
-    let (r_coord, idx) = chunk_to_region_slot(coord);
-    let path = ws_root.join("region").join(format!("r.{}.{}.region", r_coord.x, r_coord.y));
+    use std::path::Path;
+    let (r_coord, idx) = (chunk_to_region(coord), region_slot_index(coord));
+    let path = Path::new(&ws_root).join("region").join(format!("r.{}.{}.region", r_coord.x, r_coord.y));
+
     if let Ok(mut rf) = RegionFile::open(&path) {
         if let Ok(Some(buf)) = rf.read_slot(idx) {
-            if let Ok(c) = decode_chunk(&buf) {
-                return c;
+            let (chunk_bytes_opt, _water_bytes_opt) = unpack_slot_bytes(&buf);
+            if let Some(cb) = chunk_bytes_opt {
+                if let Ok(c) = decode_chunk(cb) {
+                    return c;
+                }
+            } else {
+                if let Ok(c) = decode_chunk(&buf) {
+                    return c;
+                }
             }
         }
     }
