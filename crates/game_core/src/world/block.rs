@@ -126,6 +126,7 @@ impl BlockRegistry {
                 unlit: false,
                 metallic: 0.0,
                 perceptual_roughness: 1.0,
+                reflectance: 0.0,
                 ..Default::default()
             });
 

@@ -1,4 +1,5 @@
 use crate::chunk::water_utils::{build_water_mesh_subchunk, despawn_water_mesh, generate_water_for_chunk, load_water_chunk_sync, save_water_chunk_sync};
+use bevy::pbr::{NotShadowCaster, NotShadowReceiver};
 use bevy::prelude::*;
 use game_core::configuration::WorldGenConfig;
 use game_core::states::{AppState, InGameStates, LoadingStates};
@@ -231,6 +232,8 @@ fn water_collect_and_apply_meshes(
                         Mesh3d(meshes.add(mesh)),
                         MeshMaterial3d(reg.material(water_mat)),
                         Transform::from_translation(origin),
+                        NotShadowReceiver,
+                        NotShadowCaster,
                         Name::new(format!("water chunk({},{}) sub{}", coord.x, coord.y, sub)),
                     ))
                     .id();
