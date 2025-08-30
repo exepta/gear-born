@@ -14,7 +14,6 @@ use game_core::world::chunk_dim::*;
 use game_core::world::save::{RegionCache, WorldSave};
 use std::collections::HashMap;
 
-const MAX_APPLY_PER_FRAME: usize = 12;
 const MAX_COLLIDERS_PER_FRAME: usize = 6;
 
 #[derive(Resource, Default)]
@@ -78,9 +77,13 @@ fn schedule_chunk_generation(
     ws: Res<WorldSave>,
     q_cam: Query<&GlobalTransform, With<Camera3d>>,
     load_center: Option<Res<LoadCenter>>,
+    app_state: Res<State<AppState>>,
 ) {
     let center_c = if let Ok(t) = q_cam.single() {
-        let (c, _) = world_to_chunk_xz((t.translation().x / VOXEL_SIZE).floor() as i32, (t.translation().z / VOXEL_SIZE).floor() as i32);
+        let (c, _) = world_to_chunk_xz(
+            (t.translation().x / VOXEL_SIZE).floor() as i32,
+            (t.translation().z / VOXEL_SIZE).floor() as i32
+        );
         c
     } else if let Some(lc) = load_center {
         lc.world_xz
@@ -88,10 +91,16 @@ fn schedule_chunk_generation(
         IVec2::ZERO
     };
 
-    if !can_spawn_gen(&pending) { return; }
+    let waiting = is_waiting(&app_state);
+    let max_inflight = if waiting { BIG } else { MAX_INFLIGHT_GEN };
+    let per_frame_submit = if waiting { BIG } else { 8 };
+
+    if pending.0.len() >= max_inflight { return; }
 
     let load_radius = game_config.graphics.chunk_range;
-    let mut budget = MAX_INFLIGHT_GEN.saturating_sub(pending.0.len()).min(8);
+    let mut budget = max_inflight
+        .saturating_sub(pending.0.len())
+        .min(per_frame_submit);
 
     let ids = (
         id_any(&reg, &["grass_block","grass"]),
@@ -128,13 +137,17 @@ fn drain_mesh_backlog(
     mut pending_mesh: ResMut<PendingMesh>,
     chunk_map: Res<ChunkMap>,
     reg: Res<BlockRegistry>,
+    app_state: Res<State<AppState>>,
 ) {
     if chunk_map.chunks.is_empty() { backlog.0.clear(); return; }
+
+    let waiting = is_waiting(&app_state);
+    let max_inflight_mesh = if waiting { BIG } else { MAX_INFLIGHT_MESH };
 
     let reg_lite = RegLite::from_reg(&reg);
     let pool = AsyncComputeTaskPool::get();
 
-    while can_spawn_mesh(&pending_mesh) {
+    while pending_mesh.0.len() < max_inflight_mesh {
         let Some((coord, sub)) = backlog.0.pop_front() else { break; };
         if pending_mesh.0.contains_key(&(coord, sub)) { continue; }
         let Some(chunk) = chunk_map.chunks.get(&coord) else { continue; };
@@ -161,7 +174,11 @@ fn collect_generated_chunks(
     mut backlog: ResMut<MeshBacklog>,
     mut chunk_map: ResMut<ChunkMap>,
     reg: Res<BlockRegistry>,
+    app_state: Res<State<AppState>>,
 ) {
+    let waiting = is_waiting(&app_state);
+    let max_inflight_mesh = if waiting { BIG } else { MAX_INFLIGHT_MESH };
+
     let reg_lite = RegLite::from_reg(&reg);
     let mut finished = Vec::new();
 
@@ -177,7 +194,7 @@ fn collect_generated_chunks(
                 let y1 = (y0 + SEC_H).min(CY);
                 let borders = snapshot_borders(&chunk_map, c, y0, y1);
 
-                if can_spawn_mesh(&pending_mesh) {
+                if pending_mesh.0.len() < max_inflight_mesh {
                     let chunk_copy = data.clone();
                     let reg_copy   = reg_lite.clone();
                     let t = pool.spawn(async move {
@@ -207,7 +224,7 @@ fn collect_generated_chunks(
                         let y1 = (y0 + SEC_H).min(CY);
                         let borders = snapshot_borders(&chunk_map, n_coord, y0, y1);
 
-                        if can_spawn_mesh(&pending_mesh) {
+                        if pending_mesh.0.len() < max_inflight_mesh {
                             let pool = AsyncComputeTaskPool::get();
                             let reg_copy  = reg_lite.clone();
                             let chunk_copy = n_chunk.clone();
@@ -242,13 +259,17 @@ fn collect_meshed_subchunks(
     reg: Res<BlockRegistry>,
     mut chunk_map: ResMut<ChunkMap>,
     q_mesh: Query<&Mesh3d>,
+    app_state: Res<State<AppState>>,
 ) {
+    let waiting = is_waiting(&app_state);
+    let apply_cap = if waiting { BIG } else { MAX_UPDATE_FRAMES };
     let mut done_keys = Vec::new();
-    let mut applied = 0;
-    let mut collider_budget = MAX_COLLIDERS_PER_FRAME;
+    let mut applied = 0usize;
+
+    let mut collider_budget = if waiting { BIG } else { MAX_COLLIDERS_PER_FRAME };
 
     for (key, task) in pending_mesh.0.iter_mut() {
-        if applied >= MAX_APPLY_PER_FRAME { break; }
+        if applied >= apply_cap { break; }
 
         if let Some(((coord, sub), builds)) = future::block_on(future::poll_once(task)) {
             let old_keys: Vec<_> = mesh_index
@@ -300,8 +321,6 @@ fn collect_meshed_subchunks(
                 mesh_index.map.insert((coord, sub as u8, bid), ent);
             }
 
-
-
             if should_build_collider && !phys_positions.is_empty() {
                 let mut pm = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::RENDER_WORLD);
                 pm.insert_attribute(Mesh::ATTRIBUTE_POSITION, phys_positions);
@@ -324,7 +343,6 @@ fn collect_meshed_subchunks(
                     collider_index.0.insert((coord, sub as u8), cent);
                     collider_budget = collider_budget.saturating_sub(1);
                 }
-
             }
 
             if let Some(chunk) = chunk_map.chunks.get_mut(&coord) {
@@ -348,11 +366,15 @@ fn schedule_remesh_tasks_from_events(
     reg: Res<BlockRegistry>,
     mut backlog: ResMut<MeshBacklog>,
     mut ev_dirty: EventReader<SubchunkDirty>,
+    app_state: Res<State<AppState>>,
 ) {
     if chunk_map.chunks.is_empty() {
         ev_dirty.clear();
         return;
     }
+
+    let waiting = is_waiting(&app_state);
+    let max_inflight_mesh = if waiting { BIG } else { MAX_INFLIGHT_MESH };
 
     let reg_lite = RegLite::from_reg(&reg);
     let pool = AsyncComputeTaskPool::get();
@@ -373,7 +395,7 @@ fn schedule_remesh_tasks_from_events(
         let y1 = (y0 + SEC_H).min(CY);
         let borders = snapshot_borders(&chunk_map, coord, y0, y1);
 
-        if can_spawn_mesh(&pending_mesh) {
+        if pending_mesh.0.len() < max_inflight_mesh {
             let chunk_copy = chunk.clone();
             let reg_copy   = reg_lite.clone();
 

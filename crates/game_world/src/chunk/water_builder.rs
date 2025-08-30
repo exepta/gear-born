@@ -2,10 +2,11 @@ use crate::chunk::water_utils::*;
 use bevy::pbr::{NotShadowCaster, NotShadowReceiver};
 use bevy::prelude::*;
 use bevy::tasks::AsyncComputeTaskPool;
+use futures_lite::future;
 use game_core::configuration::WorldGenConfig;
 use game_core::states::{AppState, InGameStates, LoadingStates};
 use game_core::world::block::{id_any, BlockRegistry, VOXEL_SIZE};
-use game_core::world::chunk::{ChunkMap, SubchunkDirty, WaterChunkUnload};
+use game_core::world::chunk::{ChunkMap, SubchunkDirty, WaterChunkUnload, BIG, MAX_UPDATE_FRAMES};
 use game_core::world::chunk_dim::*;
 use game_core::world::fluid::{FluidChunk, FluidMap, WaterMeshIndex};
 use game_core::world::save::{RegionCache, WorldSave};
@@ -15,7 +16,11 @@ const WATER_GEN_BUDGET_PER_FRAME: usize = 48;
 const MAX_INFLIGHT_WATER_LOAD: usize = 32;
 
 const MAX_INFLIGHT_WATER_MESH: usize = 64;
-const MAX_WATER_APPLY_PER_FRAME: usize = 12;
+
+#[derive(Resource, Default)]
+struct WaterBoot {
+    started: bool,
+}
 
 #[derive(Resource, Default)]
 struct WaterGenQueue {
@@ -48,6 +53,7 @@ pub struct WaterBuilder;
 impl Plugin for WaterBuilder {
     fn build(&self, app: &mut App) {
         app
+            .init_resource::<WaterBoot>()
             .init_resource::<WaterGenQueue>()
             .init_resource::<WaterSeen>()
             .init_resource::<WaterMeshIndex>()
@@ -78,7 +84,9 @@ impl Plugin for WaterBuilder {
 
                     // Unload & Co.
                     water_unload_on_event,
-                )
+
+                    water_finish_check
+                ).chain()
                     .run_if(
                         in_state(AppState::Loading(LoadingStates::WaterGen))
                             .or(in_state(AppState::InGame(InGameStates::Game)))
@@ -91,6 +99,7 @@ fn water_gen_build_worklist(
     mut q: ResMut<WaterGenQueue>,
     mut seen: ResMut<WaterSeen>,
     chunk_map: Res<ChunkMap>,
+    mut boot: ResMut<WaterBoot>,
 ) {
     q.work.clear();
     seen.known.clear();
@@ -100,6 +109,8 @@ fn water_gen_build_worklist(
             q.work.push_back(c);
         }
     }
+
+    boot.started = true;
 }
 
 fn water_track_new_chunks(
@@ -121,11 +132,16 @@ fn schedule_water_generation_jobs(
     ws: Res<WorldSave>,
     gen_cfg: Res<WorldGenConfig>,
     mut pending: ResMut<PendingWaterLoad>,
+    app_state: Res<State<AppState>>,
 ) {
+    let max_inflight = if in_water_gen(&app_state) { BIG } else { MAX_INFLIGHT_WATER_LOAD };
+    let per_frame    = if in_water_gen(&app_state) { BIG } else { WATER_GEN_BUDGET_PER_FRAME };
+
     if chunk_map.chunks.is_empty() { q.work.clear(); return; }
 
-    let mut budget = WATER_GEN_BUDGET_PER_FRAME
-        .min(MAX_INFLIGHT_WATER_LOAD.saturating_sub(pending.0.len()));
+    let mut budget = max_inflight
+        .saturating_sub(pending.0.len())
+        .min(per_frame);
     if budget == 0 { return; }
 
     let pool = AsyncComputeTaskPool::get();
@@ -159,17 +175,14 @@ fn collect_water_generation_jobs(
     chunk_map: Res<ChunkMap>,
     mut water: ResMut<FluidMap>,
     mut to_mesh: ResMut<WaterMeshingTodo>,
-    mut next: ResMut<NextState<AppState>>,
     app_state: Res<State<AppState>>,
-    q: Res<WaterGenQueue>,
 ) {
-    use bevy::tasks::futures_lite::future;
-
     let mut done: Vec<IVec2> = Vec::new();
+    let apply_cap = if in_water_gen(&app_state) { BIG } else { WATER_GEN_BUDGET_PER_FRAME };
     let mut applied = 0usize;
 
     for (_, task) in pending.0.iter_mut() {
-        if applied >= WATER_GEN_BUDGET_PER_FRAME { break; }
+        if applied >= apply_cap { break; }
 
         if let Some((c, wc)) = future::block_on(future::poll_once(task)) {
             if chunk_map.chunks.contains_key(&c) {
@@ -181,15 +194,7 @@ fn collect_water_generation_jobs(
             done.push(c);
         }
     }
-
     for c in done { pending.0.remove(&c); }
-
-    if matches!(app_state.get(), AppState::Loading(LoadingStates::WaterGen))
-        && q.work.is_empty()
-        && pending.0.is_empty()
-    {
-        next.set(AppState::InGame(InGameStates::Game));
-    }
 }
 
 fn water_mark_from_dirty(
@@ -201,6 +206,35 @@ fn water_mark_from_dirty(
         for d in [IVec2::X, -IVec2::X, IVec2::Y, -IVec2::Y] {
             todo.0.insert(e.coord + d);
         }
+    }
+}
+
+fn water_finish_check(
+    chunk_map: Res<ChunkMap>,
+    water: Res<FluidMap>,
+    q: Res<WaterGenQueue>,
+    boot: Res<WaterBoot>,
+    pending_load: Res<PendingWaterLoad>,
+    to_mesh: Res<WaterMeshingTodo>,
+    pending_mesh: Res<PendingWaterMesh>,
+    backlog: Res<WaterMeshBacklog>,
+    app_state: Res<State<AppState>>,
+    mut next: ResMut<NextState<AppState>>,
+) {
+    let in_water_gen = matches!(app_state.get(), AppState::Loading(LoadingStates::WaterGen));
+    if !in_water_gen { return; }
+
+    let coverage_ok = all_chunks_have_water(&chunk_map, &water);
+
+    let gen_done   = q.work.is_empty() && pending_load.0.is_empty();
+    let mesh_done  = to_mesh.0.is_empty() && backlog.0.is_empty() && pending_mesh.0.is_empty();
+    let world_ok   = !chunk_map.chunks.is_empty();
+
+    if boot.started && world_ok && gen_done && coverage_ok && mesh_done {
+        info!("Water gen complete");
+        next.set(AppState::InGame(InGameStates::Game));
+    } else {
+        info!("Water waiting...");
     }
 }
 
@@ -260,11 +294,12 @@ fn water_drain_mesh_backlog(
     mut pending: ResMut<PendingWaterMesh>,
     chunk_map: Res<ChunkMap>,
     water: Res<FluidMap>,
+    app_state: Res<State<AppState>>,
 ) {
-    if pending.0.len() >= MAX_INFLIGHT_WATER_MESH { return; }
-    let pool = AsyncComputeTaskPool::get();
+    let max_inflight = if in_water_gen(&app_state) { BIG } else { MAX_INFLIGHT_WATER_MESH };
 
-    while pending.0.len() < MAX_INFLIGHT_WATER_MESH {
+    let pool = AsyncComputeTaskPool::get();
+    while pending.0.len() < max_inflight {
         let Some((coord, sub)) = backlog.0.pop_front() else { break; };
 
         let Some(fc) = water.0.get(&coord).cloned() else {
@@ -273,13 +308,11 @@ fn water_drain_mesh_backlog(
             continue;
         };
 
-        // Snapshots auf dem Main-Thread
         let y0 = sub * SEC_H;
         let y1 = (y0 + SEC_H).min(CY);
         let borders = water_snapshot_borders(&chunk_map, &water, coord, y0, y1, fc.sea_level);
 
-        let chunk_copy = chunk_map.chunks.get(&coord).cloned();
-        let Some(chunk_copy) = chunk_copy else {
+        let Some(chunk_copy) = chunk_map.chunks.get(&coord).cloned() else {
             let task = pool.spawn(async move { ((coord, sub), WaterMeshBuild{ pos:vec![], nor:vec![], uv0:vec![], idx:vec![] }) });
             pending.0.insert((coord, sub), task);
             continue;
@@ -299,23 +332,23 @@ fn water_collect_meshed_subchunks(
     mut meshes: ResMut<Assets<Mesh>>,
     q_mesh: Query<&Mesh3d>,
     reg: Res<BlockRegistry>,
+    app_state: Res<State<AppState>>,
 ) {
-    use bevy::tasks::futures_lite::future;
     let water_mat = id_any(&reg, &["water_block", "water"]);
     if water_mat == 0 { warn!("water_mat not found"); return; }
 
+    let apply_cap = if in_water_gen(&app_state) { BIG } else { MAX_UPDATE_FRAMES };
     let mut done = Vec::new();
     let mut applied = 0usize;
 
     for (key, task) in pending.0.iter_mut() {
-        if applied >= MAX_WATER_APPLY_PER_FRAME { break; }
+        if applied >= apply_cap { break; }
 
         if let Some(((coord, sub), build)) = future::block_on(future::poll_once(task)) {
             despawn_water_mesh((coord, sub as u8), &mut windex, &mut commands, &q_mesh, &mut meshes);
 
             if !build.is_empty() {
                 let mesh = build.into_mesh();
-
                 let s = VOXEL_SIZE;
                 let origin = Vec3::new(
                     (coord.x * CX as i32) as f32 * s,

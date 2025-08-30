@@ -1,6 +1,6 @@
 {
   "image": "sand.png",
-  "tile_size": 64,
+  "tile_size": 1024,
   "columns": 1,
   "rows": 1,
   "tiles": {

@@ -2,6 +2,7 @@ use crate::chunk::chunk_struct::*;
 use bevy::prelude::*;
 use bincode::{config, decode_from_slice, encode_to_vec};
 use game_core::configuration::WorldGenConfig;
+use game_core::states::{AppState, LoadingStates};
 use game_core::world::block::{BlockId, Face};
 use game_core::world::chunk::{ChunkData, ChunkMap, ChunkMeshIndex};
 use game_core::world::chunk_dim::*;
@@ -623,3 +624,10 @@ pub(crate) fn col_rand_u32(x: i32, z: i32, seed: u32) -> u32 {
 
 #[inline] fn div_floor(a: i32, b: i32) -> i32 { (a as f32 / b as f32).floor() as i32 }
 #[inline] fn mod_floor(a: i32, b: i32) -> i32 { a - div_floor(a,b)*b }
+
+#[inline]
+pub fn is_waiting(state: &State<AppState>) -> bool {
+    matches!(state.get(),
+        AppState::Loading(LoadingStates::BaseGen)
+    )
+}

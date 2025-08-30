@@ -1,6 +1,7 @@
 use crate::chunk::chunk_utils::col_rand_u32;
 use bevy::asset::RenderAssetUsages;
 use bevy::prelude::*;
+use game_core::states::{AppState, LoadingStates};
 use game_core::world::block::VOXEL_SIZE;
 use game_core::world::chunk::{ChunkData, ChunkMap};
 use game_core::world::chunk_dim::*;
@@ -411,4 +412,15 @@ fn chunk_to_region_slot(c: IVec2) -> (IVec2, usize) {
     let lz = mod_floor(c.y, REGION_SIZE) as usize;
     let idx = lz * (REGION_SIZE as usize) + lx;
     (IVec2::new(rx, rz), idx)
+}
+
+#[inline]
+pub(crate) fn in_water_gen(state: &State<AppState>) -> bool {
+    matches!(state.get(), AppState::Loading(LoadingStates::WaterGen))
+}
+
+#[inline]
+pub(crate) fn all_chunks_have_water(chunk_map: &ChunkMap, water: &FluidMap) -> bool {
+    if chunk_map.chunks.is_empty() { return false; }
+    chunk_map.chunks.keys().all(|c| water.0.contains_key(c))
 }

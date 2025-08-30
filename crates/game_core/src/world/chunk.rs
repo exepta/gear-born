@@ -3,6 +3,9 @@ use crate::world::chunk_dim::*;
 use bevy::prelude::*;
 use std::collections::HashMap;
 
+pub const BIG: usize = 150;
+pub const MAX_UPDATE_FRAMES: usize = 12;
+
 /// Computes the linear (row-major) index into a `CX × CY × CZ` 3D array.
 ///
 /// Layout: Y-major slices of `CZ` rows, each with `CX` columns:
