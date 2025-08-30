@@ -80,7 +80,7 @@ fn spawn_player(mut commands: Commands, game_config: Res<GameConfig>) {
         .spawn((
             Player,
             Name::new("Player"),
-            Transform::from_xyz(0.0, 30.0, 0.0),
+            Transform::from_xyz(0.0, 180.0, 0.0),
             GlobalTransform::default(),
 
             RigidBody::KinematicPositionBased,

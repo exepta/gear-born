@@ -1,0 +1,12 @@
+{
+  "image": "water.png",
+  "tile_size": 64,
+  "columns": 1,
+  "rows": 1,
+  "tiles": {
+    "water": [
+      0,
+      0
+    ]
+  }
+}

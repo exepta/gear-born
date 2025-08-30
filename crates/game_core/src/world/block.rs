@@ -107,9 +107,22 @@ impl BlockRegistry {
             };
             let uv_north  = tile_uv(&tileset, north_key).unwrap();
 
+            let alpha_mode = if block_json.stats.opaque {
+                AlphaMode::Opaque
+            } else {
+                AlphaMode::Blend
+            };
+
+            let base_color = if block_json.stats.opaque {
+                Color::WHITE
+            } else {
+                Color::srgba(1.0, 1.0, 1.0, 0.8)
+            };
+
             let material = materials.add(StandardMaterial {
                 base_color_texture: Some(image.clone()),
-                alpha_mode: AlphaMode::Opaque,
+                base_color,
+                alpha_mode,
                 unlit: false,
                 metallic: 0.0,
                 perceptual_roughness: 1.0,
@@ -155,7 +168,8 @@ pub enum Blocks {
     Grass,
     Stone,
     Log,
-    Sand
+    Sand,
+    Water
 }
 
 impl Blocks {
@@ -166,6 +180,7 @@ impl Blocks {
             Blocks::Stone => "stone_block",
             Blocks::Log   => "log_block",
             Blocks::Sand  => "sand_block",
+            Blocks::Water => "water_block",
         }
     }
 }

@@ -113,16 +113,6 @@ pub async fn generate_chunk_async_noise(
         t * t * (3.0 - 2.0 * t)
     }
     #[inline] fn lerp(a: f32, b: f32, t: f32) -> f32 { a + (b - a) * t }
-
-    #[inline]
-    fn col_rand_u32(x: i32, z: i32, seed: u32) -> u32 {
-        let mut n = (x as u32).wrapping_mul(374761393)
-            ^ (z as u32).wrapping_mul(668265263)
-            ^ seed;
-        n ^= n >> 13;
-        n = n.wrapping_mul(1274126177);
-        n ^ (n >> 16)
-    }
     #[inline]
     fn col_rand_range(x: i32, z: i32, seed: u32, lo: u32, hi: u32) -> u32 {
         let r = col_rand_u32(x, z, seed);
@@ -606,6 +596,16 @@ pub fn chunk_to_region_slot(c: IVec2) -> (IVec2, usize) {
     let lz = mod_floor(c.y, REGION_SIZE) as usize;
     let idx = lz * (REGION_SIZE as usize) + lx;
     (IVec2::new(rx, rz), idx)
+}
+
+#[inline]
+pub(crate) fn col_rand_u32(x: i32, z: i32, seed: u32) -> u32 {
+    let mut n = (x as u32).wrapping_mul(374761393)
+        ^ (z as u32).wrapping_mul(668265263)
+        ^ seed;
+    n ^= n >> 13;
+    n = n.wrapping_mul(1274126177);
+    n ^ (n >> 16)
 }
 
 #[inline] fn div_floor(a: i32, b: i32) -> i32 { (a as f32 / b as f32).floor() as i32 }
