@@ -26,7 +26,7 @@ impl Plugin for PlayerInitialize {
     fn build(&self, app: &mut App) {
         app.insert_resource(AmbientLight {
             color: Color::WHITE,
-            brightness: 65.0,
+            brightness: 125.0,
             affects_lightmapped_meshes: false,
         })
             .add_systems(
@@ -80,7 +80,7 @@ fn spawn_player(mut commands: Commands, game_config: Res<GameConfig>) {
         .spawn((
             Player,
             Name::new("Player"),
-            Transform::from_xyz(0.0, 30.0, 0.0),
+            Transform::from_xyz(0.0, 180.0, 0.0),
             GlobalTransform::default(),
 
             RigidBody::KinematicPositionBased,

@@ -1,10 +1,10 @@
 {
-  "image": "dirt.png",
+  "image": "water.png",
   "tile_size": 1024,
   "columns": 1,
   "rows": 1,
   "tiles": {
-    "dirt": [
+    "water": [
       0,
       0
     ]
