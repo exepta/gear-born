@@ -2,6 +2,10 @@ use crate::world::chunk_dim::*;
 use bevy::prelude::*;
 use std::collections::HashMap;
 
+pub const WATER_FLOW_CAP: usize = 6;
+pub const WATER_FLOW_MAX_INFLIGHT: usize = 32;
+pub const WATER_FLOW_BUDGET_PER_FRAME: usize = 32;
+
 #[derive(Resource, Default)]
 pub struct FluidMap(pub HashMap<IVec2, FluidChunk>);
 
@@ -62,4 +66,27 @@ impl FluidChunk {
             self.set(x, ly, z, true);
         }
     }
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct Seed { pub c: IVec2, pub x: i32, pub y: i32, pub z: i32 }
+
+#[derive(Clone)]
+pub struct FlowJob {
+    pub seeds: Vec<Seed>,
+    pub sea_level: i32,
+    pub cap: usize,
+}
+
+#[derive(Default)]
+pub struct FlowResult {
+    pub filled: Vec<Seed>,
+    pub spill:  Vec<Seed>,
+    pub more:   Vec<Seed>,
+}
+
+#[derive(Clone)]
+pub struct SolidSnapshot {
+    pub center: IVec2,
+    pub bits: HashMap<IVec2, Vec<u8>>,
 }

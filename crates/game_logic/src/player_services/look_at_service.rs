@@ -1,13 +1,13 @@
 use bevy::prelude::*;
 use bevy::render::view::RenderLayers;
 use game_core::debug::SelectionGizmoGroup;
-use game_core::events::player_block_events::BlockBreakByPlayerEvent;
+use game_core::events::player_block_events::{BlockBreakByPlayerEvent, BlockPlaceByPlayerEvent};
 use game_core::player::selection::{BlockHit, SelectionState};
 use game_core::states::{AppState, InGameStates};
 use game_core::world::block::{get_block_world, id_any, BlockId, BlockRegistry, Face, VOXEL_SIZE};
 use game_core::world::chunk::{ChunkData, ChunkMap, SubchunkDirty, VoxelStage};
 use game_core::world::chunk_dim::*;
-
+use game_core::world::fluid::FluidMap;
 
 pub struct LookAtService;
 
@@ -26,6 +26,12 @@ impl Plugin for LookAtService {
                 draw_selection_gizmo.in_set(VoxelStage::Input),
                 handle_break_and_place.in_set(VoxelStage::WorldEdit),
             ).chain().run_if(in_state(AppState::InGame(InGameStates::Game)))
+        );
+
+        app.add_systems(
+            Update,
+            handle_block_place_event
+                .run_if(in_state(AppState::InGame(InGameStates::Game)))
         );
     }
 }
@@ -76,6 +82,7 @@ fn handle_break_and_place(
     sel: Res<SelectionState>,
     mut ev_dirty: EventWriter<SubchunkDirty>,
     mut block_break: EventWriter<BlockBreakByPlayerEvent>,
+    mut block_place: EventWriter<BlockPlaceByPlayerEvent>,
 ) {
     let Some(hit) = sel.hit else { return; };
 
@@ -84,7 +91,7 @@ fn handle_break_and_place(
 
         let (chunk_coords, l_val) = world_to_chunk_xz(wp.x, wp.z);
         let lx = l_val.x as u8;
-        let  lz = l_val.y as u8;
+        let lz = l_val.y as u8;
         let ly = (wp.y - Y_MIN).clamp(0, CY as i32 - 1) as usize;
 
         let mut broken_id = 0u16;
@@ -92,13 +99,9 @@ fn handle_break_and_place(
             broken_id = access.get();
             access.set(0);
         }
-
         mark_dirty_block_and_neighbors(&mut chunk_map, wp, &mut ev_dirty);
 
-        let block_name = reg
-            .name_opt(broken_id)
-            .unwrap_or("")
-            .to_string();
+        let block_name = reg.name_opt(broken_id).unwrap_or("").to_string();
 
         block_break.write(BlockBreakByPlayerEvent {
             chunk_coord: chunk_coords,
@@ -113,15 +116,48 @@ fn handle_break_and_place(
 
     if buttons.just_pressed(MouseButton::Right) {
         let place = hit.place_pos;
-        let stone = id_any(&reg, &["log_block","log"]);
-        if stone != 0 {
-            if let Some(mut access) = world_access_mut(&mut chunk_map, place) {
-                if access.get() == 0 {
-                    access.set(stone);
-                }
-            }
-            mark_dirty_block_and_neighbors(&mut chunk_map, place, &mut ev_dirty);
+        let id = id_any(&reg, &["log_block","log"]);
+        if id != 0 {
+            let name = reg.name_opt(id).unwrap_or("").to_string();
+            block_place.write(BlockPlaceByPlayerEvent {
+                location: place,
+                block_id: id,
+                block_name: name,
+            });
         }
+    }
+}
+
+
+fn handle_block_place_event(
+    mut ev: EventReader<BlockPlaceByPlayerEvent>,
+    mut fluids: ResMut<FluidMap>,
+    mut chunk_map: ResMut<ChunkMap>,
+    mut ev_dirty: EventWriter<SubchunkDirty>,
+) {
+    for e in ev.read() {
+        let wp = e.location;
+        let (chunk_coord, l) = world_to_chunk_xz(wp.x, wp.z);
+        let lx = l.x.clamp(0, (CX as i32 - 1) as u32) as usize;
+        let lz = l.y.clamp(0, (CZ as i32 - 1) as u32) as usize;
+        let ly = (wp.y - Y_MIN).clamp(0, CY as i32 - 1) as usize;
+
+        let can_place = chunk_map
+            .chunks
+            .get(&chunk_coord)
+            .map(|ch| ch.get(lx, ly, lz) == 0)
+            .unwrap_or(false);
+        if !can_place { continue; }
+
+        if let Some(fc) = fluids.0.get_mut(&chunk_coord) {
+            fc.set(lx, ly, lz, false);
+        }
+
+        if let Some(mut access) = world_access_mut(&mut chunk_map, wp) {
+            access.set(e.block_id);
+        }
+
+        mark_dirty_block_and_neighbors(&mut chunk_map, wp, &mut ev_dirty);
     }
 }
 
