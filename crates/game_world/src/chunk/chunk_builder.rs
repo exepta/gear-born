@@ -7,7 +7,7 @@ use bevy::tasks::futures_lite::future;
 use bevy::tasks::AsyncComputeTaskPool;
 use bevy_rapier3d::prelude::*;
 use game_core::configuration::{GameConfig, WorldGenConfig};
-use game_core::states::{AppState, InGameStates};
+use game_core::states::{AppState, InGameStates, LoadingStates};
 use game_core::world::block::{id_any, BlockRegistry, VOXEL_SIZE};
 use game_core::world::chunk::*;
 use game_core::world::chunk_dim::*;
@@ -38,18 +38,18 @@ impl Plugin for ChunkBuilder {
                 unload_far_chunks,
             )
                 .chain()
-                .run_if(in_state(AppState::Loading)
+                .run_if(in_state(AppState::Loading(LoadingStates::BaseGen))
                     .or(in_state(AppState::InGame(InGameStates::Game)))));
 
         app.add_systems(
             Update,
-            check_initial_world_ready
-                .run_if(in_state(AppState::Loading))
+            check_base_gen_world_ready
+                .run_if(in_state(AppState::Loading(LoadingStates::BaseGen)))
         );
     }
 }
 
-fn check_initial_world_ready(
+fn check_base_gen_world_ready(
     game_config: Res<GameConfig>,
     load_center: Res<LoadCenter>,
     chunk_map: Res<ChunkMap>,
@@ -63,7 +63,7 @@ fn check_initial_world_ready(
 
     if area_ready(load_center.world_xz, initial_radius, &chunk_map, &pending_gen, &pending_mesh, &backlog) {
         commands.remove_resource::<LoadCenter>();
-        next.set(AppState::InGame(InGameStates::Game));
+        next.set(AppState::Loading(LoadingStates::WaterGen));
     }
 }
 
@@ -391,6 +391,7 @@ fn unload_far_chunks(
     mut cache: ResMut<RegionCache>,
     q_mesh: Query<&Mesh3d>,
     q_cam: Query<&GlobalTransform, With<Camera3d>>,
+    mut ev_water_unload: EventWriter<WaterChunkUnload>,
 ) {
     let cam = if let Ok(t) = q_cam.single() { t } else { return; };
     let cam_pos = cam.translation();
@@ -419,13 +420,13 @@ fn unload_far_chunks(
         pending_gen.0.remove(coord);
         pending_mesh.0.retain(|(c, _), _| c != coord);
 
-        let keys: Vec<_> = mesh_index
+        let old_keys: Vec<_> = mesh_index
             .map
             .keys()
             .cloned()
             .filter(|(c, _, _)| c == coord)
             .collect();
-        despawn_mesh_set(keys, &mut mesh_index, &mut commands, &q_mesh, &mut meshes);
+        despawn_mesh_set(old_keys, &mut mesh_index, &mut commands, &q_mesh, &mut meshes);
 
         let col_keys: Vec<_> = collider_index
             .0
@@ -438,6 +439,8 @@ fn unload_far_chunks(
                 commands.entity(ent).despawn();
             }
         }
+
+        ev_water_unload.write(WaterChunkUnload { coord: *coord });
 
         chunk_map.chunks.remove(coord);
         backlog.0.retain(|(c, _)| c != coord);

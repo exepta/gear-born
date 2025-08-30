@@ -1,6 +1,6 @@
 use bevy::prelude::*;
 use bevy::render::view::RenderLayers;
-use game_core::states::AppState;
+use game_core::states::{AppState, InGameStates, LoadingStates};
 use game_core::world::chunk::LoadCenter;
 
 #[derive(Component)]
@@ -11,11 +11,11 @@ pub struct LoadingScreen;
 impl Plugin for LoadingScreen {
     fn build(&self, app: &mut App) {
         app.add_systems(
-            OnEnter(AppState::Loading),
+            OnEnter(AppState::Loading(LoadingStates::BaseGen)),
             (enter_loading, spawn_loading_ui)
         )
             .add_systems(
-                OnExit(AppState::Loading),
+                OnEnter(AppState::InGame(InGameStates::Game)),
                 despawn_loading_ui
             );
     }

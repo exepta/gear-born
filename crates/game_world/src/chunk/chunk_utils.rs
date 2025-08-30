@@ -228,19 +228,6 @@ pub fn save_chunk_sync(ws: &WorldSave, cache: &mut RegionCache, coord: IVec2, ch
     rf.write_slot_append(idx, &data)
 }
 
-/*pub fn try_load_chunk_sync(ws: &WorldSave, cache: &mut RegionCache, coord: IVec2) -> std::io::Result<Option<ChunkData>> {
-    let (r_coord, idx) = chunk_to_region_slot(coord);
-    let path = ws.region_path(r_coord);
-    if !path.exists() { return Ok(None); }
-    let rf = cache.0.entry(r_coord).or_insert(RegionFile::open(&path)?);
-    if let Some(buf) = rf.read_slot(idx)? {
-        let c = decode_chunk(&buf)?;
-        Ok(Some(c))
-    } else {
-        Ok(None)
-    }
-}*/
-
 pub async fn load_or_gen_chunk_async(
     ws_root: PathBuf,
     coord: IVec2,

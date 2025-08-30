@@ -119,6 +119,11 @@ pub struct SubchunkDirty {
     pub sub: usize,
 }
 
+#[derive(Event, Clone, Copy, Debug)]
+pub struct WaterChunkUnload {
+    pub coord: IVec2,
+}
+
 /// System set ordering for the voxel pipeline.
 ///
 /// Typical flow: `Input` → `WorldEdit` → `Meshing`.
