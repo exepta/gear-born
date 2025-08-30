@@ -96,6 +96,7 @@ fn schedule_chunk_generation(
         id_any(&reg, &["grass_block","grass"]),
         id_any(&reg, &["dirt_block","dirt"]),
         id_any(&reg, &["stone_block","stone"]),
+        id_any(&reg, &["sand_block","sand"]),
     );
     let cfg_clone = gen_cfg.clone();
     let ws_root = ws.root.clone();

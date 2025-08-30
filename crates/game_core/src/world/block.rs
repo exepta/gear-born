@@ -155,6 +155,7 @@ pub enum Blocks {
     Grass,
     Stone,
     Log,
+    Sand
 }
 
 impl Blocks {
@@ -164,6 +165,7 @@ impl Blocks {
             Blocks::Grass => "grass_block",
             Blocks::Stone => "stone_block",
             Blocks::Log   => "log_block",
+            Blocks::Sand  => "sand_block",
         }
     }
 }
