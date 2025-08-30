@@ -26,7 +26,7 @@ impl Plugin for PlayerInitialize {
     fn build(&self, app: &mut App) {
         app.insert_resource(AmbientLight {
             color: Color::WHITE,
-            brightness: 65.0,
+            brightness: 125.0,
             affects_lightmapped_meshes: false,
         })
             .add_systems(

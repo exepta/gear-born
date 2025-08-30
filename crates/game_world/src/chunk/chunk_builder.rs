@@ -14,8 +14,8 @@ use game_core::world::chunk_dim::*;
 use game_core::world::save::{RegionCache, WorldSave};
 use std::collections::HashMap;
 
-const MAX_APPLY_PER_FRAME: usize = 8;
-const MAX_COLLIDERS_PER_FRAME: usize = 4;
+const MAX_APPLY_PER_FRAME: usize = 12;
+const MAX_COLLIDERS_PER_FRAME: usize = 6;
 
 #[derive(Resource, Default)]
 struct ChunkColliderIndex(pub HashMap<(IVec2, u8), Entity>);
@@ -168,7 +168,7 @@ fn collect_generated_chunks(
     for (coord, task) in pending_gen.0.iter_mut() {
         if let Some((c, data)) = future::block_on(future::poll_once(task)) {
             chunk_map.chunks.insert(c, data.clone());
-            
+
             let pool = AsyncComputeTaskPool::get();
             let order = sub_priority_order(&data);
             for sub in order {

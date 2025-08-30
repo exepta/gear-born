@@ -1,16 +1,21 @@
-use crate::chunk::water_utils::{build_water_mesh_subchunk, despawn_water_mesh, generate_water_for_chunk, load_water_chunk_sync, save_water_chunk_sync};
+use crate::chunk::water_utils::*;
 use bevy::pbr::{NotShadowCaster, NotShadowReceiver};
 use bevy::prelude::*;
+use bevy::tasks::AsyncComputeTaskPool;
 use game_core::configuration::WorldGenConfig;
 use game_core::states::{AppState, InGameStates, LoadingStates};
 use game_core::world::block::{id_any, BlockRegistry, VOXEL_SIZE};
 use game_core::world::chunk::{ChunkMap, SubchunkDirty, WaterChunkUnload};
 use game_core::world::chunk_dim::*;
-use game_core::world::fluid::{FluidMap, WaterMeshIndex};
+use game_core::world::fluid::{FluidChunk, FluidMap, WaterMeshIndex};
 use game_core::world::save::{RegionCache, WorldSave};
-use std::collections::{HashSet, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 
 const WATER_GEN_BUDGET_PER_FRAME: usize = 48;
+const MAX_INFLIGHT_WATER_LOAD: usize = 32;
+
+const MAX_INFLIGHT_WATER_MESH: usize = 64;
+const MAX_WATER_APPLY_PER_FRAME: usize = 12;
 
 #[derive(Resource, Default)]
 struct WaterGenQueue {
@@ -25,6 +30,19 @@ struct WaterSeen {
 #[derive(Resource, Default)]
 struct WaterMeshingTodo(pub HashSet<IVec2>);
 
+#[derive(Resource, Default)]
+struct PendingWaterLoad(
+    pub HashMap<IVec2, bevy::tasks::Task<(IVec2, FluidChunk)>>
+);
+
+#[derive(Resource, Default)]
+struct WaterMeshBacklog(pub VecDeque<(IVec2, usize)>);
+
+#[derive(Resource, Default)]
+struct PendingWaterMesh(
+    pub HashMap<(IVec2, usize), bevy::tasks::Task<((IVec2, usize), WaterMeshBuild)>>
+);
+
 pub struct WaterBuilder;
 
 impl Plugin for WaterBuilder {
@@ -35,6 +53,9 @@ impl Plugin for WaterBuilder {
             .init_resource::<WaterMeshIndex>()
             .init_resource::<FluidMap>()
             .init_resource::<WaterMeshingTodo>()
+            .init_resource::<PendingWaterLoad>()
+            .init_resource::<WaterMeshBacklog>()
+            .init_resource::<PendingWaterMesh>()
             .add_event::<WaterChunkUnload>()
             .add_systems(
                 OnEnter(AppState::Loading(LoadingStates::WaterGen)),
@@ -43,27 +64,25 @@ impl Plugin for WaterBuilder {
             .add_systems(
                 Update,
                 (
-                    water_mark_from_dirty
-                        .run_if(
-                            in_state(AppState::Loading(LoadingStates::WaterGen))
-                                .or(in_state(AppState::InGame(InGameStates::Game)))
-                        ),
-                    water_track_new_chunks
-                        .run_if(
-                            in_state(AppState::Loading(LoadingStates::WaterGen))
-                                .or(in_state(AppState::InGame(InGameStates::Game)))
-                        ),
-                    water_gen_step
-                        .run_if(
-                            in_state(AppState::Loading(LoadingStates::WaterGen))
-                                .or(in_state(AppState::InGame(InGameStates::Game)))
-                        ),
-                    (water_unload_on_event, water_collect_and_apply_meshes)
-                        .run_if(
-                            in_state(AppState::Loading(LoadingStates::WaterGen))
-                                .or(in_state(AppState::InGame(InGameStates::Game)))
-                        ),
+                    water_mark_from_dirty,
+                    water_track_new_chunks,
+
+                    // Gen/Load
+                    schedule_water_generation_jobs,
+                    collect_water_generation_jobs,
+
+                    // Mesh
+                    water_backlog_from_todo,
+                    water_drain_mesh_backlog,
+                    water_collect_meshed_subchunks,
+
+                    // Unload & Co.
+                    water_unload_on_event,
                 )
+                    .run_if(
+                        in_state(AppState::Loading(LoadingStates::WaterGen))
+                            .or(in_state(AppState::InGame(InGameStates::Game)))
+                    ),
             );
     }
 }
@@ -95,51 +114,79 @@ fn water_track_new_chunks(
     }
 }
 
-fn water_gen_step(
+fn schedule_water_generation_jobs(
     mut q: ResMut<WaterGenQueue>,
     chunk_map: Res<ChunkMap>,
+    water: Res<FluidMap>,
+    ws: Res<WorldSave>,
     gen_cfg: Res<WorldGenConfig>,
+    mut pending: ResMut<PendingWaterLoad>,
+) {
+    if chunk_map.chunks.is_empty() { q.work.clear(); return; }
+
+    let mut budget = WATER_GEN_BUDGET_PER_FRAME
+        .min(MAX_INFLIGHT_WATER_LOAD.saturating_sub(pending.0.len()));
+    if budget == 0 { return; }
+
+    let pool = AsyncComputeTaskPool::get();
+    let sea_level = 62i32;
+    let seed = gen_cfg.seed as u32;
+
+    while budget > 0 {
+        let Some(coord) = q.work.pop_front() else { break; };
+        if water.0.contains_key(&coord) { continue; }
+        let Some(chunk) = chunk_map.chunks.get(&coord) else { continue; };
+        if pending.0.contains_key(&coord) { continue; }
+
+        let chunk_copy = chunk.clone();
+        let root = ws.root.clone();
+
+        let task = pool.spawn(async move {
+            if let Some(wc) = load_water_chunk_from_disk(root.clone(), coord) {
+                return (coord, wc);
+            }
+            let wc = generate_water_for_chunk(coord, &chunk_copy, sea_level, seed, false);
+            (coord, wc)
+        });
+
+        pending.0.insert(coord, task);
+        budget -= 1;
+    }
+}
+
+fn collect_water_generation_jobs(
+    mut pending: ResMut<PendingWaterLoad>,
+    chunk_map: Res<ChunkMap>,
     mut water: ResMut<FluidMap>,
+    mut to_mesh: ResMut<WaterMeshingTodo>,
     mut next: ResMut<NextState<AppState>>,
     app_state: Res<State<AppState>>,
-    ws: Res<WorldSave>,
-    mut cache: ResMut<RegionCache>,
-    mut to_mesh: ResMut<WaterMeshingTodo>,
+    q: Res<WaterGenQueue>,
 ) {
-    let mut done = 0usize;
-    let sea_level = 62i32;
+    use bevy::tasks::futures_lite::future;
 
-    while done < WATER_GEN_BUDGET_PER_FRAME {
-        let Some(coord) = q.work.pop_front() else { break; };
+    let mut done: Vec<IVec2> = Vec::new();
+    let mut applied = 0usize;
 
-        if water.0.contains_key(&coord) {
-            done += 1;
-            continue;
+    for (_, task) in pending.0.iter_mut() {
+        if applied >= WATER_GEN_BUDGET_PER_FRAME { break; }
+
+        if let Some((c, wc)) = future::block_on(future::poll_once(task)) {
+            if chunk_map.chunks.contains_key(&c) {
+                water.0.insert(c, wc);
+                to_mesh.0.insert(c);
+                for d in [IVec2::X, -IVec2::X, IVec2::Y, -IVec2::Y] { to_mesh.0.insert(c + d); }
+                applied += 1;
+            }
+            done.push(c);
         }
-
-        let Some(chunk) = chunk_map.chunks.get(&coord) else {
-            done += 1;
-            continue;
-        };
-
-        let wc = if let Some(wc) = load_water_chunk_sync(&ws, &mut cache, coord) {
-            wc
-        } else {
-            generate_water_for_chunk(coord, chunk, sea_level, gen_cfg.seed as u32, false)
-        };
-
-        water.0.insert(coord, wc);
-
-        to_mesh.0.insert(coord);
-        for d in [IVec2::X, -IVec2::X, IVec2::Y, -IVec2::Y] {
-            to_mesh.0.insert(coord + d);
-        }
-
-        done += 1;
     }
+
+    for c in done { pending.0.remove(&c); }
 
     if matches!(app_state.get(), AppState::Loading(LoadingStates::WaterGen))
         && q.work.is_empty()
+        && pending.0.is_empty()
     {
         next.set(AppState::InGame(InGameStates::Game));
     }
@@ -184,41 +231,90 @@ fn water_unload_on_event(
     }
 }
 
-fn water_collect_and_apply_meshes(
-    mut commands: Commands,
-    chunk_map: Res<ChunkMap>,
-    water: Res<FluidMap>,
-    reg: Res<BlockRegistry>,
-    mut windex: ResMut<WaterMeshIndex>,
-    mut meshes: ResMut<Assets<Mesh>>,
-    q_mesh: Query<&Mesh3d>,
+fn water_backlog_from_todo(
     mut todo: ResMut<WaterMeshingTodo>,
+    water: Res<FluidMap>,
+    mut backlog: ResMut<WaterMeshBacklog>,
 ) {
     if todo.0.is_empty() { return; }
-    let water_mat = id_any(&reg, &["water_block", "water"]);
-    if water_mat == 0 {
-        warn!("water_mat not found");
-        return;
-    }
-
-    let coords: Vec<IVec2> = todo.0.drain().collect();
-
+    let coords: Vec<_> = todo.0.drain().collect();
     for coord in coords {
-        let Some(wc) = water.0.get(&coord) else {
+        if let Some(fc) = water.0.get(&coord) {
             for sub in 0..SEC_COUNT {
-                despawn_water_mesh((coord, sub as u8), &mut windex, &mut commands, &q_mesh, &mut meshes);
+                if fc.sub_has_any(sub) {
+                    let key = (coord, sub);
+                    if !backlog.0.iter().any(|k| *k == key) { backlog.0.push_back(key); }
+                }
             }
+        } else {
+            for sub in 0..SEC_COUNT {
+                let key = (coord, sub);
+                if !backlog.0.iter().any(|k| *k == key) { backlog.0.push_back(key); }
+            }
+        }
+    }
+}
+
+fn water_drain_mesh_backlog(
+    mut backlog: ResMut<WaterMeshBacklog>,
+    mut pending: ResMut<PendingWaterMesh>,
+    chunk_map: Res<ChunkMap>,
+    water: Res<FluidMap>,
+) {
+    if pending.0.len() >= MAX_INFLIGHT_WATER_MESH { return; }
+    let pool = AsyncComputeTaskPool::get();
+
+    while pending.0.len() < MAX_INFLIGHT_WATER_MESH {
+        let Some((coord, sub)) = backlog.0.pop_front() else { break; };
+
+        let Some(fc) = water.0.get(&coord).cloned() else {
+            let task = pool.spawn(async move { ((coord, sub), WaterMeshBuild{ pos:vec![], nor:vec![], uv0:vec![], idx:vec![] }) });
+            pending.0.insert((coord, sub), task);
             continue;
         };
 
-        for sub in 0..SEC_COUNT {
-            if !wc.sub_has_any(sub) {
-                despawn_water_mesh((coord, sub as u8), &mut windex, &mut commands, &q_mesh, &mut meshes);
-                continue;
-            }
+        // Snapshots auf dem Main-Thread
+        let y0 = sub * SEC_H;
+        let y1 = (y0 + SEC_H).min(CY);
+        let borders = water_snapshot_borders(&chunk_map, &water, coord, y0, y1, fc.sea_level);
 
-            if let Some(mesh) = build_water_mesh_subchunk(coord, sub, &chunk_map, &water) {
-                despawn_water_mesh((coord, sub as u8), &mut windex, &mut commands, &q_mesh, &mut meshes);
+        let chunk_copy = chunk_map.chunks.get(&coord).cloned();
+        let Some(chunk_copy) = chunk_copy else {
+            let task = pool.spawn(async move { ((coord, sub), WaterMeshBuild{ pos:vec![], nor:vec![], uv0:vec![], idx:vec![] }) });
+            pending.0.insert((coord, sub), task);
+            continue;
+        };
+
+        let task = pool.spawn(async move {
+            build_water_mesh_subchunk_async(coord, sub, chunk_copy, fc, borders).await
+        });
+        pending.0.insert((coord, sub), task);
+    }
+}
+
+fn water_collect_meshed_subchunks(
+    mut commands: Commands,
+    mut pending: ResMut<PendingWaterMesh>,
+    mut windex: ResMut<WaterMeshIndex>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    q_mesh: Query<&Mesh3d>,
+    reg: Res<BlockRegistry>,
+) {
+    use bevy::tasks::futures_lite::future;
+    let water_mat = id_any(&reg, &["water_block", "water"]);
+    if water_mat == 0 { warn!("water_mat not found"); return; }
+
+    let mut done = Vec::new();
+    let mut applied = 0usize;
+
+    for (key, task) in pending.0.iter_mut() {
+        if applied >= MAX_WATER_APPLY_PER_FRAME { break; }
+
+        if let Some(((coord, sub), build)) = future::block_on(future::poll_once(task)) {
+            despawn_water_mesh((coord, sub as u8), &mut windex, &mut commands, &q_mesh, &mut meshes);
+
+            if !build.is_empty() {
+                let mesh = build.into_mesh();
 
                 let s = VOXEL_SIZE;
                 let origin = Vec3::new(
@@ -226,7 +322,6 @@ fn water_collect_and_apply_meshes(
                     (Y_MIN as f32) * s,
                     (coord.y * CZ as i32) as f32 * s,
                 );
-
                 let ent = commands
                     .spawn((
                         Mesh3d(meshes.add(mesh)),
@@ -238,19 +333,11 @@ fn water_collect_and_apply_meshes(
                     ))
                     .id();
                 windex.0.insert((coord, sub as u8), ent);
-            } else {
-                despawn_water_mesh((coord, sub as u8), &mut windex, &mut commands, &q_mesh, &mut meshes);
             }
+            applied += 1;
+            done.push(*key);
         }
     }
+
+    for k in done { pending.0.remove(&k); }
 }
-
-/*#[inline]
-fn enqueue_with_ring(q: &mut WaterGenQueue, seen: &mut WaterSeen, c: IVec2) {
-    if seen.known.insert(c) { q.work.push_back(c); }
-
-    for d in [IVec2::X, -IVec2::X, IVec2::Y, -IVec2::Y] {
-        let n = c + d;
-        q.work.push_back(n);
-    }
-}*/
