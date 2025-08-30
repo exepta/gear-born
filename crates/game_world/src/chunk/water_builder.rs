@@ -231,10 +231,8 @@ fn water_finish_check(
     let world_ok   = !chunk_map.chunks.is_empty();
 
     if boot.started && world_ok && gen_done && coverage_ok && mesh_done {
-        info!("Water gen complete");
+        debug!("Water gen complete");
         next.set(AppState::InGame(InGameStates::Game));
-    } else {
-        info!("Water waiting...");
     }
 }
 

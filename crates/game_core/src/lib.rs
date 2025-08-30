@@ -6,6 +6,7 @@ pub mod configuration;
 pub mod key_converter;
 pub mod world;
 pub mod player;
+pub mod load_state;
 
 use crate::configuration::{CrosshairConfig, WorldGenConfig};
 use crate::player::PlayerModule;
