@@ -111,19 +111,16 @@ fn water_gen_step(
     while done < WATER_GEN_BUDGET_PER_FRAME {
         let Some(coord) = q.work.pop_front() else { break; };
 
-        // Bereits erzeugt?
         if water.0.contains_key(&coord) {
             done += 1;
             continue;
         }
 
-        // Basis-Chunk nicht (mehr) vorhanden? Überspringen – er wird später erneut eingereiht.
         let Some(chunk) = chunk_map.chunks.get(&coord) else {
             done += 1;
             continue;
         };
 
-        // Laden oder erzeugen
         let wc = if let Some(wc) = load_water_chunk_sync(&ws, &mut cache, coord) {
             wc
         } else {
@@ -132,7 +129,6 @@ fn water_gen_step(
 
         water.0.insert(coord, wc);
 
-        // Für Meshing vormerken – inkl. Rand (Ring), damit Chunk-Grenzen sauber sind
         to_mesh.0.insert(coord);
         for d in [IVec2::X, -IVec2::X, IVec2::Y, -IVec2::Y] {
             to_mesh.0.insert(coord + d);
