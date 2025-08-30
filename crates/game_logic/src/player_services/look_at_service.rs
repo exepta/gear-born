@@ -1,6 +1,7 @@
 use bevy::prelude::*;
 use bevy::render::view::RenderLayers;
 use game_core::debug::SelectionGizmoGroup;
+use game_core::events::player_block_events::BlockBreakByPlayerEvent;
 use game_core::player::selection::{BlockHit, SelectionState};
 use game_core::states::{AppState, InGameStates};
 use game_core::world::block::{get_block_world, id_any, BlockId, BlockRegistry, Face, VOXEL_SIZE};
@@ -74,23 +75,52 @@ fn handle_break_and_place(
     reg: Res<BlockRegistry>,
     sel: Res<SelectionState>,
     mut ev_dirty: EventWriter<SubchunkDirty>,
+    mut block_break: EventWriter<BlockBreakByPlayerEvent>,
 ) {
     let Some(hit) = sel.hit else { return; };
 
     if buttons.just_pressed(MouseButton::Left) {
-        if let Some(mut access) = world_access_mut(&mut chunk_map, hit.block_pos) {
+        let wp = hit.block_pos;
+
+        let (chunk_coords, l_val) = world_to_chunk_xz(wp.x, wp.z);
+        let lx = l_val.x as u8;
+        let  lz = l_val.y as u8;
+        let ly = (wp.y - Y_MIN).clamp(0, CY as i32 - 1) as usize;
+
+        let mut broken_id = 0u16;
+        if let Some(mut access) = world_access_mut(&mut chunk_map, wp) {
+            broken_id = access.get();
             access.set(0);
         }
-        mark_dirty_block_and_neighbors(&mut chunk_map, hit.block_pos, &mut ev_dirty);
+
+        mark_dirty_block_and_neighbors(&mut chunk_map, wp, &mut ev_dirty);
+
+        let block_name = reg
+            .name_opt(broken_id)
+            .unwrap_or("")
+            .to_string();
+
+        block_break.write(BlockBreakByPlayerEvent {
+            chunk_coord: chunk_coords,
+            location: hit.block_pos,
+            chunk_x: lx,
+            chunk_y: ly as u16,
+            chunk_z: lz,
+            block_id: broken_id,
+            block_name,
+        });
     }
 
     if buttons.just_pressed(MouseButton::Right) {
+        let place = hit.place_pos;
         let stone = id_any(&reg, &["log_block","log"]);
         if stone != 0 {
-            if let Some(mut access) = world_access_mut(&mut chunk_map, hit.place_pos) {
-                if access.get() == 0 { access.set(stone); }
+            if let Some(mut access) = world_access_mut(&mut chunk_map, place) {
+                if access.get() == 0 {
+                    access.set(stone);
+                }
             }
-            mark_dirty_block_and_neighbors(&mut chunk_map, hit.place_pos, &mut ev_dirty);
+            mark_dirty_block_and_neighbors(&mut chunk_map, place, &mut ev_dirty);
         }
     }
 }

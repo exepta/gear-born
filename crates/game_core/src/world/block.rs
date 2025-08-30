@@ -55,6 +55,21 @@ pub struct BlockRegistry {
 }
 
 impl BlockRegistry {
+    
+    #[inline]
+    pub fn name(&self, id: BlockId) -> &str {
+        self.def(id).name.as_str()
+    }
+
+    #[inline]
+    pub fn name_opt(&self, id: BlockId) -> Option<&str> {
+        self.defs.get(id as usize).map(|d| d.name.as_str())
+    }
+
+    #[inline]
+    pub fn id_opt(&self, name: &str) -> Option<BlockId> {
+        self.name_to_id.get(name).copied()
+    }
 
     pub fn material(&self, id: BlockId) -> Handle<StandardMaterial> {
         self.def(id).material.clone()

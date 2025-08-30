@@ -4,9 +4,10 @@ use bevy::prelude::*;
 use bevy::tasks::AsyncComputeTaskPool;
 use futures_lite::future;
 use game_core::configuration::WorldGenConfig;
+use game_core::events::player_block_events::BlockBreakByPlayerEvent;
 use game_core::states::{AppState, InGameStates, LoadingStates};
 use game_core::world::block::{id_any, BlockRegistry, VOXEL_SIZE};
-use game_core::world::chunk::{ChunkMap, SubchunkDirty, WaterChunkUnload, BIG, MAX_UPDATE_FRAMES};
+use game_core::world::chunk::{ChunkData, ChunkMap, SubchunkDirty, WaterChunkUnload, BIG, MAX_UPDATE_FRAMES};
 use game_core::world::chunk_dim::*;
 use game_core::world::fluid::{FluidChunk, FluidMap, WaterMeshIndex};
 use game_core::world::save::{RegionCache, WorldSave};
@@ -70,6 +71,7 @@ impl Plugin for WaterBuilder {
             .add_systems(
                 Update,
                 (
+                    water_fill_on_block_removed,
                     water_mark_from_dirty,
                     water_track_new_chunks,
 
@@ -94,6 +96,79 @@ impl Plugin for WaterBuilder {
             );
     }
 }
+
+fn water_fill_on_block_removed(
+    mut ev: EventReader<BlockBreakByPlayerEvent>,
+    mut fluids: ResMut<FluidMap>,
+    chunks: Res<ChunkMap>,
+    mut todo: ResMut<WaterMeshingTodo>,
+) {
+    #[inline]
+    fn neighbor_lookup(coord: IVec2, lx: i32, lz: i32) -> (IVec2, i32, i32) {
+        let mut nx = lx;
+        let mut nz = lz;
+        let mut nc = coord;
+        if nx < 0 { nx += CX as i32; nc.x -= 1; }
+        if nx >= CX as i32 { nx -= CX as i32; nc.x += 1; }
+        if nz < 0 { nz += CZ as i32; nc.y -= 1; }
+        if nz >= CZ as i32 { nz -= CZ as i32; nc.y += 1; }
+        (nc, nx, nz)
+    }
+
+    #[inline]
+    fn solid_at(chunks: &ChunkMap, c: IVec2, x: i32, y: i32, z: i32) -> bool {
+        if x < 0 || y < 0 || z < 0 || x >= CX as i32 || y >= CY as i32 || z >= CZ as i32 {
+            return false;
+        }
+        chunks.chunks.get(&c)
+            .map_or(false, |ch| ch.get(x as usize, y as usize, z as usize) != 0)
+    }
+
+    for e in ev.read() {
+        let coord = e.chunk_coord;
+        let lx = e.chunk_x as i32;
+        let ly = e.chunk_y as i32;
+        let lz = e.chunk_z as i32;
+
+        let Some(ch) = chunks.chunks.get(&coord) else { continue; };
+        if ch.get(lx as usize, ly as usize, lz as usize) != 0 { continue; }
+
+        let (has_neighbor, neighbor_sea_level) = {
+            let mut sea_from_neighbor: Option<i32> = None;
+            let mut check = |dx: i32, dy: i32, dz: i32| -> bool {
+                let ny = ly + dy;
+                if ny < 0 || ny >= CY as i32 { return false; }
+
+                let (nc, nx, nz) = neighbor_lookup(coord, lx + dx, lz + dz);
+                if let Some(nfc) = fluids.0.get(&nc) {
+                    if sea_from_neighbor.is_none() { sea_from_neighbor = Some(nfc.sea_level); }
+                    let water = nfc.get(nx as usize, ny as usize, nz as usize);
+                    let solid = solid_at(&chunks, nc, nx, ny, nz);
+                    water && !solid
+                } else {
+                    false
+                }
+            };
+
+            let any = check( 1,0,0) || check(-1,0,0)
+                || check( 0,0,1) || check( 0,0,-1)
+                || check( 0,1,0) || check( 0,-1,0);
+
+            (any, sea_from_neighbor.unwrap_or(62))
+        };
+
+        if !has_neighbor { continue; }
+
+        let fc = fluids.0.entry(coord).or_insert_with(|| FluidChunk::new(neighbor_sea_level));
+        fc.set(lx as usize, ly as usize, lz as usize, true);
+
+        todo.0.insert(coord);
+        for d in [IVec2::X, -IVec2::X, IVec2::Y, -IVec2::Y] {
+            todo.0.insert(coord + d);
+        }
+    }
+}
+
 
 fn water_gen_build_worklist(
     mut q: ResMut<WaterGenQueue>,
@@ -186,7 +261,13 @@ fn collect_water_generation_jobs(
 
         if let Some((c, wc)) = future::block_on(future::poll_once(task)) {
             if chunk_map.chunks.contains_key(&c) {
-                water.0.insert(c, wc);
+                if let Some(chunk) = chunk_map.chunks.get(&c) {
+                    let mut wc2 = wc;
+                    clip_water_against_solids(&mut wc2, chunk);
+                    water.0.insert(c, wc2);
+                } else {
+                    water.0.insert(c, wc);
+                }
                 to_mesh.0.insert(c);
                 for d in [IVec2::X, -IVec2::X, IVec2::Y, -IVec2::Y] { to_mesh.0.insert(c + d); }
                 applied += 1;
@@ -371,4 +452,17 @@ fn water_collect_meshed_subchunks(
     }
 
     for k in done { pending.0.remove(&k); }
+}
+
+#[inline]
+fn clip_water_against_solids(fc: &mut FluidChunk, ch: &ChunkData) {
+    for y in 0..CY {
+        for z in 0..CZ {
+            for x in 0..CX {
+                if fc.get(x, y, z) && ch.get(x, y, z) != 0 {
+                    fc.set(x, y, z, false);
+                }
+            }
+        }
+    }
 }

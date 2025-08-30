@@ -7,10 +7,11 @@ use game_core::world::chunk::{ChunkData, ChunkMap};
 use game_core::world::chunk_dim::*;
 use game_core::world::fluid::{FluidChunk, FluidMap, WaterMeshIndex};
 use game_core::world::save::{container_find, container_upsert, slot_is_container, RegionCache, RegionFile, WorldSave, REGION_SIZE, TAG_WAT1};
+use lz4_flex::{compress_prepend_size, decompress_size_prepended};
 use std::path::PathBuf;
 
-const WATER_MAGIC: u32 = 0x3154_4157;
-const EMPTY_I16: i16 = i16::MIN;
+const WATER_MAGIC_V1: u32 = 0x3154_4157;
+const WATER_MAGIC_V2: u32 = 0x3254_4157;
 
 pub struct WaterMeshBuild {
     pub pos: Vec<[f32;3]>,
@@ -348,58 +349,62 @@ pub(crate) fn despawn_water_mesh(
 }
 
 fn encode_fluid_chunk(w: &FluidChunk) -> Vec<u8> {
-    let mut out = Vec::with_capacity(8 + CX*CZ*4);
-    out.extend_from_slice(&WATER_MAGIC.to_le_bytes());
-    out.extend_from_slice(&w.sea_level.to_le_bytes());
-
-    for z in 0..CZ {
-        for x in 0..CX {
-            let mut y0: i16 = EMPTY_I16;
-            let mut y1: i16 = EMPTY_I16;
-
-            for ly in 0..CY {
-                if w.get(x, ly, z) {
-                    y0 = (Y_MIN + ly as i32) as i16;
-                    break;
-                }
-            }
-            if y0 != EMPTY_I16 {
-                for ly in (0..CY).rev() {
-                    if w.get(x, ly, z) {
-                        y1 = (Y_MIN + ly as i32) as i16;
-                        break;
-                    }
-                }
-            }
-            out.extend_from_slice(&y0.to_le_bytes());
-            out.extend_from_slice(&y1.to_le_bytes());
-        }
+    // [magic V2][sea_level][u32 n_words][n_words * u64]
+    let n = w.bits.len() as u32;
+    let mut raw = Vec::with_capacity(12 + n as usize * 8);
+    raw.extend_from_slice(&WATER_MAGIC_V2.to_le_bytes());
+    raw.extend_from_slice(&w.sea_level.to_le_bytes());
+    raw.extend_from_slice(&n.to_le_bytes());
+    for &word in &w.bits {
+        raw.extend_from_slice(&word.to_le_bytes());
     }
-    out
+    compress_prepend_size(&raw)
 }
 
 fn decode_fluid_chunk(buf: &[u8]) -> Option<FluidChunk> {
-    if buf.len() < 8 { return None; }
-    let magic = u32::from_le_bytes(buf[0..4].try_into().ok()?);
-    if magic != WATER_MAGIC { return None; }
-    let sea_level = i32::from_le_bytes(buf[4..8].try_into().ok()?);
-
-    let expected = 8 + CX*CZ*4;
-    if buf.len() < expected { return None; }
-
-    let mut w = FluidChunk::new(sea_level);
-    let mut p = 8;
-
-    for z in 0..CZ {
-        for x in 0..CX {
-            let y0 = i16::from_le_bytes(buf[p..p+2].try_into().ok()?); p += 2;
-            let y1 = i16::from_le_bytes(buf[p..p+2].try_into().ok()?); p += 2;
-            if y0 != EMPTY_I16 && y1 != EMPTY_I16 {
-                w.fill_column(x, z, y0 as i32, y1 as i32);
+    if let Ok(de) = decompress_size_prepended(buf) {
+        if de.len() >= 12 {
+            let magic = u32::from_le_bytes(de[0..4].try_into().ok()?);
+            if magic == WATER_MAGIC_V2 {
+                let sea_level = i32::from_le_bytes(de[4..8].try_into().ok()?);
+                let n = u32::from_le_bytes(de[8..12].try_into().ok()?) as usize;
+                if de.len() >= 12 + n * 8 {
+                    let mut bits = vec![0u64; n];
+                    let mut p = 12;
+                    for i in 0..n {
+                        bits[i] = u64::from_le_bytes(de[p..p+8].try_into().ok()?);
+                        p += 8;
+                    }
+                    return Some(FluidChunk { sea_level, bits });
+                }
             }
         }
     }
-    Some(w)
+
+    // Legacy V1 (unkomprimiert): [magic][sea_level][(x,z)->y0,y1]  => rekonstruiere Bitmaske
+    if buf.len() >= 8 {
+        let magic = u32::from_le_bytes(buf[0..4].try_into().ok()?);
+        if magic == WATER_MAGIC_V1 {
+            let sea_level = i32::from_le_bytes(buf[4..8].try_into().ok()?);
+            let expected = 8 + CX*CZ*4;
+            if buf.len() >= expected {
+                let mut w = FluidChunk::new(sea_level);
+                let mut p = 8;
+                for z in 0..CZ {
+                    for x in 0..CX {
+                        let y0 = i16::from_le_bytes(buf[p..p+2].try_into().ok()?); p += 2;
+                        let y1 = i16::from_le_bytes(buf[p..p+2].try_into().ok()?); p += 2;
+                        if y0 != i16::MIN && y1 != i16::MIN {
+                            w.fill_column(x, z, y0 as i32, y1 as i32);
+                        }
+                    }
+                }
+                return Some(w);
+            }
+        }
+    }
+
+    None
 }
 
 #[inline] fn div_floor(a: i32, b: i32) -> i32 { (a as f32 / b as f32).floor() as i32 }

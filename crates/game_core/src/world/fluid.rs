@@ -11,7 +11,7 @@ pub struct WaterMeshIndex(pub HashMap<(IVec2, u8), Entity>);
 #[derive(Clone)]
 pub struct FluidChunk {
     pub sea_level: i32,
-    bits: Vec<u64>,
+    pub bits: Vec<u64>,
 }
 
 impl FluidChunk {
