@@ -3,6 +3,7 @@ use bevy::prelude::*;
 use bevy::render::mesh::MeshVertexBufferLayoutRef;
 use bevy::render::render_resource::{AsBindGroup, BlendState, RenderPipelineDescriptor, ShaderRef, ShaderType, SpecializedMeshPipelineError};
 
+#[allow(dead_code)]
 #[derive(Clone, Copy, Default, ShaderType, Debug)]
 pub struct WaterParams {
     pub uv_rect: Vec4,

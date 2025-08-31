@@ -40,11 +40,6 @@ fn make_water_material_for_atlas_tile(
 ) -> Handle<WaterMaterial> {
     let rect = reg.uv(water_id, Face::Top);
 
-    let speed_u = 0.06;
-    let speed_v = 0.03;
-    let wave_amp = 0.05 * VOXEL_SIZE;
-    let wave_freq = 0.8;
-
     let params = WaterParams {
         uv_rect: Vec4::new(rect.u0, rect.v0, rect.u1, rect.v1),
         flow:    Vec4::new(0.06, 0.03, 0.05 * VOXEL_SIZE, 0.8),
