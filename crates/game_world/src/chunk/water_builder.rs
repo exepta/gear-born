@@ -107,13 +107,16 @@ impl Plugin for WaterBuilder {
                             .or(in_state(AppState::InGame(InGameStates::Game)))
                     ),
             );
+
+        app.add_systems(Last, save_all_water_on_exit
+            .run_if(on_event::<AppExit>)
+            );
     }
 }
 
-async fn flow_task_run(snapshot: SolidSnapshot, mut job: FlowJob) -> FlowResult {
+async fn flow_task_run(solid_snap: SolidSnapshot, water_snap: WaterSnap, mut job: FlowJob) -> FlowResult {
     use std::collections::{HashSet, VecDeque};
     let mut res = FlowResult::default();
-
     let mut q: VecDeque<Seed> = VecDeque::new();
     let mut seen: HashSet<(IVec2,i32,i32,i32)> = HashSet::new();
 
@@ -124,11 +127,15 @@ async fn flow_task_run(snapshot: SolidSnapshot, mut job: FlowJob) -> FlowResult 
     let mut filled_count = 0usize;
 
     while let Some(cur) = q.pop_front() {
-        let solid = match snap_is_solid(&snapshot, cur.c, cur.x, cur.y, cur.z) {
+        let solid = match snap_is_solid(&solid_snap, cur.c, cur.x, cur.y, cur.z) {
             Some(b) => b,
             None => { res.spill.push(cur); continue; }
         };
         if solid { continue; }
+
+        if let Some(true) = snap_has_water(&water_snap, cur.c, cur.x, cur.y, cur.z) {
+            continue;
+        }
 
         res.filled.push(cur);
         filled_count += 1;
@@ -139,28 +146,23 @@ async fn flow_task_run(snapshot: SolidSnapshot, mut job: FlowJob) -> FlowResult 
 
         let mut push = |c: IVec2, x:i32,y:i32,z:i32| {
             if y < 0 || y >= CY as i32 { return; }
+            if let Some(true) = snap_has_water(&water_snap, c, x, y, z) { return; }
             let k = (c,x,y,z);
             if seen.insert(k) {
-                if in_snapshot(&snapshot, c) { q.push_back(Seed{ c, x, y, z }); }
+                if in_snapshot(&solid_snap, c) { q.push_back(Seed{ c, x, y, z }); }
                 else { res.spill.push(Seed{ c, x, y, z }); }
             }
         };
 
         push(cur.c, cur.x, cur.y - 1, cur.z);
-
-        let (c1,x1,z1) = neighbor_lookup_chunked(cur.c, cur.x+1, cur.z);
-        push(c1, x1, cur.y, z1);
-        let (c2,x2,z2) = neighbor_lookup_chunked(cur.c, cur.x-1, cur.z);
-        push(c2, x2, cur.y, z2);
-        let (c3,x3,z3) = neighbor_lookup_chunked(cur.c, cur.x, cur.z+1);
-        push(c3, x3, cur.y, z3);
-        let (c4,x4,z4) = neighbor_lookup_chunked(cur.c, cur.x, cur.z-1);
-        push(c4, x4, cur.y, z4);
+        let (c1,x1,z1) = neighbor_lookup_chunked(cur.c, cur.x+1, cur.z); push(c1, x1, cur.y, z1);
+        let (c2,x2,z2) = neighbor_lookup_chunked(cur.c, cur.x-1, cur.z); push(c2, x2, cur.y, z2);
+        let (c3,x3,z3) = neighbor_lookup_chunked(cur.c, cur.x, cur.z+1); push(c3, x3, cur.y, z3);
+        let (c4,x4,z4) = neighbor_lookup_chunked(cur.c, cur.x, cur.z-1); push(c4, x4, cur.y, z4);
     }
 
     res
 }
-
 fn enqueue_flow_on_block_removed(
     mut ev: EventReader<BlockBreakByPlayerEvent>,
     fluids: Res<FluidMap>,
@@ -175,7 +177,8 @@ fn enqueue_flow_on_block_removed(
 
         let mut sea_level = None;
         let mut has_water = false;
-        for (dx,dy,dz) in [(1,0,0),(-1,0,0),(0,0,1),(0,0,-1),(0,-1,0)] {
+
+        for (dx,dy,dz) in [(1,0,0),(-1,0,0),(0,0,1),(0,0,-1),(0,-1,0),(0,1,0)] {
             let lx = e.chunk_x as i32 + dx;
             let ly = e.chunk_y as i32 + dy;
             let lz = e.chunk_z as i32 + dz;
@@ -204,6 +207,7 @@ fn schedule_flow_jobs(
     mut pending: ResMut<PendingWaterFlow>,
     mut ids: ResMut<WaterFlowIds>,
     chunks: Res<ChunkMap>,
+    fluids: Res<FluidMap>,
 ) {
     if queue.0.is_empty() { return; }
     let pool = AsyncComputeTaskPool::get();
@@ -216,10 +220,11 @@ fn schedule_flow_jobs(
         let Some(job) = queue.0.pop_front() else { break; };
         let anchor = job.seeds.get(0).map(|s| s.c).unwrap_or(IVec2::ZERO);
         let snapshot = build_solid_snapshot_3x3(&chunks, anchor);
+        let water_snap = build_water_snapshot_3x3(&fluids, anchor);
 
         let id = ids.next();
         let task = pool.spawn(async move {
-            let res = flow_task_run(snapshot, job).await;
+            let res = flow_task_run(snapshot, water_snap, job).await;
             (id, res)
         });
         pending.0.insert(id, task);
@@ -230,7 +235,7 @@ fn schedule_flow_jobs(
 fn collect_flow_jobs(
     mut pending: ResMut<PendingWaterFlow>,
     mut fluids: ResMut<FluidMap>,
-    mut todo: ResMut<WaterMeshingTodo>,
+    mut backlog: ResMut<WaterMeshBacklog>,
     mut queue: ResMut<WaterFlowQueue>,
     chunks: Res<ChunkMap>,
 ) {
@@ -243,10 +248,11 @@ fn collect_flow_jobs(
 
             for s in res.filled {
                 let fc = fluids.0.entry(s.c).or_insert_with(|| FluidChunk::new(62));
+
                 if !fc.get(s.x as usize, s.y as usize, s.z as usize) {
                     fc.set(s.x as usize, s.y as usize, s.z as usize, true);
-                    todo.0.insert(s.c);
-                    for d in [IVec2::X, -IVec2::X, IVec2::Y, -IVec2::Y] { todo.0.insert(s.c + d); }
+
+                    enqueue_mesh_for_cell(&mut backlog, s.c, s.x, s.y, s.z);
                 }
             }
 
@@ -266,6 +272,27 @@ fn collect_flow_jobs(
         }
     }
     for id in done_ids { pending.0.remove(&id); }
+}
+
+#[inline]
+fn enqueue_mesh_for_cell(backlog: &mut WaterMeshBacklog, c: IVec2, x: i32, y: i32, z: i32) {
+    let clamp = |v: i32, lo: i32, hi: i32| v.max(lo).min(hi);
+    let y = clamp(y, 0, (CY as i32) - 1);
+    let sub = (y as usize) / SEC_H;
+
+    let mut push = |cc: IVec2, ss: usize| {
+        let key = (cc, ss);
+        if !backlog.0.iter().any(|k| *k == key) {
+            backlog.0.push_back(key);
+        }
+    };
+
+    push(c, sub);
+
+    if x == 0               { push(c - IVec2::X, sub); }
+    if x == (CX as i32 - 1) { push(c + IVec2::X, sub); }
+    if z == 0               { push(c - IVec2::Y, sub); }
+    if z == (CZ as i32 - 1) { push(c + IVec2::Y, sub); }
 }
 
 
@@ -447,6 +474,22 @@ fn water_unload_on_event(
         }
 
         if let Some(q) = q.as_mut()     { q.work.retain(|c| *c != coord); }
+    }
+}
+
+fn save_all_water_on_exit(
+    ws: Res<WorldSave>,
+    mut cache: ResMut<RegionCache>,
+    chunks: Res<ChunkMap>,
+    water: Res<FluidMap>,
+) {
+    debug!("Exit: Saving all water");
+    for (&coord, fc) in water.0.iter() {
+        let mut w = fc.clone();
+        if let Some(ch) = chunks.chunks.get(&coord) {
+            water_mask_with_solids(&mut w, ch);
+        }
+        save_water_chunk_sync(&ws, &mut cache, coord, &w);
     }
 }
 

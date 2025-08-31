@@ -47,6 +47,8 @@ pub struct BlockStats {
     #[serde(default = "d_true")]
     pub opaque: bool,
     #[serde(default)]
+    pub fluid: bool,
+    #[serde(default)]
     pub emissive: f32,
 }
 
@@ -187,7 +189,8 @@ pub enum Blocks {
     Stone,
     Log,
     Sand,
-    Water
+    Water,
+    Glass
 }
 
 impl Blocks {
@@ -199,6 +202,7 @@ impl Blocks {
             Blocks::Log   => "log_block",
             Blocks::Sand  => "sand_block",
             Blocks::Water => "water_block",
+            Blocks::Glass => "glass_block",
         }
     }
 }

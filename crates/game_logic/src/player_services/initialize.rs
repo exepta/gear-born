@@ -1,4 +1,5 @@
 use bevy::core_pipeline::fxaa::{Fxaa, Sensitivity};
+use bevy::core_pipeline::prepass::DepthPrepass;
 use bevy::input::mouse::MouseMotion;
 use bevy::pbr::CascadeShadowConfigBuilder;
 use bevy::prelude::*;
@@ -66,16 +67,17 @@ fn spawn_scene(mut commands: Commands) {
 }
 
 fn spawn_player(mut commands: Commands, game_config: Res<GameConfig>) {
-    let fog_color = Color::srgb(0.62, 0.72, 0.85);
-    let fog_start = game_config.graphics.chunk_range as f32 * 50.0;
-    let fog_end   = fog_start + 20.0;
-    let clip_pad  = 0.25;
-    let far_clip  = fog_end - clip_pad;
-
     let fov_deg: f32 = 80.0;
 
-    let capsule_radius = 0.4;
-    let capsule_half_height = 0.8;
+    const EYE_HEIGHT: f32 = 1.05;
+    const RADIUS: f32     = 0.30;
+    const HEADROOM: f32   = 0.10;
+    let half_h = (EYE_HEIGHT + HEADROOM - RADIUS).max(0.60);
+
+    const SKIN: f32          = 0.08;
+    const STEP_MAX: f32      = 0.55;
+    const STEP_MIN_WIDTH: f32= 2.0 * RADIUS + 0.04;
+    const SNAP: f32          = 0.08;
 
     let player = commands
         .spawn((
@@ -85,26 +87,25 @@ fn spawn_player(mut commands: Commands, game_config: Res<GameConfig>) {
             GlobalTransform::default(),
 
             RigidBody::KinematicPositionBased,
-            Collider::capsule_y(capsule_half_height, capsule_radius),
+            Collider::capsule_y(half_h, RADIUS),
             LockedAxes::ROTATION_LOCKED,
+
             KinematicCharacterController {
-                offset: CharacterLength::Absolute(0.02),
+                offset: CharacterLength::Absolute(SKIN),
                 slide: true,
                 autostep: Some(CharacterAutostep {
-                    max_height: CharacterLength::Absolute(0.5),
-                    min_width: CharacterLength::Absolute(0.2),
+                    max_height: CharacterLength::Absolute(STEP_MAX),
+                    min_width:  CharacterLength::Absolute(STEP_MIN_WIDTH),
                     include_dynamic_bodies: false,
                 }),
-                snap_to_ground: Some(CharacterLength::Absolute(0.1)),
+                snap_to_ground: Some(CharacterLength::Absolute(SNAP)),
+                max_slope_climb_angle: 50.0_f32.to_radians(),
+                min_slope_slide_angle: 60.0_f32.to_radians(),
+                up: Vec3::Y,
                 ..default()
             },
 
-            FpsController {
-                yaw: 0.0,
-                pitch: 0.0,
-                speed: 10.0,
-                sensitivity: 0.001,
-            },
+            FpsController { yaw: 0.0, pitch: 0.0, speed: 8.0, sensitivity: 0.001 },
             PlayerKinematics { vel_y: 0.0 },
             FlightState { flying: false },
         ))
@@ -115,10 +116,11 @@ fn spawn_player(mut commands: Commands, game_config: Res<GameConfig>) {
             PlayerCamera,
             RenderLayers::from_layers(&[0, 1, 2]),
             Camera3d::default(),
+            DepthPrepass,
             Projection::Perspective(PerspectiveProjection {
                 fov: fov_deg.to_radians(),
                 near: 0.05,
-                far:  far_clip.max(1.0),
+                far:  (game_config.graphics.chunk_range as f32 * 50.0 + 20.0 - 0.25).max(1.0),
                 ..default()
             }),
             Fxaa {
@@ -126,16 +128,16 @@ fn spawn_player(mut commands: Commands, game_config: Res<GameConfig>) {
                 edge_threshold: Sensitivity::Extreme,
                 edge_threshold_min: Sensitivity::Extreme,
             },
-            Camera {
-                clear_color: ClearColorConfig::Custom(fog_color),
-                ..default()
-            },
+            Camera { clear_color: ClearColorConfig::Custom(Color::srgb(0.62, 0.72, 0.85)), ..default() },
             DistanceFog {
-                color: fog_color,
-                falloff: FogFalloff::Linear { start: fog_start, end: fog_end },
+                color: Color::srgb(0.62, 0.72, 0.85),
+                falloff: FogFalloff::Linear {
+                    start: game_config.graphics.chunk_range as f32 * 50.0,
+                    end:   game_config.graphics.chunk_range as f32 * 50.0 + 20.0
+                },
                 ..default()
             },
-            Transform::from_xyz(0.0, 1.5, 0.0),
+            Transform::from_xyz(0.0, EYE_HEIGHT, 0.0),
             GlobalTransform::default(),
             Name::new("PlayerCamera"),
         ));

@@ -11,7 +11,7 @@ use lz4_flex::{compress_prepend_size, decompress_size_prepended};
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-pub const MAX_INFLIGHT_MESH: usize = 64;
+pub const MAX_INFLIGHT_MESH: usize = 32;
 pub const MAX_INFLIGHT_GEN:  usize = 32;
 
 pub async fn generate_chunk_async_noise(
@@ -630,4 +630,15 @@ pub fn is_waiting(state: &State<AppState>) -> bool {
     matches!(state.get(),
         AppState::Loading(LoadingStates::BaseGen)
     )
+}
+
+#[inline]
+pub(crate) fn neighbors_ready(chunk_map: &ChunkMap, c: IVec2) -> bool {
+    let n = [
+        IVec2::new(c.x + 1, c.y),
+        IVec2::new(c.x - 1, c.y),
+        IVec2::new(c.x, c.y + 1),
+        IVec2::new(c.x, c.y - 1),
+    ];
+    n.into_iter().all(|nc| chunk_map.chunks.contains_key(&nc))
 }

@@ -1,9 +1,12 @@
 // shaders/water.wgsl
 
 #import bevy_pbr::mesh_view_bindings
-#import bevy_pbr::mesh_bindings
-#import bevy_pbr::mesh_functions
-#import bevy_pbr::view_transformations::position_world_to_clip
+#import bevy_pbr::prepass_utils::prepass_depth
+#import bevy_pbr::view_transformations::{
+  position_world_to_clip,
+  ndc_to_frag_coord,
+  depth_ndc_to_view_z,
+}
 
 struct VOut {
   @builtin(position) clip: vec4<f32>,
@@ -19,7 +22,7 @@ struct VertexInput {
   @builtin(instance_index) instance_index: u32,
 };
 
-// ► MATERIAL ist group(2), NICHT group(1)!
+// ► MATERIAL ist group(2)
 struct WaterParams {
   uv_rect: vec4<f32>,
   flow:    vec4<f32>,
@@ -50,20 +53,22 @@ fn remap_uv_scroll(uv_in: vec2<f32>, normal_ws: vec3<f32>) -> vec2<f32> {
 @vertex
 fn vertex(v: VertexInput) -> VOut {
   var out: VOut;
-
   let world_from_local = bevy_pbr::mesh_functions::get_world_from_local(v.instance_index);
   let world_pos4       = world_from_local * vec4<f32>(v.position, 1.0);
   let n_ws             = bevy_pbr::mesh_functions::mesh_normal_local_to_world(v.normal, v.instance_index);
 
   var pos_world = world_pos4.xyz;
 
-  if (n_ws.y > 0.99) {
-    let amp  = params.flow.z;
-    let freq = params.flow.w;
-    let t    = params.t_misc.x;
-    let w = sin(pos_world.x * freq + t * 1.3)
-          + 0.6 * sin(pos_world.z * (freq * 1.12) + t * 0.9);
-    pos_world.y = pos_world.y + w * amp;
+  let amp  = params.flow.z;
+  let freq = params.flow.w;
+  let t    = params.t_misc.x;
+  let wave = ( sin(pos_world.x * freq + t * 1.3)
+             + 0.6 * sin(pos_world.z * (freq * 1.12) + t * 0.9) ) * amp;
+
+  // Boden bleibt ruhig
+  let is_bottom = n_ws.y < -0.95;
+  if (!is_bottom) {
+    pos_world.y = pos_world.y + wave;
   }
 
   out.world_pos = pos_world;
@@ -75,31 +80,59 @@ fn vertex(v: VertexInput) -> VOut {
 
 @fragment
 fn fragment(in: VOut) -> @location(0) vec4<f32> {
-  let view = bevy_pbr::mesh_view_bindings::view;
+  let view    = bevy_pbr::mesh_view_bindings::view;
+  let cam_pos = (view.world_from_view * vec4<f32>(0.0,0.0,0.0,1.0)).xyz;
+  let V       = normalize(cam_pos - in.world_pos);
+  let N       = normalize(in.normal_ws);
 
+  // --- Seiten von innen unsichtbar machen ---
+  let is_side     = abs(N.y) < 0.4;
+  let from_inside = dot(N, V) < 0.0;
+  let camera_below_side = cam_pos.y < in.world_pos.y;
+
+  if (is_side && (from_inside || camera_below_side)) {
+    discard;
+  }
+
+  // --- UV / Textur ---
   let uv  = remap_uv_scroll(in.uv, in.normal_ws);
   let tex = textureSample(atlas_tex, atlas_smp, uv);
 
-  // Basis + leichtes Fresnel
-  let cam_pos = (view.world_from_view * vec4<f32>(0.0,0.0,0.0,1.0)).xyz;
-  let V = normalize(cam_pos - in.world_pos);
-  let N = normalize(in.normal_ws);
+  // --- Fresnel ---
   let fres = pow(1.0 - clamp(dot(N, V), 0.0, 1.0), 3.0);
 
+  // --- Depth Fade (Bodenkontakt) ---
+  var contact: f32 = 0.0;
+  #ifdef DEPTH_PREPASS
+    let clip    = position_world_to_clip(in.world_pos);
+    let ndc     = clip.xyz / clip.w;
+    let frag_xy = ndc_to_frag_coord(ndc.xy);
+
+    let scene_ndc   = prepass_depth(vec4<f32>(frag_xy, 0.0, 0.0), 0u);
+    let scene_viewz = depth_ndc_to_view_z(scene_ndc);
+    let my_viewz    = depth_ndc_to_view_z(ndc.z);
+    let dist_view   = abs(scene_viewz - my_viewz);
+
+    let fade    = max(params.t_misc.w, 0.01);        // Meter
+    contact     = 1.0 - smoothstep(0.0, fade, dist_view);
+  #endif
+
+  // --- Lighting ---
   let base_rgb = tex.rgb * params.tint.rgb;
   let fres_rgb = mix(base_rgb * 0.90, base_rgb * 1.10, fres);
 
-  // --- einfacher Specular-Glanz (Fake-Sonne)
-  let L        = normalize(vec3<f32>(0.35, 1.0, 0.2));     // Richtung „Sonne“
-  let H        = normalize(L + V);
-  let spec_p   = max(params.t_misc.z, 1.0);                 // Shininess
-  let spec_i   = params.t_misc.y;                           // Intensität
-  let spec     = pow(max(dot(N, H), 0.0), spec_p) * spec_i;
+  let L      = normalize(vec3<f32>(0.35, 1.0, 0.2));
+  let H      = normalize(L + V);
+  let spec_p = max(params.t_misc.z, 1.0);
+  let spec_i = params.t_misc.y;
+  let spec   = pow(max(dot(N, H), 0.0), spec_p) * spec_i;
 
-  // Premultiplied-Ausgabe: RGB bereits mit A multiplizieren
-  let a          = params.tint.a;
-  let rgb_lit    = fres_rgb + vec3<f32>(spec);
-  let rgb_premul = rgb_lit * a;
+  // Kontakt dunkler & minimal dichter
+  let contact_dark = mix(1.0, 0.82, contact);
+  let a_base       = params.tint.a;
+  let a_final      = clamp(a_base + contact * 0.12, 0.0, 1.0);
 
-  return vec4<f32>(rgb_premul, a);
+  let rgb_lit    = (fres_rgb * contact_dark) + vec3<f32>(spec);
+  let rgb_premul = rgb_lit * a_final; // premultiplied
+  return vec4<f32>(rgb_premul, a_final);
 }

@@ -3,8 +3,8 @@ use bevy::prelude::*;
 use std::collections::HashMap;
 
 pub const WATER_FLOW_CAP: usize = 6;
-pub const WATER_FLOW_MAX_INFLIGHT: usize = 32;
-pub const WATER_FLOW_BUDGET_PER_FRAME: usize = 32;
+pub const WATER_FLOW_MAX_INFLIGHT: usize = 16;
+pub const WATER_FLOW_BUDGET_PER_FRAME: usize = 12;
 
 #[derive(Resource, Default)]
 pub struct FluidMap(pub HashMap<IVec2, FluidChunk>);

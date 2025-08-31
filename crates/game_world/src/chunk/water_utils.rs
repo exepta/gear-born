@@ -6,7 +6,7 @@ use game_core::world::block::VOXEL_SIZE;
 use game_core::world::chunk::{ChunkData, ChunkMap};
 use game_core::world::chunk_dim::*;
 use game_core::world::fluid::{FluidChunk, FluidMap, SolidSnapshot, WaterMeshIndex};
-use game_core::world::save::{container_find, container_upsert, slot_is_container, RegionCache, RegionFile, WorldSave, REGION_SIZE, TAG_WAT1};
+use game_core::world::save::{container_find, container_upsert, slot_is_container, unpack_slot_bytes, RegionCache, RegionFile, WorldSave, REGION_SIZE, TAG_WAT1};
 use lz4_flex::{compress_prepend_size, decompress_size_prepended};
 use std::collections::HashMap;
 
@@ -32,6 +32,9 @@ impl WaterMeshBuild {
         m
     }
 }
+
+#[derive(Clone)]
+pub struct WaterSnap { bits: HashMap<IVec2, Vec<u8>> }
 
 #[derive(Clone)]
 pub(crate) struct WaterBorderSnapshot {
@@ -160,6 +163,7 @@ pub async fn build_water_mesh_subchunk_async(
     let s = VOXEL_SIZE;
     let hh = 0.5 * s;
     let eps = 0.01 * s;
+    let skirt_h = 0.20 * s;
 
     let y0 = borders.y0;
     let y1 = borders.y1;
@@ -174,13 +178,6 @@ pub async fn build_water_mesh_subchunk_async(
     let west_at  = |y: usize, z: usize| sample_opt(&borders.west,  y, z, CZ);
     let south_at = |y: usize, x: usize| sample_opt(&borders.south, y, x, CX);
     let north_at = |y: usize, x: usize| sample_opt(&borders.north, y, x, CX);
-
-    let solid_local = |lx: i32, ly: i32, lz: i32| -> bool {
-        if lx < 0 || lx >= CX as i32 || lz < 0 || lz >= CZ as i32 || ly < 0 || ly >= CY as i32 {
-            return false;
-        }
-        chunk.get(lx as usize, ly as usize, lz as usize) != 0
-    };
 
     let water_at = |lx: i32, ly: i32, lz: i32| -> bool {
         if ly < 0 || ly >= CY as i32 { return false; }
@@ -212,64 +209,81 @@ pub async fn build_water_mesh_subchunk_async(
                 let cz = (z as f32 + 0.5) * s;
 
                 let wa = |dx: i32, dy: i32, dz: i32| water_at(x as i32 + dx, ly as i32 + dy, z as i32 + dz);
-                let sa = |dx: i32, dy: i32, dz: i32| solid_local(x as i32 + dx, ly as i32 + dy, z as i32 + dz);
+                let sa = |dx: i32, dy: i32, dz: i32| {
+                    if x as i32 + dx < 0 || x as i32 + dx >= CX as i32 ||
+                        z as i32 + dz < 0 || z as i32 + dz >= CZ as i32 ||
+                        ly as i32 + dy < 0 || ly as i32 + dy >= CY as i32 {
+                        false
+                    } else {
+                        chunk.get((x as i32 + dx) as usize, (ly as i32 + dy) as usize, (z as i32 + dz) as usize) != 0
+                    }
+                };
 
-                // +X
-                if !wa(1, 0, 0) {
-                    emit_quad_build(
-                        &mut build,
-                        [cx + hh, cy + hh, cz - hh], // a
-                        [cx + hh, cy + hh, cz + hh], // b
-                        [cx + hh, cy - hh, cz + hh], // c
-                        [cx + hh, cy - hh, cz - hh], // d
-                        [1.0, 0.0, 0.0],
-                    );
+                let surface_here = !wa(0, 1, 0) && !sa(0, 1, 0);
+
+                if surface_here {
+                    let y_top = cy + hh;
+                    let y_bot = y_top - skirt_h;
+
+                    // +X
+                    if !wa(1, 0, 0) {
+                        let x_face = cx + hh - eps;
+                        emit_quad_build(&mut build,
+                                        [x_face, y_top, cz - hh],
+                                        [x_face, y_top, cz + hh],
+                                        [x_face, y_bot, cz + hh],
+                                        [x_face, y_bot, cz - hh],
+                                        [1.0, 0.0, 0.0],
+                        );
+                    }
+                    // -X
+                    if !wa(-1, 0, 0) {
+                        let x_face = cx - hh + eps;
+                        emit_quad_build(&mut build,
+                                        [x_face, y_top, cz + hh],
+                                        [x_face, y_top, cz - hh],
+                                        [x_face, y_bot, cz - hh],
+                                        [x_face, y_bot, cz + hh],
+                                        [-1.0, 0.0, 0.0],
+                        );
+                    }
+                    // +Z
+                    if !wa(0, 0, 1) {
+                        let z_face = cz + hh - eps;
+                        emit_quad_build(&mut build,
+                                        [cx - hh, y_bot, z_face],
+                                        [cx + hh, y_bot, z_face],
+                                        [cx + hh, y_top, z_face],
+                                        [cx - hh, y_top, z_face],
+                                        [0.0, 0.0, 1.0],
+                        );
+                    }
+                    // -Z
+                    if !wa(0, 0, -1) {
+                        let z_face = cz - hh + eps;
+                        emit_quad_build(&mut build,
+                                        [cx + hh, y_bot, z_face],
+                                        [cx - hh, y_bot, z_face],
+                                        [cx - hh, y_top, z_face],
+                                        [cx + hh, y_top, z_face],
+                                        [0.0, 0.0, -1.0],
+                        );
+                    }
                 }
-                // -X
-                if !wa(-1, 0, 0) {
-                    emit_quad_build(
-                        &mut build,
-                        [cx - hh, cy + hh, cz + hh],
-                        [cx - hh, cy + hh, cz - hh],
-                        [cx - hh, cy - hh, cz - hh],
-                        [cx - hh, cy - hh, cz + hh],
-                        [-1.0, 0.0, 0.0],
-                    );
-                }
-                // +Z
-                if !wa(0, 0, 1) {
-                    emit_quad_build(
-                        &mut build,
-                        [cx - hh, cy - hh, cz + hh],
-                        [cx + hh, cy - hh, cz + hh],
-                        [cx + hh, cy + hh, cz + hh],
-                        [cx - hh, cy + hh, cz + hh],
-                        [0.0, 0.0, 1.0],
-                    );
-                }
-                // -Z
-                if !wa(0, 0, -1) {
-                    emit_quad_build(
-                        &mut build,
-                        [cx + hh, cy - hh, cz - hh],
-                        [cx - hh, cy - hh, cz - hh],
-                        [cx - hh, cy + hh, cz - hh],
-                        [cx + hh, cy + hh, cz - hh],
-                        [0.0, 0.0, -1.0],
-                    );
-                }
-                // +Y (Top)
+
+                // ► TOP
                 if !wa(0, 1, 0) && !sa(0, 1, 0) {
                     emit_quad_build(
                         &mut build,
-                        [cx - hh, cy + hh + eps, cz + hh],
-                        [cx + hh, cy + hh + eps, cz + hh],
-                        [cx + hh, cy + hh + eps, cz - hh],
-                        [cx - hh, cy + hh + eps, cz - hh],
+                        [cx - hh, cy + hh, cz + hh],
+                        [cx + hh, cy + hh, cz + hh],
+                        [cx + hh, cy + hh, cz - hh],
+                        [cx - hh, cy + hh, cz - hh],
                         [0.0, 1.0, 0.0],
                     );
                 }
-                // -Y (Bottom)
+
+                // ► BOTTOM
                 if !wa(0, -1, 0) && !sa(0, -1, 0) {
                     emit_quad_build(
                         &mut build,
@@ -346,9 +360,18 @@ pub fn load_water_chunk_from_disk_any(ws_root: std::path::PathBuf, coord: IVec2)
     let path = ws_root.join("region").join(format!("r.{}.{}.region", r_coord.x, r_coord.y));
     if let Ok(mut rf) = RegionFile::open(&path) {
         if let Ok(Some(buf)) = rf.read_chunk(coord) {
+            // 1) SLOT-Container-Format
             if slot_is_container(&buf) {
                 if let Some(rec) = container_find(&buf, TAG_WAT1) {
                     return decode_fluid_chunk_with_version(rec);
+                }
+            } else {
+                // 2) GBW1-Format
+                let (_, w_bytes) = unpack_slot_bytes(&buf);
+                if let Some(w) = w_bytes {
+                    if let Some(res) = decode_fluid_chunk_with_version(w) {
+                        return Some(res);
+                    }
                 }
             }
         }
@@ -505,4 +528,34 @@ pub(crate) fn water_meshing_ready(coord: IVec2, water: &FluidMap, chunks: &Chunk
         }
     }
     true
+}
+
+pub(crate) fn build_water_snapshot_3x3(fluids: &FluidMap, center: IVec2) -> WaterSnap {
+    let mut bits = HashMap::new();
+    for dz in -1..=1 {
+        for dx in -1..=1 {
+            let c = IVec2::new(center.x + dx, center.y + dz);
+            let mut v = vec![0u8; CX*CY*CZ];
+            if let Some(fc) = fluids.0.get(&c) {
+                for y in 0..CY {
+                    for z in 0..CZ {
+                        for x in 0..CX {
+                            let i = (y * CZ + z) * CX + x;
+                            v[i] = if fc.get(x, y, z) { 1 } else { 0 };
+                        }
+                    }
+                }
+            }
+            bits.insert(c, v);
+        }
+    }
+    WaterSnap { bits }
+}
+
+#[inline]
+pub(crate) fn snap_has_water(s: &WaterSnap, c: IVec2, x: i32, y: i32, z: i32) -> Option<bool> {
+    if y < 0 || y >= CY as i32 || x < 0 || x >= CX as i32 || z < 0 || z >= CZ as i32 { return Some(false); }
+    let v = s.bits.get(&c)?;
+    let i = ((y as usize) * CZ + (z as usize)) * CX + (x as usize);
+    Some(v[i] != 0)
 }
