@@ -47,6 +47,8 @@ pub struct BlockStats {
     #[serde(default = "d_true")]
     pub opaque: bool,
     #[serde(default)]
+    pub fluid: bool,
+    #[serde(default)]
     pub emissive: f32,
 }
 

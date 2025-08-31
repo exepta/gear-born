@@ -116,7 +116,7 @@ fn handle_break_and_place(
 
     if buttons.just_pressed(MouseButton::Right) {
         let place = hit.place_pos;
-        let id = id_any(&reg, &["glass_block","glass"]);
+        let id = id_any(&reg, &["dirt_block","dirt"]);
         if id != 0 {
             let name = reg.name_opt(id).unwrap_or("").to_string();
             block_place.write(BlockPlaceByPlayerEvent {
