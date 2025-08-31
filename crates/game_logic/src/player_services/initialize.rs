@@ -1,4 +1,5 @@
 use bevy::core_pipeline::fxaa::{Fxaa, Sensitivity};
+use bevy::core_pipeline::prepass::DepthPrepass;
 use bevy::input::mouse::MouseMotion;
 use bevy::pbr::CascadeShadowConfigBuilder;
 use bevy::prelude::*;
@@ -115,6 +116,7 @@ fn spawn_player(mut commands: Commands, game_config: Res<GameConfig>) {
             PlayerCamera,
             RenderLayers::from_layers(&[0, 1, 2]),
             Camera3d::default(),
+            DepthPrepass,
             Projection::Perspective(PerspectiveProjection {
                 fov: fov_deg.to_radians(),
                 near: 0.05,

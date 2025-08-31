@@ -4,7 +4,7 @@ use bevy::prelude::*;
 use std::collections::HashMap;
 
 pub const BIG: usize = 160;
-pub const MAX_UPDATE_FRAMES: usize = 12;
+pub const MAX_UPDATE_FRAMES: usize = 20;
 
 /// Computes the linear (row-major) index into a `CX × CY × CZ` 3D array.
 ///

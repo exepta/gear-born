@@ -160,6 +160,7 @@ pub async fn build_water_mesh_subchunk_async(
     let s = VOXEL_SIZE;
     let hh = 0.5 * s;
     let eps = 0.01 * s;
+    let skirt_h = 0.20 * s;
 
     let y0 = borders.y0;
     let y1 = borders.y1;
@@ -214,70 +215,81 @@ pub async fn build_water_mesh_subchunk_async(
                 let wa = |dx: i32, dy: i32, dz: i32| water_at(x as i32 + dx, ly as i32 + dy, z as i32 + dz);
                 let sa = |dx: i32, dy: i32, dz: i32| solid_local(x as i32 + dx, ly as i32 + dy, z as i32 + dz);
 
-                // +X
-                if !wa(1, 0, 0) {
-                    emit_quad_build(
-                        &mut build,
-                        [cx + hh, cy + hh, cz - hh], // a
-                        [cx + hh, cy + hh, cz + hh], // b
-                        [cx + hh, cy - hh, cz + hh], // c
-                        [cx + hh, cy - hh, cz - hh], // d
-                        [1.0, 0.0, 0.0],
-                    );
+                let surface_here = !wa(0, 1, 0) && !sa(0, 1, 0);
+
+                if surface_here {
+                    let shore = |dx: i32, dz: i32| -> bool {
+                        sa(dx, 0, dz) && !sa(dx, 1, dz)
+                    };
+
+                    let y_top = cy + hh;
+                    let y_bot = y_top - skirt_h;
+
+                    // +X
+                    if shore(1, 0) {
+                        let x_face = cx + hh - eps;
+                        emit_quad_build(&mut build,
+                                        [x_face, y_top, cz - hh],
+                                        [x_face, y_top, cz + hh],
+                                        [x_face, y_bot, cz + hh],
+                                        [x_face, y_bot, cz - hh],
+                                        [1.0, 0.0, 0.0],
+                        );
+                    }
+                    // -X
+                    if shore(-1, 0) {
+                        let x_face = cx - hh + eps;
+                        emit_quad_build(&mut build,
+                                        [x_face, y_top, cz + hh],
+                                        [x_face, y_top, cz - hh],
+                                        [x_face, y_bot, cz - hh],
+                                        [x_face, y_bot, cz + hh],
+                                        [-1.0, 0.0, 0.0],
+                        );
+                    }
+                    // +Z
+                    if shore(0, 1) {
+                        let z_face = cz + hh - eps;
+                        emit_quad_build(&mut build,
+                                        [cx - hh, y_bot, z_face],
+                                        [cx + hh, y_bot, z_face],
+                                        [cx + hh, y_top, z_face],
+                                        [cx - hh, y_top, z_face],
+                                        [0.0, 0.0, 1.0],
+                        );
+                    }
+                    // -Z
+                    if shore(0, -1) {
+                        let z_face = cz - hh + eps;
+                        emit_quad_build(&mut build,
+                                        [cx + hh, y_bot, z_face],
+                                        [cx - hh, y_bot, z_face],
+                                        [cx - hh, y_top, z_face],
+                                        [cx + hh, y_top, z_face],
+                                        [0.0, 0.0, -1.0],
+                        );
+                    }
                 }
-                // -X
-                if !wa(-1, 0, 0) {
-                    emit_quad_build(
-                        &mut build,
-                        [cx - hh, cy + hh, cz + hh],
-                        [cx - hh, cy + hh, cz - hh],
-                        [cx - hh, cy - hh, cz - hh],
-                        [cx - hh, cy - hh, cz + hh],
-                        [-1.0, 0.0, 0.0],
-                    );
-                }
-                // +Z
-                if !wa(0, 0, 1) {
-                    emit_quad_build(
-                        &mut build,
-                        [cx - hh, cy - hh, cz + hh],
-                        [cx + hh, cy - hh, cz + hh],
-                        [cx + hh, cy + hh, cz + hh],
-                        [cx - hh, cy + hh, cz + hh],
-                        [0.0, 0.0, 1.0],
-                    );
-                }
-                // -Z
-                if !wa(0, 0, -1) {
-                    emit_quad_build(
-                        &mut build,
-                        [cx + hh, cy - hh, cz - hh],
-                        [cx - hh, cy - hh, cz - hh],
-                        [cx - hh, cy + hh, cz - hh],
-                        [cx + hh, cy + hh, cz - hh],
-                        [0.0, 0.0, -1.0],
-                    );
-                }
-                // +Y (Top)
+
+                // ► TOP
                 if !wa(0, 1, 0) && !sa(0, 1, 0) {
-                    emit_quad_build(
-                        &mut build,
-                        [cx - hh, cy + hh + eps, cz + hh],
-                        [cx + hh, cy + hh + eps, cz + hh],
-                        [cx + hh, cy + hh + eps, cz - hh],
-                        [cx - hh, cy + hh + eps, cz - hh],
-                        [0.0, 1.0, 0.0],
+                    emit_quad_build(&mut build,
+                                    [cx - hh, cy + hh, cz + hh],
+                                    [cx + hh, cy + hh, cz + hh],
+                                    [cx + hh, cy + hh, cz - hh],
+                                    [cx - hh, cy + hh, cz - hh],
+                                    [0.0, 1.0, 0.0],
                     );
                 }
-                // -Y (Bottom)
+
+                // ► BOTTOM
                 if !wa(0, -1, 0) && !sa(0, -1, 0) {
-                    emit_quad_build(
-                        &mut build,
-                        [cx - hh, cy - hh, cz - hh],
-                        [cx + hh, cy - hh, cz - hh],
-                        [cx + hh, cy - hh, cz + hh],
-                        [cx - hh, cy - hh, cz + hh],
-                        [0.0, -1.0, 0.0],
+                    emit_quad_build(&mut build,
+                                    [cx - hh, cy - hh, cz - hh],
+                                    [cx + hh, cy - hh, cz - hh],
+                                    [cx + hh, cy - hh, cz + hh],
+                                    [cx - hh, cy - hh, cz + hh],
+                                    [0.0, -1.0, 0.0],
                     );
                 }
             }
