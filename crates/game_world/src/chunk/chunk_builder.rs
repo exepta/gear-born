@@ -14,7 +14,18 @@ use game_core::world::chunk_dim::*;
 use game_core::world::save::{RegionCache, WorldSave};
 use std::collections::HashMap;
 
-const MAX_COLLIDERS_PER_FRAME: usize = 6;
+const MAX_COLLIDERS_PER_FRAME: usize = 12;
+
+#[derive(Default, Resource)]
+struct ColliderBacklog(Vec<ColliderTodo>);
+
+struct ColliderTodo {
+    coord: IVec2,
+    sub: u8,
+    origin: Vec3,
+    positions: Vec<[f32;3]>,
+    indices: Vec<u32>,
+}
 
 #[derive(Resource, Default)]
 struct ChunkColliderIndex(pub HashMap<(IVec2, u8), Entity>);
@@ -29,6 +40,7 @@ impl Plugin for ChunkBuilder {
             .init_resource::<PendingGen>()
             .init_resource::<PendingMesh>()
             .init_resource::<ChunkColliderIndex>()
+            .init_resource::<ColliderBacklog>()
             .add_systems(Update, (
                 schedule_chunk_generation,
                 collect_generated_chunks,
@@ -45,6 +57,16 @@ impl Plugin for ChunkBuilder {
             Update,
             check_base_gen_world_ready
                 .run_if(in_state(AppState::Loading(LoadingStates::BaseGen)))
+        );
+
+        app.add_systems(
+            Update,
+            drain_collider_backlog
+                .after(collect_meshed_subchunks)
+                .run_if(
+                    in_state(AppState::Loading(LoadingStates::BaseGen))
+                        .or(in_state(AppState::InGame(InGameStates::Game)))
+                )
         );
     }
 }
@@ -291,22 +313,15 @@ fn collect_meshed_subchunks(
                 (coord.y * CZ as i32) as f32 * s,
             );
 
-            let should_build_collider = if let Some(chunk) = chunk_map.chunks.get(&coord) {
-                let surf = estimate_surface_sub_fast(chunk);
-                sub.abs_diff(surf) <= 1 && collider_budget > 0
-            } else { collider_budget > 0 };
-
             let mut phys_positions: Vec<[f32; 3]> = Vec::new();
             let mut phys_indices:   Vec<u32>       = Vec::new();
 
             for (bid, mb) in builds {
                 if mb.pos.is_empty() { continue; }
 
-                {
-                    let base = phys_positions.len() as u32;
-                    phys_positions.extend_from_slice(&mb.pos);
-                    phys_indices.extend(mb.idx.iter().map(|i| base + *i));
-                }
+                let base = phys_positions.len() as u32;
+                phys_positions.extend_from_slice(&mb.pos);
+                phys_indices.extend(mb.idx.iter().map(|i| base + *i));
 
                 let mesh = mb.into_mesh();
                 let ent = commands
@@ -321,7 +336,7 @@ fn collect_meshed_subchunks(
                 mesh_index.map.insert((coord, sub as u8, bid), ent);
             }
 
-            if should_build_collider && !phys_positions.is_empty() {
+            if !phys_positions.is_empty() && collider_budget > 0 {
                 let mut pm = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::RENDER_WORLD);
                 pm.insert_attribute(Mesh::ATTRIBUTE_POSITION, phys_positions);
                 pm.insert_indices(Indices::U32(phys_indices));
@@ -427,6 +442,7 @@ fn unload_far_chunks(
     q_mesh: Query<&Mesh3d>,
     q_cam: Query<&GlobalTransform, With<Camera3d>>,
     mut ev_water_unload: EventWriter<WaterChunkUnload>,
+    mut coll_backlog: ResMut<ColliderBacklog>,
 ) {
     let cam = if let Ok(t) = q_cam.single() { t } else { return; };
     let cam_pos = cam.translation();
@@ -479,6 +495,49 @@ fn unload_far_chunks(
 
         chunk_map.chunks.remove(coord);
         backlog.0.retain(|(c, _)| c != coord);
+        coll_backlog.0.retain(|t| t.coord != *coord);
+    }
+}
+
+fn drain_collider_backlog(
+    mut commands: Commands,
+    mut backlog: ResMut<ColliderBacklog>,
+    mut collider_index: ResMut<ChunkColliderIndex>,
+    mut collider_budget: Local<usize>,
+) {
+    if *collider_budget == 0 {
+        *collider_budget = MAX_COLLIDERS_PER_FRAME;
+    }
+
+    let flags = TriMeshFlags::FIX_INTERNAL_EDGES
+        | TriMeshFlags::MERGE_DUPLICATE_VERTICES
+        | TriMeshFlags::DELETE_DEGENERATE_TRIANGLES
+        | TriMeshFlags::ORIENTED;
+
+    let i = 0;
+    while i < backlog.0.len() && *collider_budget > 0 {
+        let todo = backlog.0.remove(i);
+
+        if collider_index.0.contains_key(&(todo.coord, todo.sub)) {
+            continue;
+        }
+
+        let mut pm = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::RENDER_WORLD);
+        pm.insert_attribute(Mesh::ATTRIBUTE_POSITION, todo.positions);
+        pm.insert_indices(Indices::U32(todo.indices));
+
+        if let Some(coll) = Collider::from_bevy_mesh(&pm, &ComputedColliderShape::TriMesh(flags)) {
+            let cent = commands
+                .spawn((
+                    RigidBody::Fixed,
+                    coll,
+                    Transform::from_translation(todo.origin),
+                    Name::new(format!("collider chunk({},{}) sub{}", todo.coord.x, todo.coord.y, todo.sub)),
+                ))
+                .id();
+            collider_index.0.insert((todo.coord, todo.sub), cent);
+            *collider_budget -= 1;
+        }
     }
 }
 
