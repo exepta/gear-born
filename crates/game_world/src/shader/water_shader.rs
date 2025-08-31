@@ -47,8 +47,8 @@ fn make_water_material_for_atlas_tile(
 
     let params = WaterParams {
         uv_rect: Vec4::new(rect.u0, rect.v0, rect.u1, rect.v1),
-        flow:    Vec4::new(speed_u, speed_v, wave_amp, wave_freq),
-        t_misc:  Vec4::splat(0.0),
+        flow:    Vec4::new(0.06, 0.03, 0.05 * VOXEL_SIZE, 0.8),
+        t_misc:  Vec4::new(0.0, 0.15, 64.0, 0.0),
         tint:    Vec4::new(0.90, 0.95, 1.05, 0.65),
     };
 

@@ -78,15 +78,28 @@ fn fragment(in: VOut) -> @location(0) vec4<f32> {
   let view = bevy_pbr::mesh_view_bindings::view;
 
   let uv  = remap_uv_scroll(in.uv, in.normal_ws);
-  let col = textureSample(atlas_tex, atlas_smp, uv);
+  let tex = textureSample(atlas_tex, atlas_smp, uv);
 
-  let cam_pos = (view.world_from_view * vec4<f32>(0.0, 0.0, 0.0, 1.0)).xyz;
+  // Basis + leichtes Fresnel
+  let cam_pos = (view.world_from_view * vec4<f32>(0.0,0.0,0.0,1.0)).xyz;
   let V = normalize(cam_pos - in.world_pos);
   let N = normalize(in.normal_ws);
   let fres = pow(1.0 - clamp(dot(N, V), 0.0, 1.0), 3.0);
 
-  let rgb_fresnel = mix(col.rgb * 0.90, col.rgb * 1.10, fres);
-  let rgb_tinted  = rgb_fresnel * params.tint.rgb;
-  let a_tinted    = col.a * params.tint.a;
-  return vec4<f32>(rgb_tinted, a_tinted);
+  let base_rgb = tex.rgb * params.tint.rgb;
+  let fres_rgb = mix(base_rgb * 0.90, base_rgb * 1.10, fres);
+
+  // --- einfacher Specular-Glanz (Fake-Sonne)
+  let L        = normalize(vec3<f32>(0.35, 1.0, 0.2));     // Richtung „Sonne“
+  let H        = normalize(L + V);
+  let spec_p   = max(params.t_misc.z, 1.0);                 // Shininess
+  let spec_i   = params.t_misc.y;                           // Intensität
+  let spec     = pow(max(dot(N, H), 0.0), spec_p) * spec_i;
+
+  // Premultiplied-Ausgabe: RGB bereits mit A multiplizieren
+  let a          = params.tint.a;
+  let rgb_lit    = fres_rgb + vec3<f32>(spec);
+  let rgb_premul = rgb_lit * a;
+
+  return vec4<f32>(rgb_premul, a);
 }
