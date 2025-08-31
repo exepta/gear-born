@@ -6,7 +6,7 @@ use game_core::world::block::VOXEL_SIZE;
 use game_core::world::chunk::{ChunkData, ChunkMap};
 use game_core::world::chunk_dim::*;
 use game_core::world::fluid::{FluidChunk, FluidMap, SolidSnapshot, WaterMeshIndex};
-use game_core::world::save::{container_find, container_upsert, slot_is_container, RegionCache, RegionFile, WorldSave, REGION_SIZE, TAG_WAT1};
+use game_core::world::save::{container_find, container_upsert, slot_is_container, unpack_slot_bytes, RegionCache, RegionFile, WorldSave, REGION_SIZE, TAG_WAT1};
 use lz4_flex::{compress_prepend_size, decompress_size_prepended};
 use std::collections::HashMap;
 
@@ -357,9 +357,18 @@ pub fn load_water_chunk_from_disk_any(ws_root: std::path::PathBuf, coord: IVec2)
     let path = ws_root.join("region").join(format!("r.{}.{}.region", r_coord.x, r_coord.y));
     if let Ok(mut rf) = RegionFile::open(&path) {
         if let Ok(Some(buf)) = rf.read_chunk(coord) {
+            // 1) SLOT-Container-Format
             if slot_is_container(&buf) {
                 if let Some(rec) = container_find(&buf, TAG_WAT1) {
                     return decode_fluid_chunk_with_version(rec);
+                }
+            } else {
+                // 2) GBW1-Format
+                let (_, w_bytes) = unpack_slot_bytes(&buf);
+                if let Some(w) = w_bytes {
+                    if let Some(res) = decode_fluid_chunk_with_version(w) {
+                        return Some(res);
+                    }
                 }
             }
         }

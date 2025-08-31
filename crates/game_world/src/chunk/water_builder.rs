@@ -107,6 +107,10 @@ impl Plugin for WaterBuilder {
                             .or(in_state(AppState::InGame(InGameStates::Game)))
                     ),
             );
+
+        app.add_systems(Last, save_all_water_on_exit
+            .run_if(on_event::<AppExit>)
+            );
     }
 }
 
@@ -447,6 +451,22 @@ fn water_unload_on_event(
         }
 
         if let Some(q) = q.as_mut()     { q.work.retain(|c| *c != coord); }
+    }
+}
+
+fn save_all_water_on_exit(
+    ws: Res<WorldSave>,
+    mut cache: ResMut<RegionCache>,
+    chunks: Res<ChunkMap>,
+    water: Res<FluidMap>,
+) {
+    debug!("Exit: Saving all water");
+    for (&coord, fc) in water.0.iter() {
+        let mut w = fc.clone();
+        if let Some(ch) = chunks.chunks.get(&coord) {
+            water_mask_with_solids(&mut w, ch);
+        }
+        save_water_chunk_sync(&ws, &mut cache, coord, &w);
     }
 }
 
