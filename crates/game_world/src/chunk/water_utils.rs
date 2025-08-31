@@ -176,13 +176,6 @@ pub async fn build_water_mesh_subchunk_async(
     let south_at = |y: usize, x: usize| sample_opt(&borders.south, y, x, CX);
     let north_at = |y: usize, x: usize| sample_opt(&borders.north, y, x, CX);
 
-    let solid_local = |lx: i32, ly: i32, lz: i32| -> bool {
-        if lx < 0 || lx >= CX as i32 || lz < 0 || lz >= CZ as i32 || ly < 0 || ly >= CY as i32 {
-            return false;
-        }
-        chunk.get(lx as usize, ly as usize, lz as usize) != 0
-    };
-
     let water_at = |lx: i32, ly: i32, lz: i32| -> bool {
         if ly < 0 || ly >= CY as i32 { return false; }
         if lx >= 0 && lx < CX as i32 && lz >= 0 && lz < CZ as i32 {
@@ -213,20 +206,24 @@ pub async fn build_water_mesh_subchunk_async(
                 let cz = (z as f32 + 0.5) * s;
 
                 let wa = |dx: i32, dy: i32, dz: i32| water_at(x as i32 + dx, ly as i32 + dy, z as i32 + dz);
-                let sa = |dx: i32, dy: i32, dz: i32| solid_local(x as i32 + dx, ly as i32 + dy, z as i32 + dz);
+                let sa = |dx: i32, dy: i32, dz: i32| {
+                    if x as i32 + dx < 0 || x as i32 + dx >= CX as i32 ||
+                        z as i32 + dz < 0 || z as i32 + dz >= CZ as i32 ||
+                        ly as i32 + dy < 0 || ly as i32 + dy >= CY as i32 {
+                        false
+                    } else {
+                        chunk.get((x as i32 + dx) as usize, (ly as i32 + dy) as usize, (z as i32 + dz) as usize) != 0
+                    }
+                };
 
                 let surface_here = !wa(0, 1, 0) && !sa(0, 1, 0);
 
                 if surface_here {
-                    let shore = |dx: i32, dz: i32| -> bool {
-                        sa(dx, 0, dz) && !sa(dx, 1, dz)
-                    };
-
                     let y_top = cy + hh;
                     let y_bot = y_top - skirt_h;
 
                     // +X
-                    if shore(1, 0) {
+                    if !wa(1, 0, 0) {
                         let x_face = cx + hh - eps;
                         emit_quad_build(&mut build,
                                         [x_face, y_top, cz - hh],
@@ -237,7 +234,7 @@ pub async fn build_water_mesh_subchunk_async(
                         );
                     }
                     // -X
-                    if shore(-1, 0) {
+                    if !wa(-1, 0, 0) {
                         let x_face = cx - hh + eps;
                         emit_quad_build(&mut build,
                                         [x_face, y_top, cz + hh],
@@ -248,7 +245,7 @@ pub async fn build_water_mesh_subchunk_async(
                         );
                     }
                     // +Z
-                    if shore(0, 1) {
+                    if !wa(0, 0, 1) {
                         let z_face = cz + hh - eps;
                         emit_quad_build(&mut build,
                                         [cx - hh, y_bot, z_face],
@@ -259,7 +256,7 @@ pub async fn build_water_mesh_subchunk_async(
                         );
                     }
                     // -Z
-                    if shore(0, -1) {
+                    if !wa(0, 0, -1) {
                         let z_face = cz - hh + eps;
                         emit_quad_build(&mut build,
                                         [cx + hh, y_bot, z_face],
@@ -273,23 +270,25 @@ pub async fn build_water_mesh_subchunk_async(
 
                 // ► TOP
                 if !wa(0, 1, 0) && !sa(0, 1, 0) {
-                    emit_quad_build(&mut build,
-                                    [cx - hh, cy + hh, cz + hh],
-                                    [cx + hh, cy + hh, cz + hh],
-                                    [cx + hh, cy + hh, cz - hh],
-                                    [cx - hh, cy + hh, cz - hh],
-                                    [0.0, 1.0, 0.0],
+                    emit_quad_build(
+                        &mut build,
+                        [cx - hh, cy + hh, cz + hh],
+                        [cx + hh, cy + hh, cz + hh],
+                        [cx + hh, cy + hh, cz - hh],
+                        [cx - hh, cy + hh, cz - hh],
+                        [0.0, 1.0, 0.0],
                     );
                 }
 
                 // ► BOTTOM
                 if !wa(0, -1, 0) && !sa(0, -1, 0) {
-                    emit_quad_build(&mut build,
-                                    [cx - hh, cy - hh, cz - hh],
-                                    [cx + hh, cy - hh, cz - hh],
-                                    [cx + hh, cy - hh, cz + hh],
-                                    [cx - hh, cy - hh, cz + hh],
-                                    [0.0, -1.0, 0.0],
+                    emit_quad_build(
+                        &mut build,
+                        [cx - hh, cy - hh, cz - hh],
+                        [cx + hh, cy - hh, cz - hh],
+                        [cx + hh, cy - hh, cz + hh],
+                        [cx - hh, cy - hh, cz + hh],
+                        [0.0, -1.0, 0.0],
                     );
                 }
             }
