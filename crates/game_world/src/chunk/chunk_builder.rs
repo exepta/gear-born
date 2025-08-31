@@ -12,7 +12,7 @@ use game_core::world::block::{id_any, BlockRegistry, VOXEL_SIZE};
 use game_core::world::chunk::*;
 use game_core::world::chunk_dim::*;
 use game_core::world::save::{RegionCache, WorldSave};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 const MAX_COLLIDERS_PER_FRAME: usize = 12;
 
@@ -30,6 +30,23 @@ struct ColliderTodo {
 #[derive(Resource, Default)]
 struct ChunkColliderIndex(pub HashMap<(IVec2, u8), Entity>);
 
+#[derive(Resource, Default)]
+struct KickQueue(Vec<KickItem>);
+
+#[derive(Clone, Copy, Debug)]
+struct KickItem {
+    coord: IVec2,
+    sub:   u8,
+    frames_left: u8,
+    tries_left:  u8,
+}
+
+#[derive(Resource, Default)]
+struct KickedOnce(HashSet<(IVec2, u8)>);
+
+#[derive(Resource, Default)]
+struct QueuedOnce(HashSet<(IVec2, u8)>);
+
 pub struct ChunkBuilder;
 
 impl Plugin for ChunkBuilder {
@@ -41,13 +58,21 @@ impl Plugin for ChunkBuilder {
             .init_resource::<PendingMesh>()
             .init_resource::<ChunkColliderIndex>()
             .init_resource::<ColliderBacklog>()
+            .init_resource::<KickQueue>()
+            .init_resource::<KickedOnce>()
+            .init_resource::<QueuedOnce>()
             .add_systems(Update, (
                 schedule_chunk_generation,
                 collect_generated_chunks,
                 collect_meshed_subchunks,
+
+                enqueue_kick_for_new_subchunks,
+                process_kick_queue,
+
                 schedule_remesh_tasks_from_events.in_set(VoxelStage::Meshing),
                 drain_mesh_backlog,
                 unload_far_chunks,
+                cleanup_kick_flags_on_unload.after(unload_far_chunks)
             )
                 .chain()
                 .run_if(in_state(AppState::Loading(LoadingStates::BaseGen))
@@ -70,6 +95,77 @@ impl Plugin for ChunkBuilder {
         );
     }
 }
+
+// ================================================
+//                    Sub Update
+// ================================================
+
+fn enqueue_kick_for_new_subchunks(
+    q_new_meshes: Query<&SubchunkMesh, Added<SubchunkMesh>>,
+    mut queue: ResMut<KickQueue>,
+    kicked: Res<KickedOnce>,
+    mut queued: ResMut<QueuedOnce>,
+) {
+    let mut seen: HashSet<(IVec2, u8)> = HashSet::new();
+
+    for m in q_new_meshes.iter() {
+        let key = (m.coord, m.sub);
+
+        if kicked.0.contains(&key) { continue; }
+
+        if !seen.insert(key) { continue; }
+
+        if queued.0.contains(&key) { continue; }
+
+        queue.0.push(KickItem { coord: m.coord, sub: m.sub, frames_left: 3, tries_left: 8 });
+        queued.0.insert(key);
+    }
+}
+
+fn process_kick_queue(
+    mut queue: ResMut<KickQueue>,
+    mut kicked: ResMut<KickedOnce>,
+    mut queued: ResMut<QueuedOnce>,
+    chunk_map: Res<ChunkMap>,
+    mut ev_dirty: EventWriter<SubchunkDirty>,
+) {
+    let mut i = 0;
+    while i < queue.0.len() {
+        let item = &mut queue.0[i];
+
+        if item.frames_left > 0 {
+            item.frames_left -= 1;
+            i += 1;
+            continue;
+        }
+
+        if !chunk_map.chunks.contains_key(&item.coord) {
+            queued.0.remove(&(item.coord, item.sub));
+            queue.0.swap_remove(i);
+            continue;
+        }
+
+        if neighbors_ready(&chunk_map, item.coord) {
+            ev_dirty.write(SubchunkDirty { coord: item.coord, sub: item.sub as usize });
+            kicked.0.insert((item.coord, item.sub));
+            queued.0.remove(&(item.coord, item.sub));
+            queue.0.swap_remove(i);
+            continue;
+        }
+
+        if item.tries_left > 0 {
+            item.frames_left = 3;
+            item.tries_left -= 1;
+            i += 1;
+        } else {
+            queued.0.remove(&(item.coord, item.sub));
+            queue.0.swap_remove(i);
+        }
+    }
+}
+// ================================================
+//                    Main
+// ================================================
 
 fn check_base_gen_world_ready(
     game_config: Res<GameConfig>,
@@ -496,6 +592,20 @@ fn unload_far_chunks(
         chunk_map.chunks.remove(coord);
         backlog.0.retain(|(c, _)| c != coord);
         coll_backlog.0.retain(|t| t.coord != *coord);
+    }
+}
+
+fn cleanup_kick_flags_on_unload(
+    mut ev_unload: EventReader<WaterChunkUnload>,
+    mut kicked: ResMut<KickedOnce>,
+    mut queued: ResMut<QueuedOnce>,
+    mut queue: ResMut<KickQueue>,
+) {
+    for e in ev_unload.read() {
+        let coord = e.coord;
+        kicked.0.retain(|(c, _)| *c != coord);
+        queued.0.retain(|(c, _)| *c != coord);
+        queue.0.retain(|it| it.coord != coord);
     }
 }
 

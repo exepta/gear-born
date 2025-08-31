@@ -3,7 +3,7 @@ use bevy::prelude::*;
 use bincode::{config, decode_from_slice, encode_to_vec};
 use game_core::configuration::WorldGenConfig;
 use game_core::states::{AppState, LoadingStates};
-use game_core::world::block::{BlockId, Face, VOXEL_SIZE};
+use game_core::world::block::{BlockId, Face};
 use game_core::world::chunk::{ChunkData, ChunkMap, ChunkMeshIndex};
 use game_core::world::chunk_dim::*;
 use game_core::world::save::*;
@@ -11,7 +11,7 @@ use lz4_flex::{compress_prepend_size, decompress_size_prepended};
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-pub const MAX_INFLIGHT_MESH: usize = 64;
+pub const MAX_INFLIGHT_MESH: usize = 32;
 pub const MAX_INFLIGHT_GEN:  usize = 32;
 
 pub async fn generate_chunk_async_noise(
@@ -633,22 +633,12 @@ pub fn is_waiting(state: &State<AppState>) -> bool {
 }
 
 #[inline]
-fn subchunk_aabb_world(coord: IVec2, sub: u8) -> (Vec3, Vec3) {
-    let s = VOXEL_SIZE;
-
-    let min_x = (coord.x * CX as i32) as f32 * s;
-    let min_z = (coord.y * CZ as i32) as f32 * s;
-
-    let min_y_blocks: i32 = Y_MIN + (sub as i32) * (SEC_H as i32);
-    let min_y = (min_y_blocks as f32) * s;
-
-    let min = Vec3::new(min_x, min_y, min_z);
-    let size = Vec3::new(CX as f32 * s, (SEC_H as f32) * s, CZ as f32 * s);
-    (min, min + size)
-}
-
-#[inline]
-pub(crate) fn dist2_point_aabb(p: Vec3, min: Vec3, max: Vec3) -> f32 {
-    let q = p.clamp(min, max);
-    (p - q).length_squared()
+pub(crate) fn neighbors_ready(chunk_map: &ChunkMap, c: IVec2) -> bool {
+    let n = [
+        IVec2::new(c.x + 1, c.y),
+        IVec2::new(c.x - 1, c.y),
+        IVec2::new(c.x, c.y + 1),
+        IVec2::new(c.x, c.y - 1),
+    ];
+    n.into_iter().all(|nc| chunk_map.chunks.contains_key(&nc))
 }
