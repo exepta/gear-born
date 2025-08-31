@@ -177,7 +177,8 @@ fn enqueue_flow_on_block_removed(
 
         let mut sea_level = None;
         let mut has_water = false;
-        for (dx,dy,dz) in [(1,0,0),(-1,0,0),(0,0,1),(0,0,-1),(0,-1,0)] {
+
+        for (dx,dy,dz) in [(1,0,0),(-1,0,0),(0,0,1),(0,0,-1),(0,-1,0),(0,1,0)] {
             let lx = e.chunk_x as i32 + dx;
             let ly = e.chunk_y as i32 + dy;
             let lz = e.chunk_z as i32 + dz;
