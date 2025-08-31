@@ -5,6 +5,7 @@ use bevy::tasks::AsyncComputeTaskPool;
 use futures_lite::future;
 use game_core::configuration::WorldGenConfig;
 use game_core::events::player_block_events::BlockBreakByPlayerEvent;
+use game_core::shader::water_material::{WaterMatHandle, WaterMaterial};
 use game_core::states::{AppState, InGameStates, LoadingStates};
 use game_core::world::block::{id_any, BlockRegistry, VOXEL_SIZE};
 use game_core::world::chunk::{ChunkMap, SubchunkDirty, WaterChunkUnload, BIG, MAX_UPDATE_FRAMES};
@@ -520,6 +521,7 @@ fn water_collect_meshed_subchunks(
     mut windex: ResMut<WaterMeshIndex>,
     mut meshes: ResMut<Assets<Mesh>>,
     q_mesh: Query<&Mesh3d>,
+    water_handle: Res<WaterMatHandle>,
     reg: Res<BlockRegistry>,
     app_state: Res<State<AppState>>,
     chunk_map: Res<ChunkMap>,
@@ -551,10 +553,11 @@ fn water_collect_meshed_subchunks(
                     (Y_MIN as f32) * s,
                     (coord.y * CZ as i32) as f32 * s,
                 );
+
                 let ent = commands
                     .spawn((
                         Mesh3d(meshes.add(mesh)),
-                        MeshMaterial3d(reg.material(water_mat)),
+                        MeshMaterial3d::<WaterMaterial>(water_handle.0.clone()),
                         Transform::from_translation(origin),
                         NotShadowReceiver,
                         NotShadowCaster,

@@ -16,6 +16,7 @@ default-features = false
 features = [
     "bevy_log",
     "bevy_asset",
+    "bevy_pbr"
 ]
 
 [dependencies.bevy_rapier3d]

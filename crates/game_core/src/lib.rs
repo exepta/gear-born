@@ -8,6 +8,7 @@ pub mod world;
 pub mod player;
 pub mod load_state;
 pub mod events;
+pub mod shader;
 
 use crate::configuration::{CrosshairConfig, WorldGenConfig};
 use crate::events::EventModule;

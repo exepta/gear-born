@@ -1,5 +1,6 @@
 use crate::world::chunk::ChunkMap;
 use crate::world::chunk_dim::{world_to_chunk_xz, Y_MAX, Y_MIN};
+use crate::world::fluid::FluidMap;
 use bevy::prelude::*;
 use bevy::render::mesh::{Indices, PrimitiveTopology};
 use serde::Deserialize;
@@ -270,6 +271,19 @@ pub fn get_block_world(chunk_map: &ChunkMap, wp: IVec3) -> BlockId {
     let lz = local.y as usize;
     let ly = world_y_to_local(wp.y);
     chunk.get(lx, ly, lz)
+}
+
+#[inline]
+pub fn fluid_at_world(fluids: &FluidMap, wx: i32, wy: i32, wz: i32) -> bool {
+    if wy < Y_MIN || wy > Y_MAX { return false; }
+    let (cc, local) = world_to_chunk_xz(wx, wz);
+    let lx = local.x as usize;
+    let lz = local.y as usize;
+    let ly = (wy - Y_MIN) as usize;
+    match fluids.0.get(&cc) {
+        Some(fc) => fc.get(lx, ly, lz),
+        None => false,
+    }
 }
 
 

@@ -236,7 +236,7 @@ fn player_move_kcc(
     let fly_multi      = 4.0;
     let fly_v_multi    = 4.0;
 
-    let gravity        = 22.0;
+    let gravity        = 30.0;
     let fall_multi     = 2.2;
     const JUMP_HEIGHT: f32 = 1.65;
     let jump_v0        = (2.0 * gravity * JUMP_HEIGHT).sqrt();
