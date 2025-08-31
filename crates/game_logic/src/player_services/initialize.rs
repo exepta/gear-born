@@ -1,3 +1,4 @@
+use bevy::core_pipeline::fxaa::{Fxaa, Sensitivity};
 use bevy::input::mouse::MouseMotion;
 use bevy::pbr::CascadeShadowConfigBuilder;
 use bevy::prelude::*;
@@ -66,7 +67,7 @@ fn spawn_scene(mut commands: Commands) {
 
 fn spawn_player(mut commands: Commands, game_config: Res<GameConfig>) {
     let fog_color = Color::srgb(0.62, 0.72, 0.85);
-    let fog_start = game_config.graphics.chunk_range as f32 * 25.0;
+    let fog_start = game_config.graphics.chunk_range as f32 * 50.0;
     let fog_end   = fog_start + 20.0;
     let clip_pad  = 0.25;
     let far_clip  = fog_end - clip_pad;
@@ -120,6 +121,11 @@ fn spawn_player(mut commands: Commands, game_config: Res<GameConfig>) {
                 far:  far_clip.max(1.0),
                 ..default()
             }),
+            Fxaa {
+                enabled: true,
+                edge_threshold: Sensitivity::Extreme,
+                edge_threshold_min: Sensitivity::Extreme,
+            },
             Camera {
                 clear_color: ClearColorConfig::Custom(fog_color),
                 ..default()

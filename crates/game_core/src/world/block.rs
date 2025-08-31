@@ -8,6 +8,7 @@ use std::fs;
 use std::path::Path;
 
 pub const VOXEL_SIZE: f32 = 1.5;
+const ATLAS_PAD_PX: f32 = 0.5;
 
 // =================================================================
 //                          External Struct
@@ -55,7 +56,7 @@ pub struct BlockRegistry {
 }
 
 impl BlockRegistry {
-    
+
     #[inline]
     pub fn name(&self, id: BlockId) -> &str {
         self.def(id).name.as_str()
@@ -390,21 +391,34 @@ fn tile_uv(ts: &BlockTileset, name: &str) -> Result<UvRect, String> {
         return Err(format!("tile '{}' out of bounds ({}x{})", name, ts.columns, ts.rows));
     }
 
-    let du = 1.0 / ts.columns as f32;
-    let dv = 1.0 / ts.rows as f32;
-    let mut u0 = col as f32 * du;
-    let mut v0 = row as f32 * dv;
-    let mut u1 = u0 + du;
-    let mut v1 = v0 + dv;
+    let img_w = (ts.columns * ts.tile_size) as f32;
+    let img_h = (ts.rows * ts.tile_size) as f32;
 
-    // half-texel inset
-    let atlas_w = (ts.columns * ts.tile_size) as f32;
-    let atlas_h = (ts.rows * ts.tile_size) as f32;
-    let eps_u = 0.5 / atlas_w;
-    let eps_v = 0.5 / atlas_h;
-    u0 += eps_u; v0 += eps_v; u1 -= eps_u; v1 -= eps_v;
+    let ([u0, v0], [u1, v1]) = atlas_uv(
+        col as usize,
+        row as usize,
+        ts.columns as usize,
+        ts.rows as usize,
+        ATLAS_PAD_PX,
+        img_w,
+        img_h,
+    );
 
     Ok(UvRect { u0, v0, u1, v1 })
+}
+
+
+fn atlas_uv(tile_x: usize, tile_y: usize, tiles_x: usize, tiles_y: usize,
+            pad_px: f32, image_w: f32, image_h: f32) -> ([f32;2],[f32;2]) {
+    let tw = image_w / tiles_x as f32;
+    let th = image_h / tiles_y as f32;
+
+    let u0 = (tile_x as f32 * tw + pad_px) / image_w;
+    let v0 = (tile_y as f32 * th + pad_px) / image_h;
+    let u1 = ((tile_x as f32 + 1.0) * tw - pad_px) / image_w;
+    let v1 = ((tile_y as f32 + 1.0) * th - pad_px) / image_h;
+
+    ([u0, v0], [u1, v1])
 }
 
 /// Builds a cube mesh with per-face UVs and outward-facing normals.
