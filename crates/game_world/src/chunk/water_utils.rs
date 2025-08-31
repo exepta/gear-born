@@ -34,6 +34,9 @@ impl WaterMeshBuild {
 }
 
 #[derive(Clone)]
+pub struct WaterSnap { bits: HashMap<IVec2, Vec<u8>> }
+
+#[derive(Clone)]
 pub(crate) struct WaterBorderSnapshot {
     pub(crate) y0: usize,
     pub(crate) y1: usize,
@@ -525,4 +528,34 @@ pub(crate) fn water_meshing_ready(coord: IVec2, water: &FluidMap, chunks: &Chunk
         }
     }
     true
+}
+
+pub(crate) fn build_water_snapshot_3x3(fluids: &FluidMap, center: IVec2) -> WaterSnap {
+    let mut bits = HashMap::new();
+    for dz in -1..=1 {
+        for dx in -1..=1 {
+            let c = IVec2::new(center.x + dx, center.y + dz);
+            let mut v = vec![0u8; CX*CY*CZ];
+            if let Some(fc) = fluids.0.get(&c) {
+                for y in 0..CY {
+                    for z in 0..CZ {
+                        for x in 0..CX {
+                            let i = (y * CZ + z) * CX + x;
+                            v[i] = if fc.get(x, y, z) { 1 } else { 0 };
+                        }
+                    }
+                }
+            }
+            bits.insert(c, v);
+        }
+    }
+    WaterSnap { bits }
+}
+
+#[inline]
+pub(crate) fn snap_has_water(s: &WaterSnap, c: IVec2, x: i32, y: i32, z: i32) -> Option<bool> {
+    if y < 0 || y >= CY as i32 || x < 0 || x >= CX as i32 || z < 0 || z >= CZ as i32 { return Some(false); }
+    let v = s.bits.get(&c)?;
+    let i = ((y as usize) * CZ + (z as usize)) * CX + (x as usize);
+    Some(v[i] != 0)
 }
