@@ -6,8 +6,12 @@ pub mod configuration;
 pub mod key_converter;
 pub mod world;
 pub mod player;
+pub mod load_state;
+pub mod events;
+pub mod shader;
 
 use crate::configuration::{CrosshairConfig, WorldGenConfig};
+use crate::events::EventModule;
 use crate::player::PlayerModule;
 use bevy::prelude::*;
 
@@ -25,6 +29,6 @@ impl Plugin for GameCorePlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<WorldGenConfig>();
         app.init_resource::<CrosshairConfig>();
-        app.add_plugins(PlayerModule);
+        app.add_plugins((PlayerModule, EventModule));
     }
 }

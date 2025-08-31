@@ -1,6 +1,6 @@
 {
   "image": "log.png",
-  "tile_size": 64,
+  "tile_size": 512,
   "columns": 2,
   "rows": 2,
   "tiles": {

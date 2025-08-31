@@ -3,7 +3,7 @@
 mod manager;
 
 use crate::manager::ManagerPlugin;
-use bevy::image::ImageSamplerDescriptor;
+use bevy::image::{ImageAddressMode, ImageFilterMode, ImageSamplerDescriptor};
 use bevy::log::{BoxedLayer, Level, LogPlugin};
 use bevy::prelude::*;
 use bevy::render::settings::{Backends, RenderCreation, WgpuFeatures, WgpuSettings};
@@ -85,7 +85,16 @@ fn init_bevy_app(app: &mut App, config: &GameConfig) {
             ..default()
         }
     ).set(ImagePlugin {
-        default_sampler: ImageSamplerDescriptor::nearest(),
+            default_sampler: ImageSamplerDescriptor {
+                address_mode_u: ImageAddressMode::Repeat,
+                address_mode_v: ImageAddressMode::Repeat,
+                address_mode_w: ImageAddressMode::Repeat,
+                mag_filter: ImageFilterMode::Linear,
+                min_filter: ImageFilterMode::Linear,
+                mipmap_filter: ImageFilterMode::Linear,
+                anisotropy_clamp: 16,
+                ..default()
+            },
         ..default()
     }).set(LogPlugin {
         level: Level::DEBUG,

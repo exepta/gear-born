@@ -27,7 +27,7 @@ pub enum AppState {
 
     /// Represents asset loading logic (e.g., loading models, textures, data).
     /// Contains its own `AssetLoadState`.
-    Loading,
+    Loading(LoadingStates),
 
     /// State after loading and fetching is done, but before entering gameplay.
     PostLoad,
@@ -61,6 +61,16 @@ pub enum FetchState {
     Fetching,
     /// Network fetching is complete.
     FetchingComplete,
+}
+
+
+#[derive(States, Default, Debug, Clone, Eq, PartialEq, Hash)]
+pub enum LoadingStates {
+    
+    #[default]
+    BaseGen,
+    
+    WaterGen,
 }
 
 /// Main in-game state and relevant substates.

@@ -1,9 +1,12 @@
 {
-  "image": "stone.png",
+  "image": "water.png",
   "tile_size": 512,
   "columns": 1,
   "rows": 1,
   "tiles": {
-    "stone": [0, 0]
+    "water": [
+      0,
+      0
+    ]
   }
 }

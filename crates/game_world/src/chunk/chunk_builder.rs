@@ -7,14 +7,14 @@ use bevy::tasks::futures_lite::future;
 use bevy::tasks::AsyncComputeTaskPool;
 use bevy_rapier3d::prelude::*;
 use game_core::configuration::{GameConfig, WorldGenConfig};
-use game_core::states::{AppState, InGameStates};
+use game_core::states::{AppState, InGameStates, LoadingStates};
 use game_core::world::block::{id_any, BlockRegistry, VOXEL_SIZE};
 use game_core::world::chunk::*;
 use game_core::world::chunk_dim::*;
 use game_core::world::save::{RegionCache, WorldSave};
 use std::collections::HashMap;
 
-const MAX_APPLY_PER_FRAME: usize = 14;
+const MAX_COLLIDERS_PER_FRAME: usize = 6;
 
 #[derive(Resource, Default)]
 struct ChunkColliderIndex(pub HashMap<(IVec2, u8), Entity>);
@@ -38,18 +38,18 @@ impl Plugin for ChunkBuilder {
                 unload_far_chunks,
             )
                 .chain()
-                .run_if(in_state(AppState::Loading)
+                .run_if(in_state(AppState::Loading(LoadingStates::BaseGen))
                     .or(in_state(AppState::InGame(InGameStates::Game)))));
 
         app.add_systems(
             Update,
-            check_initial_world_ready
-                .run_if(in_state(AppState::Loading))
+            check_base_gen_world_ready
+                .run_if(in_state(AppState::Loading(LoadingStates::BaseGen)))
         );
     }
 }
 
-fn check_initial_world_ready(
+fn check_base_gen_world_ready(
     game_config: Res<GameConfig>,
     load_center: Res<LoadCenter>,
     chunk_map: Res<ChunkMap>,
@@ -63,7 +63,7 @@ fn check_initial_world_ready(
 
     if area_ready(load_center.world_xz, initial_radius, &chunk_map, &pending_gen, &pending_mesh, &backlog) {
         commands.remove_resource::<LoadCenter>();
-        next.set(AppState::InGame(InGameStates::Game));
+        next.set(AppState::Loading(LoadingStates::WaterGen));
     }
 }
 
@@ -77,9 +77,13 @@ fn schedule_chunk_generation(
     ws: Res<WorldSave>,
     q_cam: Query<&GlobalTransform, With<Camera3d>>,
     load_center: Option<Res<LoadCenter>>,
+    app_state: Res<State<AppState>>,
 ) {
     let center_c = if let Ok(t) = q_cam.single() {
-        let (c, _) = world_to_chunk_xz((t.translation().x / VOXEL_SIZE).floor() as i32, (t.translation().z / VOXEL_SIZE).floor() as i32);
+        let (c, _) = world_to_chunk_xz(
+            (t.translation().x / VOXEL_SIZE).floor() as i32,
+            (t.translation().z / VOXEL_SIZE).floor() as i32
+        );
         c
     } else if let Some(lc) = load_center {
         lc.world_xz
@@ -87,15 +91,22 @@ fn schedule_chunk_generation(
         IVec2::ZERO
     };
 
-    if !can_spawn_gen(&pending) { return; }
+    let waiting = is_waiting(&app_state);
+    let max_inflight = if waiting { BIG } else { MAX_INFLIGHT_GEN };
+    let per_frame_submit = if waiting { BIG } else { 8 };
+
+    if pending.0.len() >= max_inflight { return; }
 
     let load_radius = game_config.graphics.chunk_range;
-    let mut budget = MAX_INFLIGHT_GEN.saturating_sub(pending.0.len()).min(8);
+    let mut budget = max_inflight
+        .saturating_sub(pending.0.len())
+        .min(per_frame_submit);
 
     let ids = (
         id_any(&reg, &["grass_block","grass"]),
         id_any(&reg, &["dirt_block","dirt"]),
         id_any(&reg, &["stone_block","stone"]),
+        id_any(&reg, &["sand_block","sand"]),
     );
     let cfg_clone = gen_cfg.clone();
     let ws_root = ws.root.clone();
@@ -126,13 +137,17 @@ fn drain_mesh_backlog(
     mut pending_mesh: ResMut<PendingMesh>,
     chunk_map: Res<ChunkMap>,
     reg: Res<BlockRegistry>,
+    app_state: Res<State<AppState>>,
 ) {
     if chunk_map.chunks.is_empty() { backlog.0.clear(); return; }
+
+    let waiting = is_waiting(&app_state);
+    let max_inflight_mesh = if waiting { BIG } else { MAX_INFLIGHT_MESH };
 
     let reg_lite = RegLite::from_reg(&reg);
     let pool = AsyncComputeTaskPool::get();
 
-    while can_spawn_mesh(&pending_mesh) {
+    while pending_mesh.0.len() < max_inflight_mesh {
         let Some((coord, sub)) = backlog.0.pop_front() else { break; };
         if pending_mesh.0.contains_key(&(coord, sub)) { continue; }
         let Some(chunk) = chunk_map.chunks.get(&coord) else { continue; };
@@ -159,7 +174,11 @@ fn collect_generated_chunks(
     mut backlog: ResMut<MeshBacklog>,
     mut chunk_map: ResMut<ChunkMap>,
     reg: Res<BlockRegistry>,
+    app_state: Res<State<AppState>>,
 ) {
+    let waiting = is_waiting(&app_state);
+    let max_inflight_mesh = if waiting { BIG } else { MAX_INFLIGHT_MESH };
+
     let reg_lite = RegLite::from_reg(&reg);
     let mut finished = Vec::new();
 
@@ -167,20 +186,19 @@ fn collect_generated_chunks(
         if let Some((c, data)) = future::block_on(future::poll_once(task)) {
             chunk_map.chunks.insert(c, data.clone());
 
-            // Subchunks dieses Chunks
             let pool = AsyncComputeTaskPool::get();
-            for sub in 0..SEC_COUNT {
+            let order = sub_priority_order(&data);
+            for sub in order {
                 let key = (c, sub);
                 let y0 = sub * SEC_H;
                 let y1 = (y0 + SEC_H).min(CY);
                 let borders = snapshot_borders(&chunk_map, c, y0, y1);
 
-                if can_spawn_mesh(&pending_mesh) {
+                if pending_mesh.0.len() < max_inflight_mesh {
                     let chunk_copy = data.clone();
-                    let reg_copy = reg_lite.clone();
+                    let reg_copy   = reg_lite.clone();
                     let t = pool.spawn(async move {
-                        let builds = mesh_subchunk_async(&chunk_copy, &reg_copy, sub, VOXEL_SIZE
-                                                         , Some(borders)).await;
+                        let builds = mesh_subchunk_async(&chunk_copy, &reg_copy, sub, VOXEL_SIZE, Some(borders)).await;
                         ((c, sub), builds)
                     });
                     pending_mesh.0.insert(key, t);
@@ -197,7 +215,8 @@ fn collect_generated_chunks(
             ];
             for n_coord in neigh {
                 if let Some(n_chunk) = chunk_map.chunks.get(&n_coord) {
-                    for sub in 0..SEC_COUNT {
+                    let order_n = sub_priority_order(n_chunk);
+                    for sub in order_n {
                         let key = (n_coord, sub);
                         if pending_mesh.0.contains_key(&key) { continue; }
 
@@ -205,13 +224,13 @@ fn collect_generated_chunks(
                         let y1 = (y0 + SEC_H).min(CY);
                         let borders = snapshot_borders(&chunk_map, n_coord, y0, y1);
 
-                        if can_spawn_mesh(&pending_mesh) {
+                        if pending_mesh.0.len() < max_inflight_mesh {
                             let pool = AsyncComputeTaskPool::get();
-                            let reg_copy = reg_lite.clone();
+                            let reg_copy  = reg_lite.clone();
                             let chunk_copy = n_chunk.clone();
                             let t = pool.spawn(async move {
                                 let builds = mesh_subchunk_async(&chunk_copy, &reg_copy, sub, VOXEL_SIZE, Some(borders)).await;
-                                (key, builds)
+                                ((n_coord, sub), builds)
                             });
                             pending_mesh.0.insert(key, t);
                         } else {
@@ -225,7 +244,9 @@ fn collect_generated_chunks(
         }
     }
 
-    for c in finished { pending_gen.0.remove(&c); }
+    for c in finished {
+        pending_gen.0.remove(&c);
+    }
 }
 
 //System
@@ -238,12 +259,17 @@ fn collect_meshed_subchunks(
     reg: Res<BlockRegistry>,
     mut chunk_map: ResMut<ChunkMap>,
     q_mesh: Query<&Mesh3d>,
+    app_state: Res<State<AppState>>,
 ) {
+    let waiting = is_waiting(&app_state);
+    let apply_cap = if waiting { BIG } else { MAX_UPDATE_FRAMES };
     let mut done_keys = Vec::new();
-    let mut applied = 0;
+    let mut applied = 0usize;
+
+    let mut collider_budget = if waiting { BIG } else { MAX_COLLIDERS_PER_FRAME };
 
     for (key, task) in pending_mesh.0.iter_mut() {
-        if applied >= MAX_APPLY_PER_FRAME { break; }
+        if applied >= apply_cap { break; }
 
         if let Some(((coord, sub), builds)) = future::block_on(future::poll_once(task)) {
             let old_keys: Vec<_> = mesh_index
@@ -264,6 +290,11 @@ fn collect_meshed_subchunks(
                 (Y_MIN as f32) * s,
                 (coord.y * CZ as i32) as f32 * s,
             );
+
+            let should_build_collider = if let Some(chunk) = chunk_map.chunks.get(&coord) {
+                let surf = estimate_surface_sub_fast(chunk);
+                sub.abs_diff(surf) <= 1 && collider_budget > 0
+            } else { collider_budget > 0 };
 
             let mut phys_positions: Vec<[f32; 3]> = Vec::new();
             let mut phys_indices:   Vec<u32>       = Vec::new();
@@ -290,7 +321,7 @@ fn collect_meshed_subchunks(
                 mesh_index.map.insert((coord, sub as u8, bid), ent);
             }
 
-            if !phys_positions.is_empty() {
+            if should_build_collider && !phys_positions.is_empty() {
                 let mut pm = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::RENDER_WORLD);
                 pm.insert_attribute(Mesh::ATTRIBUTE_POSITION, phys_positions);
                 pm.insert_indices(Indices::U32(phys_indices));
@@ -310,8 +341,8 @@ fn collect_meshed_subchunks(
                         ))
                         .id();
                     collider_index.0.insert((coord, sub as u8), cent);
+                    collider_budget = collider_budget.saturating_sub(1);
                 }
-
             }
 
             if let Some(chunk) = chunk_map.chunks.get_mut(&coord) {
@@ -335,11 +366,15 @@ fn schedule_remesh_tasks_from_events(
     reg: Res<BlockRegistry>,
     mut backlog: ResMut<MeshBacklog>,
     mut ev_dirty: EventReader<SubchunkDirty>,
+    app_state: Res<State<AppState>>,
 ) {
     if chunk_map.chunks.is_empty() {
         ev_dirty.clear();
         return;
     }
+
+    let waiting = is_waiting(&app_state);
+    let max_inflight_mesh = if waiting { BIG } else { MAX_INFLIGHT_MESH };
 
     let reg_lite = RegLite::from_reg(&reg);
     let pool = AsyncComputeTaskPool::get();
@@ -360,7 +395,7 @@ fn schedule_remesh_tasks_from_events(
         let y1 = (y0 + SEC_H).min(CY);
         let borders = snapshot_borders(&chunk_map, coord, y0, y1);
 
-        if can_spawn_mesh(&pending_mesh) {
+        if pending_mesh.0.len() < max_inflight_mesh {
             let chunk_copy = chunk.clone();
             let reg_copy   = reg_lite.clone();
 
@@ -391,6 +426,7 @@ fn unload_far_chunks(
     mut cache: ResMut<RegionCache>,
     q_mesh: Query<&Mesh3d>,
     q_cam: Query<&GlobalTransform, With<Camera3d>>,
+    mut ev_water_unload: EventWriter<WaterChunkUnload>,
 ) {
     let cam = if let Ok(t) = q_cam.single() { t } else { return; };
     let cam_pos = cam.translation();
@@ -419,13 +455,13 @@ fn unload_far_chunks(
         pending_gen.0.remove(coord);
         pending_mesh.0.retain(|(c, _), _| c != coord);
 
-        let keys: Vec<_> = mesh_index
+        let old_keys: Vec<_> = mesh_index
             .map
             .keys()
             .cloned()
             .filter(|(c, _, _)| c == coord)
             .collect();
-        despawn_mesh_set(keys, &mut mesh_index, &mut commands, &q_mesh, &mut meshes);
+        despawn_mesh_set(old_keys, &mut mesh_index, &mut commands, &q_mesh, &mut meshes);
 
         let col_keys: Vec<_> = collider_index
             .0
@@ -439,8 +475,52 @@ fn unload_far_chunks(
             }
         }
 
+        ev_water_unload.write(WaterChunkUnload { coord: *coord });
+
         chunk_map.chunks.remove(coord);
         backlog.0.retain(|(c, _)| c != coord);
     }
+}
+
+#[inline]
+fn estimate_surface_sub_fast(chunk: &ChunkData) -> usize {
+    let mut max_wy = Y_MIN - 1;
+    for z in (0..CZ).step_by(4) {
+        for x in (0..CX).step_by(4) {
+            for ly in (0..CY).rev() {
+                if chunk.get(x, ly, z) != 0 {
+                    let wy = Y_MIN + ly as i32;
+                    if wy > max_wy { max_wy = wy; }
+                    break;
+                }
+            }
+        }
+    }
+    let ly = (max_wy - Y_MIN).max(0) as usize;
+    (ly / SEC_H).clamp(0, SEC_COUNT.saturating_sub(1))
+}
+
+fn sub_priority_order(chunk: &ChunkData) -> Vec<usize> {
+    let mut out = Vec::with_capacity(SEC_COUNT);
+    let mut used = vec![false; SEC_COUNT];
+    let mid = estimate_surface_sub_fast(chunk);
+
+    out.push(mid); used[mid] = true;
+
+    let mut off = 1isize;
+    while out.len() < SEC_COUNT {
+        let below = mid as isize - off;
+        if below >= 0 && !used[below as usize] {
+            out.push(below as usize);
+            used[below as usize] = true;
+        }
+        let above = mid as isize + off;
+        if above < SEC_COUNT as isize && !used[above as usize] {
+            out.push(above as usize);
+            used[above as usize] = true;
+        }
+        off += 1;
+    }
+    out
 }
 

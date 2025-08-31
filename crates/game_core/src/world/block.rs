@@ -1,5 +1,6 @@
 use crate::world::chunk::ChunkMap;
 use crate::world::chunk_dim::{world_to_chunk_xz, Y_MAX, Y_MIN};
+use crate::world::fluid::FluidMap;
 use bevy::prelude::*;
 use bevy::render::mesh::{Indices, PrimitiveTopology};
 use serde::Deserialize;
@@ -8,6 +9,7 @@ use std::fs;
 use std::path::Path;
 
 pub const VOXEL_SIZE: f32 = 1.5;
+const ATLAS_PAD_PX: f32 = 0.5;
 
 // =================================================================
 //                          External Struct
@@ -55,6 +57,21 @@ pub struct BlockRegistry {
 }
 
 impl BlockRegistry {
+
+    #[inline]
+    pub fn name(&self, id: BlockId) -> &str {
+        self.def(id).name.as_str()
+    }
+
+    #[inline]
+    pub fn name_opt(&self, id: BlockId) -> Option<&str> {
+        self.defs.get(id as usize).map(|d| d.name.as_str())
+    }
+
+    #[inline]
+    pub fn id_opt(&self, name: &str) -> Option<BlockId> {
+        self.name_to_id.get(name).copied()
+    }
 
     pub fn material(&self, id: BlockId) -> Handle<StandardMaterial> {
         self.def(id).material.clone()
@@ -107,12 +124,26 @@ impl BlockRegistry {
             };
             let uv_north  = tile_uv(&tileset, north_key).unwrap();
 
+            let alpha_mode = if block_json.stats.opaque {
+                AlphaMode::Opaque
+            } else {
+                AlphaMode::Blend
+            };
+
+            let base_color = if block_json.stats.opaque {
+                Color::WHITE
+            } else {
+                Color::srgba(1.0, 1.0, 1.0, 0.8)
+            };
+
             let material = materials.add(StandardMaterial {
                 base_color_texture: Some(image.clone()),
-                alpha_mode: AlphaMode::Opaque,
+                base_color,
+                alpha_mode,
                 unlit: false,
                 metallic: 0.0,
                 perceptual_roughness: 1.0,
+                reflectance: 0.0,
                 ..Default::default()
             });
 
@@ -155,6 +186,8 @@ pub enum Blocks {
     Grass,
     Stone,
     Log,
+    Sand,
+    Water
 }
 
 impl Blocks {
@@ -164,6 +197,8 @@ impl Blocks {
             Blocks::Grass => "grass_block",
             Blocks::Stone => "stone_block",
             Blocks::Log   => "log_block",
+            Blocks::Sand  => "sand_block",
+            Blocks::Water => "water_block",
         }
     }
 }
@@ -236,6 +271,19 @@ pub fn get_block_world(chunk_map: &ChunkMap, wp: IVec3) -> BlockId {
     let lz = local.y as usize;
     let ly = world_y_to_local(wp.y);
     chunk.get(lx, ly, lz)
+}
+
+#[inline]
+pub fn fluid_at_world(fluids: &FluidMap, wx: i32, wy: i32, wz: i32) -> bool {
+    if wy < Y_MIN || wy > Y_MAX { return false; }
+    let (cc, local) = world_to_chunk_xz(wx, wz);
+    let lx = local.x as usize;
+    let lz = local.y as usize;
+    let ly = (wy - Y_MIN) as usize;
+    match fluids.0.get(&cc) {
+        Some(fc) => fc.get(lx, ly, lz),
+        None => false,
+    }
 }
 
 
@@ -357,21 +405,34 @@ fn tile_uv(ts: &BlockTileset, name: &str) -> Result<UvRect, String> {
         return Err(format!("tile '{}' out of bounds ({}x{})", name, ts.columns, ts.rows));
     }
 
-    let du = 1.0 / ts.columns as f32;
-    let dv = 1.0 / ts.rows as f32;
-    let mut u0 = col as f32 * du;
-    let mut v0 = row as f32 * dv;
-    let mut u1 = u0 + du;
-    let mut v1 = v0 + dv;
+    let img_w = (ts.columns * ts.tile_size) as f32;
+    let img_h = (ts.rows * ts.tile_size) as f32;
 
-    // half-texel inset
-    let atlas_w = (ts.columns * ts.tile_size) as f32;
-    let atlas_h = (ts.rows * ts.tile_size) as f32;
-    let eps_u = 0.5 / atlas_w;
-    let eps_v = 0.5 / atlas_h;
-    u0 += eps_u; v0 += eps_v; u1 -= eps_u; v1 -= eps_v;
+    let ([u0, v0], [u1, v1]) = atlas_uv(
+        col as usize,
+        row as usize,
+        ts.columns as usize,
+        ts.rows as usize,
+        ATLAS_PAD_PX,
+        img_w,
+        img_h,
+    );
 
     Ok(UvRect { u0, v0, u1, v1 })
+}
+
+
+fn atlas_uv(tile_x: usize, tile_y: usize, tiles_x: usize, tiles_y: usize,
+            pad_px: f32, image_w: f32, image_h: f32) -> ([f32;2],[f32;2]) {
+    let tw = image_w / tiles_x as f32;
+    let th = image_h / tiles_y as f32;
+
+    let u0 = (tile_x as f32 * tw + pad_px) / image_w;
+    let v0 = (tile_y as f32 * th + pad_px) / image_h;
+    let u1 = ((tile_x as f32 + 1.0) * tw - pad_px) / image_w;
+    let v1 = ((tile_y as f32 + 1.0) * th - pad_px) / image_h;
+
+    ([u0, v0], [u1, v1])
 }
 
 /// Builds a cube mesh with per-face UVs and outward-facing normals.
