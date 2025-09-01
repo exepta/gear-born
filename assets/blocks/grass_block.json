@@ -4,11 +4,7 @@
   "texture": {
     "top": "grass_top",
     "bottom": "dirt",
-    "west": "grass_side",
-    "north": "grass_side",
-    "nord": "grass_side",
-    "east": "grass_side",
-    "south": "grass_side"
+    "horizontal": "grass_side"
   },
   "stats": {
     "hardness": 1.0,

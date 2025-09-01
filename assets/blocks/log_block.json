@@ -2,12 +2,8 @@
   "name": "log_block",
   "texture_dir": "textures/blocks/log",
   "texture": {
-    "top": "log_top",
-    "bottom": "log_bottom",
-    "west": "log_side",
-    "north": "log_side",
-    "east": "log_side",
-    "south": "log_side"
+    "vertical": "log_top",
+    "horizontal": "log_side"
   },
   "stats": {
     "hardness": 2.7,

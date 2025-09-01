@@ -157,17 +157,13 @@ impl BlockRegistry {
             let image: Handle<Image> = asset_server.load(atlas_path.as_str());
 
             // UVs je Face
-            let uv_top    = tile_uv(&tileset, &block_json.texture.top).unwrap();
-            let uv_bottom = tile_uv(&tileset, &block_json.texture.bottom).unwrap();
-            let uv_west   = tile_uv(&tileset, &block_json.texture.west).unwrap();
-            let uv_east   = tile_uv(&tileset, &block_json.texture.east).unwrap();
-            let uv_south  = tile_uv(&tileset, &block_json.texture.south).unwrap();
-            let north_key = if !block_json.texture.north.is_empty() {
-                &block_json.texture.north
-            } else {
-                &block_json.texture.nord
-            };
-            let uv_north  = tile_uv(&tileset, north_key).unwrap();
+            let faces = block_json.texture.resolve();
+            let uv_top    = tile_uv(&tileset, require_face(&faces.top,   "top",    &block_json.name)).unwrap();
+            let uv_bottom = tile_uv(&tileset, require_face(&faces.bottom,"bottom", &block_json.name)).unwrap();
+            let uv_north  = tile_uv(&tileset, require_face(&faces.north, "north",  &block_json.name)).unwrap();
+            let uv_east   = tile_uv(&tileset, require_face(&faces.east,  "east",   &block_json.name)).unwrap();
+            let uv_south  = tile_uv(&tileset, require_face(&faces.south, "south",  &block_json.name)).unwrap();
+            let uv_west   = tile_uv(&tileset, require_face(&faces.west,  "west",   &block_json.name)).unwrap();
 
             let (alpha_mode, base_color) = material_policy_from_stats(&block_json.stats);
 
@@ -470,18 +466,61 @@ struct BlockJson {
 
 #[derive(Deserialize)]
 struct TextureFacesJson {
-    pub top: String,
-    pub bottom: String,
-    pub west: String,
-    #[serde(default)]
-    pub nord: String,
-    #[serde(default)]
-    pub north: String,
-    pub east: String,
-    pub south: String,
+    #[serde(default)] pub top: String,
+    #[serde(default)] pub bottom: String,
+    #[serde(default)] pub west: String,
+    #[serde(default)] pub east: String,
+    #[serde(default)] pub south: String,
+
+    #[serde(default)] pub north: String,
+    #[serde(default)] pub nord: String,
+
+    #[serde(default)] pub all: String,
+    #[serde(default)] pub vertical: String,
+    #[serde(default)] pub horizontal: String,
+}
+
+impl TextureFacesJson {
+    fn resolve(&self) -> ResolvedFaces<'_> {
+        #[inline]
+        fn pick<'a>(specific: &'a str, group: &'a str, all: &'a str) -> &'a str {
+            if !specific.is_empty() { specific }
+            else if !group.is_empty() { group }
+            else { all }
+        }
+
+        let north_name = if !self.north.is_empty() { self.north.as_str() } else { self.nord.as_str() };
+
+        ResolvedFaces {
+            top:    pick(&self.top,    &self.vertical,   &self.all),
+            bottom: pick(&self.bottom, &self.vertical,   &self.all),
+            north:  pick(north_name,   &self.horizontal, &self.all),
+            east:   pick(&self.east,   &self.horizontal, &self.all),
+            south:  pick(&self.south,  &self.horizontal, &self.all),
+            west:   pick(&self.west,   &self.horizontal, &self.all),
+        }
+    }
+}
+
+struct ResolvedFaces<'a> {
+    top:   &'a str,
+    bottom:&'a str,
+    north: &'a str,
+    east:  &'a str,
+    south: &'a str,
+    west:  &'a str,
 }
 
 fn d_true() -> bool { true }
+
+#[inline]
+fn require_face<'a>(name: &'a str, face: &str, block_name: &str) -> &'a str {
+    if name.is_empty() {
+        panic!("block '{}': missing texture for face '{}'. Provide '{}' or use 'all'/'vertical'/'horizontal'.",
+               block_name, face, face);
+    }
+    name
+}
 
 fn read_json<T: for<'de> Deserialize<'de>>(path: &str) -> T {
     let s = fs::read_to_string(path).unwrap_or_else(|_| panic!("missing file: {path}"));

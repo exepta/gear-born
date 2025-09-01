@@ -2,13 +2,7 @@
   "name": "dirt_block",
   "texture_dir": "textures/blocks/dirt",
   "texture": {
-    "top": "dirt",
-    "bottom": "dirt",
-    "west": "dirt",
-    "north": "dirt",
-    "nord": "dirt",
-    "east": "dirt",
-    "south": "dirt"
+    "all": "dirt"
   },
   "stats": {
     "hardness": 0.65,

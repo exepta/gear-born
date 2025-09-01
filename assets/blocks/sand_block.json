@@ -2,13 +2,7 @@
   "name": "sand_block",
   "texture_dir": "textures/blocks/sand",
   "texture": {
-    "top": "sand",
-    "bottom": "sand",
-    "west": "sand",
-    "north": "sand",
-    "nord": "sand",
-    "east": "sand",
-    "south": "sand"
+    "all": "sand"
   },
   "stats": {
     "hardness": 0.45,
