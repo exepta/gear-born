@@ -7,10 +7,10 @@ use game_core::debug::*;
 use game_core::key_converter::convert;
 use game_core::player::selection::SelectionState;
 use game_core::states::{AppState, InGameStates};
-use game_core::world::block::{block_name_from_registry, get_block_world, BlockRegistry, VOXEL_SIZE};
+use game_core::world::block::{block_name_from_registry, get_block_world, BlockRegistry, MiningState, VOXEL_SIZE};
 use game_core::world::chunk::ChunkMap;
 use game_core::world::chunk_dim::*;
-use game_core::BuildInfo;
+use game_core::{BlockCatalogPreviewCam, BuildInfo};
 use sysinfo::{CpuRefreshKind, MemoryRefreshKind, Pid, ProcessesToUpdate, RefreshKind, System};
 
 pub struct DebugOverlayPlugin;
@@ -84,7 +84,7 @@ fn toggle_overlay(
 fn toggle_grid(
     keys: Res<ButtonInput<KeyCode>>,
     mut state: ResMut<DebugGridState>,
-    q_cam: Query<&GlobalTransform, With<Camera3d>>,
+    q_cam: Query<&GlobalTransform, (With<Camera3d>, Without<BlockCatalogPreviewCam>)>,
     game_config: Res<GameConfig>
 ) {
     let key = convert(game_config.input.chunk_grid.as_str())
@@ -171,13 +171,16 @@ fn update_debug_text(
     diag: Res<DiagnosticsStore>,
     stats: Res<SysStats>,
     sel: Option<Res<SelectionState>>,
-    q_cam: Query<&GlobalTransform, With<Camera3d>>,
+    q_cam: Query<&GlobalTransform, (With<Camera3d>, Without<BlockCatalogPreviewCam>)>,
     mut q_text: Query<&mut Text>,
     build: Option<Res<BuildInfo>>,
     game_config: Res<GameConfig>,
     backend: Res<RenderAdapterInfo>,
     reg: Res<BlockRegistry>,
     chunk_map: Res<ChunkMap>,
+
+    time: Res<Time>,
+    mining: Option<Res<MiningState>>,
 ) {
     if !state.show { return; }
     let Some(text_e) = state.text else { return; };
@@ -186,17 +189,41 @@ fn update_debug_text(
         .and_then(|d| d.smoothed())
         .unwrap_or(0.0);
 
-    let pos = q_cam.single().map(|t| t.translation()).unwrap_or(Vec3::ZERO);
-    let (cc, _local) = world_to_chunk_xz(pos.x.floor() as i32, pos.z.floor() as i32);
+    let pos_bs = q_cam.single().map(|t| t.translation()).unwrap_or(Vec3::ZERO) / VOXEL_SIZE;
+    let (cc, _local) = world_to_chunk_xz(pos_bs.x.floor() as i32, pos_bs.z.floor() as i32);
 
     let (hit_str, _, block_line) = if let Some(sel) = sel {
         if let Some(h) = sel.hit {
             let id = get_block_world(&chunk_map, h.block_pos);
             let name = if id != 0 { block_name_from_registry(&reg, id) } else { "air".into() };
+
+            let pct_opt = mining
+                .as_ref()
+                .and_then(|m| m.target.as_ref())
+                .and_then(|t| {
+                    if t.loc == h.block_pos && t.id == id && t.duration > 0.0 {
+                        let p = ((time.elapsed_secs() - t.started_at) / t.duration)
+                            .clamp(0.0, 1.0);
+                        Some((p * 100.0).round() as i32)
+                    } else {
+                        None
+                    }
+                });
+
+            let block_line = if id != 0 {
+                if let Some(pct) = pct_opt {
+                    format!("Block: {} progress ({}%)", name, pct)
+                } else {
+                    format!("Block: {}", name)
+                }
+            } else {
+                "Block: —".into()
+            };
+
             (
                 format!("{:?} at ({},{},{})", h.face, h.block_pos.x, h.block_pos.y, h.block_pos.z),
                 format!("place: ({},{},{})", h.place_pos.x, h.place_pos.y, h.place_pos.z),
-                format!("Block: {}", name),
+                block_line,
             )
         } else {
             ("—".into(), "—".into(), "Block: —".into())
@@ -228,7 +255,7 @@ fn update_debug_text(
         stats.cpu_percent,
         mem_str,
         backend_str,
-        pos.x, pos.y, pos.z,
+        pos_bs.x, pos_bs.y, pos_bs.z,
         cc.x, cc.y, CX, CZ, chunk_range,
         block_line,
         hit_str,
@@ -249,7 +276,7 @@ fn update_debug_text(
 fn draw_chunk_grid(
     mut gizmos: Gizmos<ChunkGridGizmos>,
     grid: Res<DebugGridState>,
-    q_cam: Query<&GlobalTransform, With<Camera3d>>,
+    q_cam: Query<&GlobalTransform, (With<Camera3d>, Without<BlockCatalogPreviewCam>)>,
     cfg: Res<GameConfig>,
 ) {
     if !grid.show { return; }

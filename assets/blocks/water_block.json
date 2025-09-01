@@ -2,13 +2,7 @@
   "name": "water_block",
   "texture_dir": "textures/blocks/water",
   "texture": {
-    "top": "water",
-    "bottom": "water",
-    "west": "water",
-    "north": "water",
-    "nord": "water",
-    "east": "water",
-    "south": "water"
+    "all": "water"
   },
   "stats": {
     "hardness": 0.0,

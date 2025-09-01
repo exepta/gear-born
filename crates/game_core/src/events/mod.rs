@@ -1,4 +1,5 @@
 pub mod player_block_events;
+pub mod chunk_events;
 
 use crate::events::player_block_events::{BlockBreakByPlayerEvent, BlockPlaceByPlayerEvent};
 use bevy::prelude::*;

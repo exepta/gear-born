@@ -2,16 +2,10 @@
   "name": "stone_block",
   "texture_dir": "textures/blocks/stone",
   "texture": {
-    "top": "stone",
-    "bottom": "stone",
-    "west": "stone",
-    "north": "stone",
-    "nord": "stone",
-    "east": "stone",
-    "south": "stone"
+    "all": "stone"
   },
   "stats": {
-    "hardness": 2.0,
+    "hardness": 4.5,
     "blast_resistance": 3.5,
     "opaque": true,
     "emissive": 0.0

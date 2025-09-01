@@ -12,9 +12,10 @@ jump = "Space"
 sprint = "ShiftLeft"
 interact = "E"
 attack = ""
+toggle_game_mode = "F2"
 
 ui_menu = "Escape"
-ui_inventory = "B"
+ui_inventory = "Tab"
 ui_close_back = "Escape"
 
 debug_overlay = "F3"

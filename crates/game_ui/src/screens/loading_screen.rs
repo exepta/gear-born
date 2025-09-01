@@ -4,6 +4,7 @@ use game_core::load_state::{LoadingPhase, LoadingProgress, LoadingTarget, PhaseD
 use game_core::states::{AppState, LoadingStates};
 use game_core::world::chunk::{ChunkMap, LoadCenter};
 use game_core::world::fluid::FluidMap;
+use game_core::UI_ACCENT_COLOR;
 
 #[derive(Component)]
 struct LoadingScreenRoot;
@@ -75,6 +76,7 @@ fn spawn_loading_ui(mut commands: Commands) {
                 justify_content: JustifyContent::Center,
                 ..default()
             },
+            Visibility::default(),
             BackgroundColor(Color::NONE),
             LoadingScreenRoot,
             Name::new("LoadingRoot"),
@@ -103,7 +105,7 @@ fn spawn_loading_ui(mut commands: Commands) {
 
                     col.spawn((
                         Node {
-                            width: Val::Px(420.0),
+                            width: Val::Px(400.0),
                             height: Val::Px(42.0),
                             padding: UiRect::all(Val::Px(8.0)),
                             align_items: AlignItems::Center,
@@ -161,11 +163,9 @@ fn update_progress_bar(
     let Some(lp) = lp else { return; };
     let filled = ((lp.overall_pct * 10.0).floor() as i32).clamp(0, 10);
 
-    let purple = Color::srgb(0.75, 0.20, 0.90);
-
     for (cell, mut bg) in q_cells.iter_mut() {
         if (cell.0 as i32) < filled {
-            *bg = BackgroundColor(purple);
+            *bg = BackgroundColor(UI_ACCENT_COLOR);
         } else {
             *bg = BackgroundColor(Color::NONE);
         }

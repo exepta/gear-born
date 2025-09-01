@@ -8,9 +8,10 @@ use bevy::window::{CursorGrabMode, PrimaryWindow};
 use bevy_rapier3d::prelude::*;
 use game_core::configuration::GameConfig;
 use game_core::key_converter::convert;
-use game_core::player::{FlightState, FpsController, Player, PlayerCamera};
+use game_core::player::{FlightState, FpsController, GameMode, GameModeState, Player, PlayerCamera};
 use game_core::states::{AppState, InGameStates};
 use game_core::world::block::BlockRegistry;
+use game_core::BlockCatalogUiState;
 
 #[derive(Component)]
 struct DoubleTapSpace {
@@ -51,7 +52,7 @@ impl Plugin for PlayerInitialize {
 fn spawn_scene(mut commands: Commands) {
     commands.spawn((
         DirectionalLight {
-            shadows_enabled: true,
+            shadows_enabled: false,
             illuminance: 1_000.0,
             color: Color::WHITE,
             ..default()
@@ -85,7 +86,7 @@ fn spawn_player(mut commands: Commands, game_config: Res<GameConfig>) {
             Name::new("Player"),
             Transform::from_xyz(0.0, 180.0, 0.0),
             GlobalTransform::default(),
-
+            Visibility::default(),
             RigidBody::KinematicPositionBased,
             Collider::capsule_y(half_h, RADIUS),
             LockedAxes::ROTATION_LOCKED,
@@ -152,10 +153,14 @@ fn spawn_player(mut commands: Commands, game_config: Res<GameConfig>) {
 fn grab_cursor_on_click(
     mut windows: Query<&mut Window, With<PrimaryWindow>>,
     mouse: Res<ButtonInput<MouseButton>>,
+    ui: Res<BlockCatalogUiState>
 ) {
     if !mouse.just_pressed(MouseButton::Left) {
         return;
     }
+
+    if ui.open { return; }
+
     if let Ok(mut win) = windows.single_mut() {
         win.cursor_options.grab_mode = CursorGrabMode::Locked;
         win.cursor_options.visible = false;
@@ -227,6 +232,7 @@ fn player_move_kcc(
         &mut FlightState,
         &mut DoubleTapSpace,
     ), With<Player>>,
+    game_mode_state: Res<GameModeState>,
     game_config: Res<GameConfig>,
 ) {
     let Ok((tf, ctrl, mut kin, mut kcc,
@@ -268,9 +274,11 @@ fn player_move_kcc(
 
     if keys.just_pressed(KeyCode::Space) {
         if now - tap.last_press <= DOUBLE_TAP_WIN {
-            flight.flying = !flight.flying;
-            tap.last_press = -1_000_000.0;
-            kin.vel_y = 0.0;
+            if game_mode_state.0 == GameMode::Creative {
+                flight.flying = !flight.flying;
+                tap.last_press = -1_000_000.0;
+                kin.vel_y = 0.0;
+            }
         } else {
             tap.last_press = now;
             if !flight.flying && grounded {

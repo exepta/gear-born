@@ -2,16 +2,10 @@
   "name": "glass_block",
   "texture_dir": "textures/blocks/glass",
   "texture": {
-    "top": "glass",
-    "bottom": "glass",
-    "west": "glass",
-    "north": "glass",
-    "nord": "glass",
-    "east": "glass",
-    "south": "glass"
+    "all": "glass"
   },
   "stats": {
-    "hardness": 1.0,
+    "hardness": 0.1,
     "blast_resistance": 1.5,
     "opaque": false,
     "emissive": 0.0

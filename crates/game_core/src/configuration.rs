@@ -165,6 +165,8 @@ pub struct InputConfig {
 
     /// Key or button mapping for performing a standard world attack.
     pub attack: String,
+    
+    pub toggle_game_mode: String,
 
     // UI
 
@@ -203,10 +205,11 @@ impl Default for InputConfig {
             jump: String::from("Space"),
             sprint: String::from("ShiftLeft"),
             interact: String::from("F"),
-
             attack: String::from("MouseLeft"),
+            toggle_game_mode: String::from("F2"),
+            
             ui_menu: String::from("Escape"),
-            ui_inventory: String::from("B"),
+            ui_inventory: String::from("Tab"),
             ui_close_back: String::from("Escape"),
 
             debug_overlay: String::from("F3"),
