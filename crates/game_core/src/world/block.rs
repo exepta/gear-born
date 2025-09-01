@@ -232,6 +232,9 @@ impl AsRef<str> for Blocks {
 }
 
 #[derive(Resource, Default)]
+pub struct MiningOverlayRoot(pub Option<Entity>);
+
+#[derive(Resource, Default)]
 pub struct MiningState {
     pub target: Option<MiningTarget>,
 }
