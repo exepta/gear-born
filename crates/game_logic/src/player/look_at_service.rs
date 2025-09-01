@@ -6,6 +6,7 @@ use game_core::states::{AppState, InGameStates};
 use game_core::world::block::{get_block_world, BlockRegistry, SelectedBlock, VOXEL_SIZE};
 use game_core::world::chunk::{ChunkMap, VoxelStage};
 use game_core::world::ray_cast_voxels;
+use game_core::BlockCatalogPreviewCam;
 
 pub struct LookAtService;
 
@@ -37,15 +38,13 @@ fn setup_selection_gizmo_config(mut store: ResMut<GizmoConfigStore>) {
 
 fn update_selection(
     mut sel: ResMut<SelectionState>,
-    q_cam: Query<(&GlobalTransform, &Camera), With<Camera3d>>,
+    q_cam: Query<(&GlobalTransform, &Camera), (With<Camera3d>, Without<BlockCatalogPreviewCam>)>,
     chunk_map: Res<ChunkMap>,
 ) {
-    let (tf, _cam) = if let Ok(v) = q_cam.single() { v } else { return; };
+    let Ok((tf, _cam)) = q_cam.single() else { return; };
 
     let origin_bs = tf.translation() / VOXEL_SIZE;
-
     let dir_bs: Vec3 = tf.forward().into();
-
     let max_dist_blocks = 8.0;
 
     sel.hit = ray_cast_voxels(origin_bs, dir_bs, max_dist_blocks, &chunk_map);

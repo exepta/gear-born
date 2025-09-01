@@ -61,6 +61,7 @@ pub struct SelectedBlock {
     pub id:   u16,
     pub name: String,
 }
+
 impl Default for SelectedBlock {
     fn default() -> Self { Self { id: 0, name: "air".to_string() } }
 }

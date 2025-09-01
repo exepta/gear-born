@@ -23,6 +23,9 @@ pub struct BuildInfo {
     pub bevy_version: &'static str,
 }
 
+#[derive(Component)]
+pub struct BlockCatalogPreviewCam;
+
 pub struct GameCorePlugin;
 
 impl Plugin for GameCorePlugin {

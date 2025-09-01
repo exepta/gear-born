@@ -28,5 +28,6 @@ features = [
     "png",
     "jpeg",
     "bevy_mesh_picking_backend",
-    "bevy_picking"
+    "bevy_picking",
+    "bevy_window"
 ]
