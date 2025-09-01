@@ -11,6 +11,7 @@ use game_core::key_converter::convert;
 use game_core::player::{FlightState, FpsController, Player, PlayerCamera};
 use game_core::states::{AppState, InGameStates};
 use game_core::world::block::BlockRegistry;
+use game_core::BlockCatalogUiState;
 
 #[derive(Component)]
 struct DoubleTapSpace {
@@ -85,7 +86,7 @@ fn spawn_player(mut commands: Commands, game_config: Res<GameConfig>) {
             Name::new("Player"),
             Transform::from_xyz(0.0, 180.0, 0.0),
             GlobalTransform::default(),
-
+            Visibility::default(),
             RigidBody::KinematicPositionBased,
             Collider::capsule_y(half_h, RADIUS),
             LockedAxes::ROTATION_LOCKED,
@@ -152,10 +153,14 @@ fn spawn_player(mut commands: Commands, game_config: Res<GameConfig>) {
 fn grab_cursor_on_click(
     mut windows: Query<&mut Window, With<PrimaryWindow>>,
     mouse: Res<ButtonInput<MouseButton>>,
+    ui: Res<BlockCatalogUiState>
 ) {
     if !mouse.just_pressed(MouseButton::Left) {
         return;
     }
+
+    if ui.open { return; }
+
     if let Ok(mut win) = windows.single_mut() {
         win.cursor_options.grab_mode = CursorGrabMode::Locked;
         win.cursor_options.visible = false;

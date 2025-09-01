@@ -1,6 +1,5 @@
 use bevy::prelude::*;
 use bevy::render::camera::{ImageRenderTarget, RenderTarget};
-use bevy::render::mesh::{Indices, PrimitiveTopology};
 use bevy::render::render_asset::RenderAssetUsages;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat, TextureUsages};
 use bevy::render::view::RenderLayers;
@@ -8,7 +7,7 @@ use bevy::ui::FocusPolicy;
 use bevy::window::{CursorGrabMode, PrimaryWindow};
 use game_core::states::{AppState, InGameStates};
 use game_core::world::block::*;
-use game_core::{BlockCatalogPreviewCam, BlockCatalogUiState};
+use game_core::{BlockCatalogPreviewCam, BlockCatalogUiState, UI_ACCENT_COLOR};
 
 /* ---------------- Plugin ---------------- */
 
@@ -23,7 +22,13 @@ impl Plugin for BlockCatalogUiPlugin {
             )
             .add_systems(
                 Update,
-                (toggle_block_catalog_ui, handle_block_pick_interactions, spin_previews)
+                (
+                    toggle_block_catalog_ui,
+                    handle_block_pick_interactions,
+                    spin_previews,
+                    update_selected_highlight
+                        .run_if(resource_changed::<SelectedBlock>),
+                )
                     .run_if(in_state(AppState::InGame(InGameStates::Game)))
                     .run_if(resource_exists::<BlockCatalogUiState>)
                     .run_if(resource_exists::<BlockRegistry>),
@@ -41,8 +46,8 @@ impl Plugin for BlockCatalogUiPlugin {
 
 /* ---------------- Constants ---------------- */
 
-const PANEL_WIDTH_PX: f32 = 550.0;
-const PREVIEW_SIZE_PX: u32 = 160;
+const PANEL_WIDTH_PX: f32 = 580.0;
+const PREVIEW_SIZE_PX: u32 = 100;
 const PREVIEW_LAYER_BASE: usize = 3;
 const PREVIEW_CAM_FOV_DEG: f32 = 32.0;
 
@@ -65,24 +70,43 @@ fn toggle_block_catalog_ui(
         if ui.open {
             win.cursor_options.grab_mode = CursorGrabMode::None;
             win.cursor_options.visible = true;
+        } else {
+            win.cursor_options.grab_mode = CursorGrabMode::Locked;
+            win.cursor_options.visible = false;
         }
     }
 }
 
 fn handle_block_pick_interactions(
-    mut q_btn: Query<(&Interaction, &BlockItemButton, &mut BackgroundColor), (Changed<Interaction>, With<Button>)>,
+    mut q_btn: Query<
+        (&Interaction, &BlockItemButton, Option<&mut BackgroundColor>),
+        (Changed<Interaction>, With<Button>)
+    >,
     mut selected: ResMut<SelectedBlock>,
     reg: Res<BlockRegistry>,
 ) {
-    for (interaction, item, mut bg) in &mut q_btn {
+    for (interaction, item, bg_opt) in &mut q_btn {
+        let is_selected = item.block_id == selected.id;
+
         match *interaction {
             Interaction::Pressed => {
                 selected.id = item.block_id;
                 selected.name = reg.name(item.block_id).to_string();
-                *bg = BackgroundColor(Color::srgb_u8(66, 165, 245));
             }
-            Interaction::Hovered => *bg = BackgroundColor(Color::srgb_u8(120,120,120)),
-            Interaction::None    => *bg = BackgroundColor(Color::srgb_u8(80,80,80)),
+            Interaction::Hovered => {
+                if !is_selected {
+                    if let Some(mut bg) = bg_opt {
+                        *bg = BackgroundColor(Color::srgb_u8(120, 120, 120));
+                    }
+                }
+            }
+            Interaction::None => {
+                if !is_selected {
+                    if let Some(mut bg) = bg_opt {
+                        *bg = BackgroundColor(Color::srgb_u8(80, 80, 80));
+                    }
+                }
+            }
         }
     }
 }
@@ -90,6 +114,22 @@ fn handle_block_pick_interactions(
 fn spin_previews(time: Res<Time>, mut q: Query<(&mut Transform, &Spin), With<PreviewAnchor>>) {
     for (mut tf, spin) in &mut q {
         tf.rotate_y(spin.speed * time.delta_secs());
+    }
+}
+
+fn update_selected_highlight(
+    selected: Res<SelectedBlock>,
+    mut q_borders: Query<(&BlockItemButton, &mut BorderColor)>,
+    mut q_labels:  Query<(&BlockItemButton,  &mut BackgroundColor)>,
+) {
+    let normal_border  = Color::srgba(1.0, 1.0, 1.0, 0.08);
+    let normal_back    = Color::srgb_u8(80, 80, 80);
+
+    for (btn, mut border) in &mut q_borders {
+        *border = BorderColor(if btn.block_id == selected.id { UI_ACCENT_COLOR } else { normal_border });
+    }
+    for (lbl, mut back_color) in &mut q_labels {
+        *back_color = BackgroundColor(if lbl.block_id == selected.id { UI_ACCENT_COLOR } else { normal_back });
     }
 }
 
@@ -210,10 +250,10 @@ fn spawn_block_catalog_ui(
             .spawn((
                 PreviewAnchor,
                 Spin { speed: 0.8 },
-                Transform::IDENTITY,
+                Transform::from_rotation(Quat::from_euler(EulerRot::XYZ, 0.0, 0.0, 0.0)),
                 GlobalTransform::default(),
                 Visibility::default(),
-                layer.clone(), // <-- unique layer
+                layer.clone(),
                 Name::new(format!("Preview:Anchor({})", def.name)),
             ))
             .id();
@@ -231,18 +271,17 @@ fn spawn_block_catalog_ui(
         });
 
         // Mesh
-        let mesh = make_block_mesh(&reg, block_id, 1.0);
+        let mesh = build_block_cube_mesh(&reg, block_id, 1.0);
         commands.entity(anchor).with_children(|c| {
             c.spawn((
                 PreviewMesh,
                 Mesh3d(meshes.add(mesh)),
                 MeshMaterial3d(preview_mat.clone()),
                 Transform::from_translation(Vec3::splat(-0.5))
-                    .with_rotation(Quat::from_euler(EulerRot::XYZ, 0.35, 0.0, 0.0))
                     .with_scale(Vec3::splat(0.75)),
                 GlobalTransform::default(),
                 Visibility::default(),
-                layer, // <-- unique layer
+                layer.clone(),
                 Name::new(format!("Preview:Mesh({})", def.name)),
             ));
         });
@@ -259,7 +298,7 @@ fn spawn_block_catalog_ui(
                     align_items: AlignItems::Center,
                     justify_content: JustifyContent::Center,
                     padding: UiRect::all(Val::Px(6.0)),
-                    border: UiRect::all(Val::Px(1.0)),
+                    border: UiRect::all(Val::Px(2.0)),
                     ..default()
                 },
                 BorderColor(Color::srgba(1.0, 1.0, 1.0, 0.08)),
@@ -312,56 +351,4 @@ fn make_render_texture(images: &mut Assets<Image>, w: u32, h: u32) -> Handle<Ima
             | TextureUsages::COPY_SRC
             | TextureUsages::COPY_DST;
     images.add(image)
-}
-
-fn make_block_mesh(reg: &BlockRegistry, id: BlockId, size: f32) -> Mesh {
-    let f = FaceUvRectsLocal {
-        top: reg.uv(id, Face::Top),
-        bottom: reg.uv(id, Face::Bottom),
-        north: reg.uv(id, Face::North),
-        east: reg.uv(id, Face::East),
-        south: reg.uv(id, Face::South),
-        west: reg.uv(id, Face::West),
-    };
-    cube_mesh_with_face_uvs_preview(&f, size)
-}
-
-#[derive(Clone)]
-struct FaceUvRectsLocal { top: UvRect, bottom: UvRect, north: UvRect, east: UvRect, south: UvRect, west: UvRect }
-
-fn cube_mesh_with_face_uvs_preview(f: &FaceUvRectsLocal, size: f32) -> Mesh {
-    #[inline]
-    fn quad_uv(uv: &UvRect, flip_v: bool) -> [[f32;2];4] {
-        if !flip_v { [[uv.u0,uv.v0],[uv.u1,uv.v0],[uv.u1,uv.v1],[uv.u0,uv.v1]] }
-        else       { [[uv.u0,uv.v1],[uv.u1,uv.v1],[uv.u1,uv.v0],[uv.u0,uv.v0]] }
-    }
-    let s = size;
-
-    let mut pos = Vec::with_capacity(24);
-    let mut nrm = Vec::with_capacity(24);
-    let mut uvs = Vec::with_capacity(24);
-    let mut idx = Vec::with_capacity(36);
-
-    let mut push = |quad: [[f32;3];4], normal:[f32;3], uv:&UvRect, flip_v: bool| {
-        let base = pos.len() as u32;
-        pos.extend_from_slice(&quad);
-        nrm.extend_from_slice(&[normal;4]);
-        uvs.extend_from_slice(&quad_uv(uv, flip_v));
-        idx.extend_from_slice(&[base, base+1, base+2, base, base+2, base+3]);
-    };
-
-    // +X, -X, +Y, -Y, +Z, -Z
-    push([[s,0.0,s],[s,0.0,0.0],[s,s,0.0],[s,s,s]], [ 1.0,0.0, 0.0], &f.east,   true);
-    push([[0.0,0.0,0.0],[0.0,0.0,s],[0.0,s,s],[0.0,s,0.0]], [-1.0,0.0, 0.0], &f.west,   true);
-    push([[0.0,s,s],[s,s,s],[s,s,0.0],[0.0,s,0.0]],        [ 0.0,1.0, 0.0], &f.top,    false);
-    push([[0.0,0.0,0.0],[s,0.0,0.0],[s,0.0,s],[0.0,0.0,s]], [ 0.0,-1.0,0.0], &f.bottom, false);
-    push([[0.0,0.0,s],[s,0.0,s],[s,s,s],[0.0,s,s]],        [ 0.0,0.0, 1.0], &f.south,  true);
-    push([[s,0.0,0.0],[0.0,0.0,0.0],[0.0,s,0.0],[s,s,0.0]], [ 0.0,0.0,-1.0], &f.north,  true);
-
-    let mut mesh = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::default());
-    mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, pos);
-    mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL,   nrm);
-    mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0,     uvs);
-    mesh.insert_indices(Indices::U32(idx));
-    mesh
 }

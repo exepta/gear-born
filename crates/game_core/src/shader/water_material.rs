@@ -1,15 +1,21 @@
 use bevy::pbr::{MaterialPipeline, MaterialPipelineKey};
 use bevy::prelude::*;
 use bevy::render::mesh::MeshVertexBufferLayoutRef;
-use bevy::render::render_resource::{AsBindGroup, BlendState, RenderPipelineDescriptor, ShaderRef, ShaderType, SpecializedMeshPipelineError};
+use bevy::render::render_resource::*;
+pub use water_types::WaterParams;
 
-#[allow(dead_code)]
-#[derive(Clone, Copy, Default, ShaderType, Debug)]
-pub struct WaterParams {
-    pub uv_rect: Vec4,
-    pub flow:    Vec4, // speed_u, speed_v, amp, freq
-    pub t_misc:  Vec4, // time, _, _, _
-    pub tint:    Vec4,
+mod water_types {
+    #![allow(dead_code)]
+    use bevy::prelude::*;
+    use bevy::render::render_resource::ShaderType;
+
+    #[derive(Clone, Copy, Default, ShaderType, Debug)]
+    pub struct WaterParams {
+        pub uv_rect: Vec4,
+        pub flow:    Vec4,
+        pub t_misc:  Vec4,
+        pub tint:    Vec4,
+    }
 }
 
 #[derive(AsBindGroup, Asset, TypePath, Clone, Debug)]
