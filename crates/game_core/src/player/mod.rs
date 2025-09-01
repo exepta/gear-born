@@ -7,7 +7,8 @@ pub struct PlayerModule;
 
 impl Plugin for PlayerModule {
     fn build(&self, app: &mut App) {
-        app.init_resource::<SelectionState>();
+        app.init_resource::<SelectionState>()
+            .init_resource::<GameModeState>();
     }
 }
 
@@ -49,3 +50,13 @@ pub struct FpsController {
 /// and allow free 3D movement using the FPS controls.
 #[derive(Component)]
 pub struct FlightState { pub flying: bool }
+
+#[derive(Default, PartialEq, Eq)]
+pub enum GameMode {
+    Survival,
+    #[default]
+    Creative
+}
+
+#[derive(Resource, Default)]
+pub struct GameModeState(pub GameMode);

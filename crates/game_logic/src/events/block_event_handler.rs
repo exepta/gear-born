@@ -5,6 +5,7 @@ use bevy::render::view::{NoFrustumCulling, RenderLayers};
 use game_core::events::chunk_events::SubChunkNeedRemeshEvent;
 use game_core::events::player_block_events::{BlockBreakByPlayerEvent, BlockPlaceByPlayerEvent};
 use game_core::player::selection::SelectionState;
+use game_core::player::{GameMode, GameModeState};
 use game_core::states::{AppState, InGameStates};
 use game_core::world::block::*;
 use game_core::world::chunk::*;
@@ -41,12 +42,57 @@ fn block_break_handler(
     buttons: Res<ButtonInput<MouseButton>>,
     selection: Res<SelectionState>,
     registry: Res<BlockRegistry>,
+    game_mode: Res<GameModeState>,
 
     mut state: ResMut<MiningState>,
     mut chunk_map: ResMut<ChunkMap>,
     mut ev_dirty: EventWriter<SubChunkNeedRemeshEvent>,
     mut break_ev: EventWriter<BlockBreakByPlayerEvent>,
 ) {
+    // --- Creative: instant break on click ---
+    if matches!(game_mode.0, GameMode::Creative) {
+        if !buttons.just_pressed(MouseButton::Left) {
+            state.target = None;
+            return;
+        }
+
+        let Some(hit) = selection.hit else {
+            state.target = None;
+            return;
+        };
+
+        let id_now = get_block_world(&chunk_map, hit.block_pos);
+        if id_now == 0 {
+            state.target = None;
+            return;
+        }
+
+        // remove block immediately
+        if let Some(mut access) = world_access_mut(&mut chunk_map, hit.block_pos) {
+            access.set(0);
+        }
+        mark_dirty_block_and_neighbors(&mut chunk_map, hit.block_pos, &mut ev_dirty);
+
+        let (chunk_coord, l) = world_to_chunk_xz(hit.block_pos.x, hit.block_pos.z);
+        let lx = l.x as u8;
+        let lz = l.y as u8;
+        let ly = (hit.block_pos.y - Y_MIN).clamp(0, CY as i32 - 1) as usize;
+
+        break_ev.write(BlockBreakByPlayerEvent {
+            chunk_coord,
+            location: hit.block_pos,
+            chunk_x: lx,
+            chunk_y: ly as u16,
+            chunk_z: lz,
+            block_id: id_now,
+            block_name: registry.name_opt(id_now).unwrap_or("").to_string(),
+        });
+
+        state.target = None;
+        return; // done for creative
+    }
+
+    // --- Survival: timed mining as before ---
     if !buttons.pressed(MouseButton::Left) {
         state.target = None;
         return;

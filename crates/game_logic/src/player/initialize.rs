@@ -8,7 +8,7 @@ use bevy::window::{CursorGrabMode, PrimaryWindow};
 use bevy_rapier3d::prelude::*;
 use game_core::configuration::GameConfig;
 use game_core::key_converter::convert;
-use game_core::player::{FlightState, FpsController, Player, PlayerCamera};
+use game_core::player::{FlightState, FpsController, GameMode, GameModeState, Player, PlayerCamera};
 use game_core::states::{AppState, InGameStates};
 use game_core::world::block::BlockRegistry;
 use game_core::BlockCatalogUiState;
@@ -232,6 +232,7 @@ fn player_move_kcc(
         &mut FlightState,
         &mut DoubleTapSpace,
     ), With<Player>>,
+    game_mode_state: Res<GameModeState>,
     game_config: Res<GameConfig>,
 ) {
     let Ok((tf, ctrl, mut kin, mut kcc,
@@ -273,9 +274,11 @@ fn player_move_kcc(
 
     if keys.just_pressed(KeyCode::Space) {
         if now - tap.last_press <= DOUBLE_TAP_WIN {
-            flight.flying = !flight.flying;
-            tap.last_press = -1_000_000.0;
-            kin.vel_y = 0.0;
+            if game_mode_state.0 == GameMode::Creative {
+                flight.flying = !flight.flying;
+                tap.last_press = -1_000_000.0;
+                kin.vel_y = 0.0;
+            }
         } else {
             tap.last_press = now;
             if !flight.flying && grounded {

@@ -5,10 +5,11 @@ use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat, T
 use bevy::render::view::RenderLayers;
 use bevy::ui::FocusPolicy;
 use bevy::window::{CursorGrabMode, PrimaryWindow};
+use game_core::configuration::GameConfig;
+use game_core::key_converter::convert;
 use game_core::states::{AppState, InGameStates};
 use game_core::world::block::*;
 use game_core::{BlockCatalogPreviewCam, BlockCatalogUiState, UI_ACCENT_COLOR};
-
 /* ---------------- Plugin ---------------- */
 
 pub struct BlockCatalogUiPlugin;
@@ -58,9 +59,19 @@ fn toggle_block_catalog_ui(
     mut ui: ResMut<BlockCatalogUiState>,
     mut q_vis: Query<&mut Visibility, With<BlockCatalogRoot>>,
     mut windows: Query<&mut Window, With<PrimaryWindow>>,
+    game_config: Res<GameConfig>
 ) {
-    if !keys.just_pressed(KeyCode::Tab) { return; }
-    ui.open = !ui.open;
+    let key = convert(game_config.input.ui_inventory.as_str()).expect("Invalid key");
+    let back = convert(game_config.input.ui_close_back.as_str()).expect("Invalid key");
+
+    if !(keys.just_pressed(key) || keys.just_pressed(back)) { return; }
+
+    if keys.just_pressed(back) {
+        ui.open = false;
+    } else {
+        ui.open = !ui.open;
+    }
+
     if let Some(root) = ui.root {
         if let Ok(mut v) = q_vis.get_mut(root) {
             *v = if ui.open { Visibility::Visible } else { Visibility::Hidden };
