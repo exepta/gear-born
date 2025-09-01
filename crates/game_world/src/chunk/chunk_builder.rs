@@ -7,6 +7,7 @@ use bevy::tasks::futures_lite::future;
 use bevy::tasks::AsyncComputeTaskPool;
 use bevy_rapier3d::prelude::*;
 use game_core::configuration::{GameConfig, WorldGenConfig};
+use game_core::events::chunk_events::{ChunkUnloadEvent, SubChunkNeedRemeshEvent};
 use game_core::states::{AppState, InGameStates, LoadingStates};
 use game_core::world::block::{id_any, BlockRegistry, VOXEL_SIZE};
 use game_core::world::chunk::*;
@@ -127,7 +128,7 @@ fn process_kick_queue(
     mut kicked: ResMut<KickedOnce>,
     mut queued: ResMut<QueuedOnce>,
     chunk_map: Res<ChunkMap>,
-    mut ev_dirty: EventWriter<SubchunkDirty>,
+    mut ev_dirty: EventWriter<SubChunkNeedRemeshEvent>,
 ) {
     let mut i = 0;
     while i < queue.0.len() {
@@ -146,7 +147,7 @@ fn process_kick_queue(
         }
 
         if neighbors_ready(&chunk_map, item.coord) {
-            ev_dirty.write(SubchunkDirty { coord: item.coord, sub: item.sub as usize });
+            ev_dirty.write(SubChunkNeedRemeshEvent { coord: item.coord, sub: item.sub as usize });
             kicked.0.insert((item.coord, item.sub));
             queued.0.remove(&(item.coord, item.sub));
             queue.0.swap_remove(i);
@@ -325,13 +326,7 @@ fn collect_generated_chunks(
                 }
             }
 
-            let neigh = [
-                IVec2::new(c.x + 1, c.y),
-                IVec2::new(c.x - 1, c.y),
-                IVec2::new(c.x, c.y + 1),
-                IVec2::new(c.x, c.y - 1),
-            ];
-            for n_coord in neigh {
+            for n_coord in neighbors4_iter(c) {
                 if let Some(n_chunk) = chunk_map.chunks.get(&n_coord) {
                     let order_n = sub_priority_order(n_chunk);
                     for sub in order_n {
@@ -476,7 +471,7 @@ fn schedule_remesh_tasks_from_events(
     chunk_map: Res<ChunkMap>,
     reg: Res<BlockRegistry>,
     mut backlog: ResMut<MeshBacklog>,
-    mut ev_dirty: EventReader<SubchunkDirty>,
+    mut ev_dirty: EventReader<SubChunkNeedRemeshEvent>,
     app_state: Res<State<AppState>>,
 ) {
     if chunk_map.chunks.is_empty() {
@@ -537,7 +532,7 @@ fn unload_far_chunks(
     mut cache: ResMut<RegionCache>,
     q_mesh: Query<&Mesh3d>,
     q_cam: Query<&GlobalTransform, With<Camera3d>>,
-    mut ev_water_unload: EventWriter<WaterChunkUnload>,
+    mut ev_water_unload: EventWriter<ChunkUnloadEvent>,
     mut coll_backlog: ResMut<ColliderBacklog>,
 ) {
     let cam = if let Ok(t) = q_cam.single() { t } else { return; };
@@ -587,7 +582,7 @@ fn unload_far_chunks(
             }
         }
 
-        ev_water_unload.write(WaterChunkUnload { coord: *coord });
+        ev_water_unload.write(ChunkUnloadEvent { coord: *coord });
 
         chunk_map.chunks.remove(coord);
         backlog.0.retain(|(c, _)| c != coord);
@@ -596,7 +591,7 @@ fn unload_far_chunks(
 }
 
 fn cleanup_kick_flags_on_unload(
-    mut ev_unload: EventReader<WaterChunkUnload>,
+    mut ev_unload: EventReader<ChunkUnloadEvent>,
     mut kicked: ResMut<KickedOnce>,
     mut queued: ResMut<QueuedOnce>,
     mut queue: ResMut<KickQueue>,

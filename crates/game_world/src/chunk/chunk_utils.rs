@@ -14,6 +14,13 @@ use std::path::PathBuf;
 pub const MAX_INFLIGHT_MESH: usize = 32;
 pub const MAX_INFLIGHT_GEN:  usize = 32;
 
+pub(crate) const DIR4: [IVec2; 4] = [
+    IVec2::new( 1,  0),
+    IVec2::new(-1,  0),
+    IVec2::new( 0,  1),
+    IVec2::new( 0, -1),
+];
+
 pub async fn generate_chunk_async_noise(
     coord: IVec2,
     ids: (BlockId, BlockId, BlockId, BlockId), // (grass, dirt, stone, sand)
@@ -634,11 +641,10 @@ pub fn is_waiting(state: &State<AppState>) -> bool {
 
 #[inline]
 pub(crate) fn neighbors_ready(chunk_map: &ChunkMap, c: IVec2) -> bool {
-    let n = [
-        IVec2::new(c.x + 1, c.y),
-        IVec2::new(c.x - 1, c.y),
-        IVec2::new(c.x, c.y + 1),
-        IVec2::new(c.x, c.y - 1),
-    ];
-    n.into_iter().all(|nc| chunk_map.chunks.contains_key(&nc))
+    neighbors4_iter(c).all(|nc| chunk_map.chunks.contains_key(&nc))
+}
+
+#[inline]
+pub(crate) fn neighbors4_iter(c: IVec2) -> impl Iterator<Item = IVec2> {
+    DIR4.into_iter().map(move |d| c + d)
 }

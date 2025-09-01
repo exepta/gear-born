@@ -4,9 +4,10 @@ pub mod chunk;
 pub mod save;
 pub mod fluid;
 
+use crate::events::chunk_events::SubChunkNeedRemeshEvent;
 use crate::player::selection::BlockHit;
 use crate::world::block::{get_block_world, BlockId, Face};
-use crate::world::chunk::{ChunkData, ChunkMap, SubchunkDirty};
+use crate::world::chunk::{ChunkData, ChunkMap};
 use crate::world::chunk_dim::{world_to_chunk_xz, world_y_to_local, CX, CY, CZ, SEC_COUNT, SEC_H, Y_MAX, Y_MIN};
 use bevy::prelude::*;
 
@@ -42,7 +43,7 @@ pub fn world_access_mut(chunk_map: &'_ mut ChunkMap, wp: IVec3)
 pub fn mark_dirty_block_and_neighbors(
     chunk_map: &mut ChunkMap,
     wp: IVec3,
-    ev: &mut EventWriter<SubchunkDirty>,
+    ev: &mut EventWriter<SubChunkNeedRemeshEvent>,
 ) {
     const OFFS: [IVec3; 7] = [
         IVec3::new(0, 0, 0),
@@ -66,7 +67,7 @@ pub fn mark_dirty_block_and_neighbors(
             if s < SEC_COUNT {
                 if let Some(ch) = chunk_map.chunks.get_mut(&c) {
                     ch.mark_dirty_local_y(s);
-                    ev.write(SubchunkDirty { coord: c, sub: s });
+                    ev.write(SubChunkNeedRemeshEvent { coord: c, sub: s });
                 }
             }
         };

@@ -1,6 +1,8 @@
 use crate::world::chunk::ChunkMap;
 use crate::world::chunk_dim::{world_to_chunk_xz, Y_MAX, Y_MIN};
 use crate::world::fluid::FluidMap;
+use crate::world::world_access_mut;
+
 use bevy::prelude::*;
 use bevy::render::mesh::{Indices, PrimitiveTopology};
 use serde::Deserialize;
@@ -16,10 +18,6 @@ pub const PER_HARDNESS: f32 = 0.45;
 
 pub const MIN_BREAK_TIME: f32 = 0.2;
 pub const MAX_BREAK_TIME: f32 = 60.0;
-
-// =================================================================
-//                          External Struct
-// =================================================================
 
 pub type BlockId = u16;
 
@@ -63,11 +61,8 @@ pub struct SelectedBlock {
     pub id:   u16,
     pub name: String,
 }
-
 impl Default for SelectedBlock {
-    fn default() -> Self {
-        Self { id: 0, name: "air".to_string() }
-    }
+    fn default() -> Self { Self { id: 0, name: "air".to_string() } }
 }
 
 #[derive(Resource)]
@@ -77,24 +72,54 @@ pub struct BlockRegistry {
 }
 
 impl BlockRegistry {
+    #[inline] pub fn def(&self, id: BlockId) -> &BlockDef { &self.defs[id as usize] }
 
-    #[inline]
-    pub fn name(&self, id: BlockId) -> &str {
-        self.def(id).name.as_str()
-    }
+    #[inline] pub fn name(&self, id: BlockId) -> &str { self.def(id).name.as_str() }
 
-    #[inline]
-    pub fn name_opt(&self, id: BlockId) -> Option<&str> {
+    #[inline] pub fn name_opt(&self, id: BlockId) -> Option<&str> {
         self.defs.get(id as usize).map(|d| d.name.as_str())
     }
 
-    #[inline]
-    pub fn id_opt(&self, name: &str) -> Option<BlockId> {
+    #[inline] pub fn id_opt(&self, name: &str) -> Option<BlockId> {
         self.name_to_id.get(name).copied()
     }
 
-    pub fn material(&self, id: BlockId) -> Handle<StandardMaterial> {
+    #[inline] pub fn id(&self, name:&str) -> BlockId {
+        *self.name_to_id.get(name).expect("unknown block name")
+    }
+
+    #[inline] pub fn id_or_air(&self, name:&str) -> BlockId {
+        self.id_opt(name).unwrap_or(0)
+    }
+
+    #[inline] pub fn material(&self, id: BlockId) -> Handle<StandardMaterial> {
         self.def(id).material.clone()
+    }
+
+    #[inline] pub fn stats(&self, id: BlockId) -> &BlockStats { &self.def(id).stats }
+    #[inline] pub fn is_air(&self, id: BlockId) -> bool { id == 0 }
+    #[inline] pub fn is_opaque(&self, id: BlockId) -> bool { self.stats(id).opaque }
+    #[inline] pub fn is_fluid(&self, id: BlockId) -> bool { self.stats(id).fluid }
+    #[inline] pub fn emissive(&self, id: BlockId) -> f32 { self.stats(id).emissive }
+    #[inline] pub fn hardness(&self, id: BlockId) -> f32 { self.stats(id).hardness.max(0.0) }
+
+    #[inline]
+    pub fn uv(&self, id: BlockId, face: Face) -> UvRect {
+        let d = self.def(id);
+        match face {
+            Face::Top => d.uv_top,
+            Face::Bottom => d.uv_bottom,
+            Face::North => d.uv_north,
+            Face::East => d.uv_east,
+            Face::South => d.uv_south,
+            Face::West => d.uv_west,
+        }
+    }
+
+    #[inline]
+    pub fn face_uvs(&self, id: BlockId) -> (UvRect, UvRect, UvRect, UvRect, UvRect, UvRect) {
+        let d = self.def(id);
+        (d.uv_top, d.uv_bottom, d.uv_north, d.uv_east, d.uv_south, d.uv_west)
     }
 
     pub fn load_all(
@@ -144,17 +169,7 @@ impl BlockRegistry {
             };
             let uv_north  = tile_uv(&tileset, north_key).unwrap();
 
-            let alpha_mode = if block_json.stats.opaque {
-                AlphaMode::Opaque
-            } else {
-                AlphaMode::Blend
-            };
-
-            let base_color = if block_json.stats.opaque {
-                Color::WHITE
-            } else {
-                Color::srgba(1.0, 1.0, 1.0, 0.8)
-            };
+            let (alpha_mode, base_color) = material_policy_from_stats(&block_json.stats);
 
             let material = materials.add(StandardMaterial {
                 base_color_texture: Some(image.clone()),
@@ -180,24 +195,6 @@ impl BlockRegistry {
 
         Self { defs, name_to_id }
     }
-
-    #[inline] pub fn id(&self, name:&str) -> BlockId {
-        *self.name_to_id.get(name).expect("unknown block name")
-    }
-
-    #[inline] pub fn def(&self, id: BlockId) -> &BlockDef { &self.defs[id as usize] }
-
-    #[inline] pub fn uv(&self, id: BlockId, face: Face) -> UvRect {
-        let d = self.def(id);
-        match face {
-            Face::Top => d.uv_top,
-            Face::Bottom => d.uv_bottom,
-            Face::North => d.uv_north,
-            Face::East => d.uv_east,
-            Face::South => d.uv_south,
-            Face::West => d.uv_west,
-        }
-    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
@@ -210,7 +207,6 @@ pub enum Blocks {
     Water,
     Glass
 }
-
 impl Blocks {
     pub const fn localized_name(self) -> &'static str {
         match self {
@@ -224,11 +220,8 @@ impl Blocks {
         }
     }
 }
-
 impl AsRef<str> for Blocks {
-    fn as_ref(&self) -> &str {
-        self.localized_name()
-    }
+    fn as_ref(&self) -> &str { self.localized_name() }
 }
 
 #[derive(Resource, Default)]
@@ -244,12 +237,159 @@ pub struct MiningTarget {
     pub loc: IVec3,
     pub id: BlockId,
     pub started_at: f32,
-    pub duration: f32
+    pub duration: f32,
 }
 
-// =================================================================
-//                        External Function
-// =================================================================
+#[allow(dead_code)]
+pub const DIR4_XZ: [IVec2; 4] = [
+    IVec2::new( 1,  0),
+    IVec2::new(-1,  0),
+    IVec2::new( 0,  1),
+    IVec2::new( 0, -1),
+];
+
+#[allow(dead_code)]
+pub const DIR6: [IVec3; 6] = [
+    IVec3::new( 1,  0,  0), // +X (East)
+    IVec3::new(-1,  0,  0), // -X (West)
+    IVec3::new( 0,  1,  0), // +Y (Top)
+    IVec3::new( 0, -1,  0), // -Y (Bottom)
+    IVec3::new( 0,  0,  1), // +Z (South)
+    IVec3::new( 0,  0, -1), // -Z (North)
+];
+
+#[inline]
+pub fn face_offset(f: Face) -> IVec3 {
+    match f {
+        Face::East   => IVec3::new( 1,  0,  0),
+        Face::West   => IVec3::new(-1,  0,  0),
+        Face::Top    => IVec3::new( 0,  1,  0),
+        Face::Bottom => IVec3::new( 0, -1,  0),
+        Face::South  => IVec3::new( 0,  0,  1),
+        Face::North  => IVec3::new( 0,  0, -1),
+    }
+}
+
+#[inline]
+pub fn neighbor_world(wp: IVec3, f: Face) -> IVec3 { wp + face_offset(f) }
+
+#[inline]
+pub fn to_block_space(v: Vec3) -> Vec3 { v / VOXEL_SIZE }
+#[inline]
+pub fn to_world_space(v: Vec3) -> Vec3 { v * VOXEL_SIZE }
+
+#[inline]
+pub fn block_center_world(wp: IVec3) -> Vec3 {
+    let s = VOXEL_SIZE;
+    Vec3::new(
+        (wp.x as f32 + 0.5) * s,
+        (wp.y as f32 + 0.5) * s,
+        (wp.z as f32 + 0.5) * s,
+    )
+}
+
+#[inline]
+pub fn block_origin_world(wp: IVec3) -> Vec3 {
+    to_world_space(Vec3::new(wp.x as f32, wp.y as f32, wp.z as f32))
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct Aabb3 { pub min: Vec3, pub max: Vec3 }
+
+#[inline]
+pub fn block_aabb_world(wp: IVec3) -> Aabb3 {
+    let o = block_origin_world(wp);
+    let s = VOXEL_SIZE;
+    Aabb3 { min: o, max: o + Vec3::splat(s) }
+}
+
+#[inline]
+pub fn chunk_and_local_from_world(wp: IVec3) -> (IVec2, usize, usize, usize) {
+    let (cc, l) = world_to_chunk_xz(wp.x, wp.z);
+    let lx = l.x as usize;
+    let lz = l.y as usize;
+    let ly = world_y_to_local(wp.y);
+    (cc, lx, ly, lz)
+}
+
+#[inline]
+pub fn face_visible_against(reg: &BlockRegistry, self_id: BlockId, neigh_id: BlockId) -> bool {
+    if reg.is_air(self_id) { return false; }
+    if reg.is_air(neigh_id) { return true; }
+    if reg.is_fluid(self_id) && reg.is_fluid(neigh_id) { return false; }
+    !reg.is_opaque(neigh_id)
+}
+
+#[inline]
+pub fn water_face_visible_against(reg: &BlockRegistry, neigh_id: BlockId) -> bool {
+    if reg.is_fluid(neigh_id) { return false; }
+    !reg.is_opaque(neigh_id)
+}
+
+#[inline]
+pub fn get_block_world(chunk_map: &ChunkMap, wp: IVec3) -> BlockId {
+    if wp.y < Y_MIN || wp.y > Y_MAX { return 0; }
+    let (cc, local) = world_to_chunk_xz(wp.x, wp.z);
+    let Some(chunk) = chunk_map.chunks.get(&cc) else { return 0; };
+    let lx = local.x as usize;
+    let lz = local.y as usize;
+    let ly = world_y_to_local(wp.y);
+    chunk.get(lx, ly, lz)
+}
+
+#[inline]
+pub fn get_id_world(chunk_map: &ChunkMap, wp: IVec3) -> BlockId {
+    get_block_world(chunk_map, wp)
+}
+
+pub fn set_id_world(chunk_map: &mut ChunkMap, wp: IVec3, id: BlockId) -> Option<BlockId> {
+    let Some(mut access) = world_access_mut(chunk_map, wp) else { return None; };
+    let old = access.get();
+    access.set(id);
+    Some(old)
+}
+
+pub fn place_if_air(chunk_map: &mut ChunkMap, wp: IVec3, id: BlockId) -> Result<(), ()> {
+    if get_id_world(chunk_map, wp) == 0 {
+        set_id_world(chunk_map, wp, id);
+        Ok(())
+    } else {
+        Err(())
+    }
+}
+
+#[inline]
+pub fn fluid_at_world(fluids: &FluidMap, wx: i32, wy: i32, wz: i32) -> bool {
+    if wy < Y_MIN || wy > Y_MAX { return false; }
+    let (cc, local) = world_to_chunk_xz(wx, wz);
+    let lx = local.x as usize;
+    let lz = local.y as usize;
+    let ly = (wy - Y_MIN) as usize;
+    match fluids.0.get(&cc) {
+        Some(fc) => fc.get(lx, ly, lz),
+        None => false,
+    }
+}
+
+#[inline]
+pub fn block_name_from_registry(reg: &BlockRegistry, id: BlockId) -> String {
+    reg.name_to_id
+        .iter()
+        .find(|&(_, &bid)| bid == id)
+        .map(|(name, _)| name.clone())
+        .unwrap_or_else(|| format!("#{id}"))
+}
+
+#[inline]
+pub fn break_time_for(id: BlockId, registry: &BlockRegistry) -> f32 {
+    let time = registry.hardness(id);
+    (BASE_BREAK_TIME + PER_HARDNESS * time).clamp(MIN_BREAK_TIME, MAX_BREAK_TIME)
+}
+
+#[inline]
+pub fn mining_progress(now: f32, target: &MiningTarget) -> f32 {
+    ((now - target.started_at) / target.duration).clamp(0.0, 1.0)
+}
 
 pub fn spawn_block_by_id(
     commands: &mut Commands,
@@ -290,58 +430,13 @@ pub fn spawn_block_by_name<P: AsRef<str>>(
     spawn_block_by_id(commands, meshes, reg, id, world_pos, size);
 }
 
+#[inline]
 pub fn id_any(reg: &BlockRegistry, names: &[&str]) -> BlockId {
     for n in names {
         if let Some(&id) = reg.name_to_id.get(*n) { return id; }
     }
     0
 }
-
-#[inline] pub fn to_block_space(v: Vec3) -> Vec3 { v / VOXEL_SIZE }
-#[inline] pub fn to_world_space(v: Vec3) -> Vec3 { v * VOXEL_SIZE }
-
-#[inline]
-pub fn get_block_world(chunk_map: &ChunkMap, wp: IVec3) -> BlockId {
-    if wp.y < Y_MIN || wp.y > Y_MAX { return 0; }
-    let (cc, local) = world_to_chunk_xz(wp.x, wp.z);
-    let Some(chunk) = chunk_map.chunks.get(&cc) else { return 0; };
-    let lx = local.x as usize;
-    let lz = local.y as usize;
-    let ly = world_y_to_local(wp.y);
-    chunk.get(lx, ly, lz)
-}
-
-#[inline]
-pub fn fluid_at_world(fluids: &FluidMap, wx: i32, wy: i32, wz: i32) -> bool {
-    if wy < Y_MIN || wy > Y_MAX { return false; }
-    let (cc, local) = world_to_chunk_xz(wx, wz);
-    let lx = local.x as usize;
-    let lz = local.y as usize;
-    let ly = (wy - Y_MIN) as usize;
-    match fluids.0.get(&cc) {
-        Some(fc) => fc.get(lx, ly, lz),
-        None => false,
-    }
-}
-
-
-#[inline]
-pub fn block_name_from_registry(reg: &BlockRegistry, id: BlockId) -> String {
-    reg.name_to_id
-        .iter()
-        .find(|&(_, &bid)| bid == id)
-        .map(|(name, _)| name.clone())
-        .unwrap_or_else(|| format!("#{id}"))
-}
-
-pub fn break_time_for(id: BlockId, registry: &BlockRegistry) -> f32 {
-    let time = registry.def(id).stats.hardness.max(0.0);
-    (BASE_BREAK_TIME + PER_HARDNESS * time).clamp(MIN_BREAK_TIME, MAX_BREAK_TIME)
-}
-
-// =================================================================
-//                          Internal Struct
-// =================================================================
 
 const Z: UvRect = UvRect { u0:0.0, v0:0.0, u1:0.0, v1:0.0 };
 
@@ -388,58 +483,16 @@ struct TextureFacesJson {
 
 fn d_true() -> bool { true }
 
-// =================================================================
-//                        Internal Function
-// =================================================================
-
-/// Reads a UTF-8 JSON file from `path` and deserializes it into `T`.
-///
-/// The generic type `T` must implement `Deserialize`.
-///
-/// # Parameters
-/// - `path`: Filesystem path to the JSON file.
-///
-/// # Returns
-/// A value of type `T` parsed from the file contents.
-///
-/// # Panics
-/// - If the file cannot be read, with a message `missing file: {path}`.
-/// - If the file contents are not valid JSON for `T`, with a message `invalid JSON '{path}': {error}`.
 fn read_json<T: for<'de> Deserialize<'de>>(path: &str) -> T {
     let s = fs::read_to_string(path).unwrap_or_else(|_| panic!("missing file: {path}"));
     serde_json::from_str(&s).unwrap_or_else(|e| panic!("invalid JSON '{path}': {e}"))
 }
 
-/// Guesses a texture directory path for a block by its identifier.
-///
-/// If `block_name` ends with `"_block"`, that suffix is stripped; otherwise the full name is used.
-/// The returned path is of the form: `textures/blocks/{base}`.
-///
-/// # Parameters
-/// - `block_name`: Logical block identifier, optionally ending with `"_block"`.
-///
-/// # Returns
-/// A relative texture directory path for the block.
 fn guess_tex_dir_from_block_name(block_name: &str) -> String {
     let base = block_name.strip_suffix("_block").unwrap_or(block_name);
     format!("textures/blocks/{}", base)
 }
 
-/// Computes a normalized UV rectangle for a named tile within a tileset atlas.
-///
-/// The UV rectangle is in the `[0, 1] × [0, 1]` range. A half-texel inset is applied
-/// to all sides to reduce sampling bleeding between adjacent tiles.
-///
-/// # Parameters
-/// - `ts`: Tileset containing the atlas dimensions, tile size, and tile name mapping.
-/// - `name`: Tile identifier to resolve within the tileset.
-///
-/// # Returns
-/// A `UvRect { u0, v0, u1, v1 }` spanning the tile in normalized coordinates.
-///
-/// # Errors
-/// - If `name` is not found in the tileset mapping.
-/// - If the resolved tile coordinates exceed the tileset bounds.
 fn tile_uv(ts: &BlockTileset, name: &str) -> Result<UvRect, String> {
     let [col, row] = *ts.tiles.get(name)
         .ok_or_else(|| format!("tile '{}' not in data.json", name))?;
@@ -464,7 +517,6 @@ fn tile_uv(ts: &BlockTileset, name: &str) -> Result<UvRect, String> {
     Ok(UvRect { u0, v0, u1, v1 })
 }
 
-
 fn atlas_uv(tile_x: usize, tile_y: usize, tiles_x: usize, tiles_y: usize,
             pad_px: f32, image_w: f32, image_h: f32) -> ([f32;2],[f32;2]) {
     let tw = image_w / tiles_x as f32;
@@ -478,29 +530,6 @@ fn atlas_uv(tile_x: usize, tile_y: usize, tiles_x: usize, tiles_y: usize,
     ([u0, v0], [u1, v1])
 }
 
-/// Builds a cube mesh with per-face UVs and outward-facing normals.
-///
-/// Generates a cube spanning the range `[0, size]` on each axis. Each face
-/// uses its own four vertices (no shared vertices across faces) to allow
-/// distinct UV mapping. Triangle winding is counter-clockwise for outward
-/// normals. UV orientation per face may flip `v` to match the expected
-/// texture orientation.
-///
-/// The resulting `Mesh` contains:
-/// - `Mesh::ATTRIBUTE_POSITION` (24 vertices),
-/// - `Mesh::ATTRIBUTE_NORMAL` (per-vertex outward axis-aligned normals),
-/// - `Mesh::ATTRIBUTE_UV_0` (per-vertex UVs),
-/// and indexed triangles (`u32`) with `PrimitiveTopology::TriangleList`.
-///
-/// # Parameters
-/// - `f`: UV rectangles for each cube face.
-/// - `size`: Edge length of the cube.
-///
-/// # Returns
-/// A `Mesh` ready to be rendered, with positions, normals, UVs, and indices populated.
-///
-/// # Notes
-/// The cube is not centered at the origin; it occupies `[0, size]` in X/Y/Z.
 fn cube_mesh_with_face_uvs(f: &FaceUvRects, size: f32) -> Mesh {
     let s = size;
 
@@ -548,3 +577,12 @@ fn cube_mesh_with_face_uvs(f: &FaceUvRects, size: f32) -> Mesh {
 }
 
 #[inline] fn world_y_to_local(wy: i32) -> usize { (wy - Y_MIN) as usize }
+
+#[inline]
+fn material_policy_from_stats(stats: &BlockStats) -> (AlphaMode, Color) {
+    if stats.opaque {
+        (AlphaMode::Opaque, Color::WHITE)
+    } else {
+        (AlphaMode::Blend, Color::srgba(1.0, 1.0, 1.0, 0.8))
+    }
+}

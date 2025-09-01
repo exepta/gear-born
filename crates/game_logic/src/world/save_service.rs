@@ -1,6 +1,7 @@
 use bevy::prelude::*;
+use game_core::events::chunk_events::SubChunkNeedRemeshEvent;
 use game_core::states::{AppState, InGameStates};
-use game_core::world::chunk::{ChunkMap, SubchunkDirty};
+use game_core::world::chunk::ChunkMap;
 use game_core::world::save::*;
 use game_world::chunk::chunk_utils::encode_chunk;
 use std::collections::{HashMap, VecDeque};
@@ -46,7 +47,7 @@ fn setup_world_save(mut commands: Commands) {
 }
 
 fn enqueue_save_on_dirty(
-    mut ev_dirty: EventReader<SubchunkDirty>,
+    mut ev_dirty: EventReader<SubChunkNeedRemeshEvent>,
     mut deb: ResMut<SaveDebounce>,
 ) {
     for e in ev_dirty.read().copied() {

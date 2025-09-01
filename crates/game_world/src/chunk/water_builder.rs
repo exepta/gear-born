@@ -4,13 +4,14 @@ use bevy::prelude::*;
 use bevy::tasks::AsyncComputeTaskPool;
 use futures_lite::future;
 use game_core::configuration::WorldGenConfig;
+use game_core::events::chunk_events::{ChunkUnloadEvent, SubChunkNeedRemeshEvent};
 use game_core::events::player_block_events::BlockBreakByPlayerEvent;
 use game_core::shader::water_material::{WaterMatHandle, WaterMaterial};
 use game_core::states::{AppState, InGameStates, LoadingStates};
 use game_core::world::block::{id_any, BlockRegistry, VOXEL_SIZE};
-use game_core::world::chunk::{ChunkMap, SubchunkDirty, WaterChunkUnload, BIG, MAX_UPDATE_FRAMES};
+use game_core::world::chunk::{ChunkMap, BIG, MAX_UPDATE_FRAMES};
 use game_core::world::chunk_dim::*;
-use game_core::world::fluid::{FlowJob, FlowResult, FluidChunk, FluidMap, Seed, SolidSnapshot, WaterMeshIndex, WATER_FLOW_BUDGET_PER_FRAME, WATER_FLOW_CAP, WATER_FLOW_MAX_INFLIGHT};
+use game_core::world::fluid::*;
 use game_core::world::save::{RegionCache, WorldSave};
 use std::collections::{HashMap, HashSet, VecDeque};
 
@@ -73,7 +74,7 @@ impl Plugin for WaterBuilder {
             .init_resource::<WaterFlowQueue>()
             .init_resource::<PendingWaterFlow>()
             .init_resource::<WaterFlowIds>()
-            .add_event::<WaterChunkUnload>()
+            .add_event::<ChunkUnloadEvent>()
             .add_systems(
                 OnEnter(AppState::Loading(LoadingStates::WaterGen)),
                 water_gen_build_worklist
@@ -399,7 +400,7 @@ fn collect_water_generation_jobs(
 }
 
 fn water_mark_from_dirty(
-    mut ev: EventReader<SubchunkDirty>,
+    mut ev: EventReader<SubChunkNeedRemeshEvent>,
     mut todo: ResMut<WaterMeshingTodo>,
 ) {
     for e in ev.read() {
@@ -439,7 +440,7 @@ fn water_finish_check(
 
 fn water_unload_on_event(
     mut commands: Commands,
-    mut ev: EventReader<WaterChunkUnload>,
+    mut ev: EventReader<ChunkUnloadEvent>,
     mut water: ResMut<FluidMap>,
     mut windex: ResMut<WaterMeshIndex>,
     mut meshes: ResMut<Assets<Mesh>>,
@@ -454,7 +455,7 @@ fn water_unload_on_event(
     mut flow_q: Option<ResMut<WaterFlowQueue>>,
     mut q: Option<ResMut<WaterGenQueue>>,
 ) {
-    for WaterChunkUnload { coord } in ev.read().copied() {
+    for ChunkUnloadEvent { coord } in ev.read().copied() {
         if let Some(t) = todo.as_mut()          { t.0.remove(&coord); }
         if let Some(b) = backlog.as_mut()       { b.0.retain(|(c, _)| *c != coord); }
         if let Some(pm) = pending_mesh.as_mut() { pm.0.retain(|(c, _), _| *c != coord); }

@@ -2,10 +2,11 @@ use bevy::ecs::relationship::RelatedSpawnerCommands;
 use bevy::pbr::{NotShadowCaster, NotShadowReceiver};
 use bevy::prelude::*;
 use bevy::render::view::{NoFrustumCulling, RenderLayers};
+use game_core::events::chunk_events::SubChunkNeedRemeshEvent;
 use game_core::events::player_block_events::{BlockBreakByPlayerEvent, BlockPlaceByPlayerEvent};
 use game_core::player::selection::SelectionState;
 use game_core::states::{AppState, InGameStates};
-use game_core::world::block::{break_time_for, get_block_world, BlockRegistry, MiningOverlayRoot, MiningState, MiningTarget, SelectedBlock, VOXEL_SIZE};
+use game_core::world::block::*;
 use game_core::world::chunk::*;
 use game_core::world::chunk_dim::*;
 use game_core::world::fluid::FluidMap;
@@ -43,7 +44,7 @@ fn block_break_handler(
 
     mut state: ResMut<MiningState>,
     mut chunk_map: ResMut<ChunkMap>,
-    mut ev_dirty: EventWriter<SubchunkDirty>,
+    mut ev_dirty: EventWriter<SubChunkNeedRemeshEvent>,
     mut break_ev: EventWriter<BlockBreakByPlayerEvent>,
 ) {
     if !buttons.pressed(MouseButton::Left) {
@@ -115,7 +116,7 @@ fn block_place_handler(
 
     mut fluids: ResMut<FluidMap>,
     mut chunk_map: ResMut<ChunkMap>,
-    mut ev_dirty: EventWriter<SubchunkDirty>,
+    mut ev_dirty: EventWriter<SubChunkNeedRemeshEvent>,
     mut place_ev: EventWriter<BlockPlaceByPlayerEvent>,
 ) {
     if !buttons.just_pressed(MouseButton::Right) { return; }
@@ -217,7 +218,7 @@ fn spawn_overlay_at(
 ) -> Entity {
     let quad = meshes.add(unit_centered_quad());
     let mat  = mats.add(StandardMaterial {
-        base_color: Color::srgba(0.9, 0.9, 0.9, 0.015),
+        base_color: Color::srgba(0.9, 0.9, 0.9, 0.02),
         alpha_mode: AlphaMode::Blend,
         unlit: true,
         cull_mode: None,
