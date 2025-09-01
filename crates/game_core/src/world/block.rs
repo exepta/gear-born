@@ -11,6 +11,12 @@ use std::path::Path;
 pub const VOXEL_SIZE: f32 = 1.5;
 const ATLAS_PAD_PX: f32 = 0.5;
 
+pub const BASE_BREAK_TIME: f32 = 0.55;
+pub const PER_HARDNESS: f32 = 0.45;
+
+pub const MIN_BREAK_TIME: f32 = 0.2;
+pub const MAX_BREAK_TIME: f32 = 60.0;
+
 // =================================================================
 //                          External Struct
 // =================================================================
@@ -225,6 +231,19 @@ impl AsRef<str> for Blocks {
     }
 }
 
+#[derive(Resource, Default)]
+pub struct MiningState {
+    pub target: Option<MiningTarget>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct MiningTarget {
+    pub loc: IVec3,
+    pub id: BlockId,
+    pub started_at: f32,
+    pub duration: f32
+}
+
 // =================================================================
 //                        External Function
 // =================================================================
@@ -310,6 +329,11 @@ pub fn block_name_from_registry(reg: &BlockRegistry, id: BlockId) -> String {
         .find(|&(_, &bid)| bid == id)
         .map(|(name, _)| name.clone())
         .unwrap_or_else(|| format!("#{id}"))
+}
+
+pub fn break_time_for(id: BlockId, registry: &BlockRegistry) -> f32 {
+    let time = registry.def(id).stats.hardness.max(0.0);
+    (BASE_BREAK_TIME + PER_HARDNESS * time).clamp(MIN_BREAK_TIME, MAX_BREAK_TIME)
 }
 
 // =================================================================

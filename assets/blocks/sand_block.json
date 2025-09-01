@@ -11,7 +11,7 @@
     "south": "sand"
   },
   "stats": {
-    "hardness": 1.0,
+    "hardness": 0.45,
     "blast_resistance": 1.5,
     "opaque": true,
     "emissive": 0.0

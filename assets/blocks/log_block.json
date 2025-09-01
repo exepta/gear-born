@@ -10,7 +10,7 @@
     "south": "log_side"
   },
   "stats": {
-    "hardness": 1.0,
+    "hardness": 2.7,
     "blast_resistance": 1.5,
     "opaque": true,
     "emissive": 0.0

@@ -11,7 +11,7 @@
     "south": "stone"
   },
   "stats": {
-    "hardness": 2.0,
+    "hardness": 4.5,
     "blast_resistance": 3.5,
     "opaque": true,
     "emissive": 0.0
