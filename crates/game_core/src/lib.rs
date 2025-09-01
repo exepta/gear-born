@@ -26,6 +26,9 @@ pub struct BuildInfo {
 #[derive(Component)]
 pub struct BlockCatalogPreviewCam;
 
+#[derive(Resource, Default)]
+pub struct BlockCatalogUiState { pub open: bool, pub root: Option<Entity> }
+
 pub struct GameCorePlugin;
 
 impl Plugin for GameCorePlugin {

@@ -13,6 +13,7 @@ use game_core::world::block::{id_any, BlockRegistry, VOXEL_SIZE};
 use game_core::world::chunk::*;
 use game_core::world::chunk_dim::*;
 use game_core::world::save::{RegionCache, WorldSave};
+use game_core::BlockCatalogPreviewCam;
 use std::collections::{HashMap, HashSet};
 
 const MAX_COLLIDERS_PER_FRAME: usize = 12;
@@ -194,7 +195,7 @@ fn schedule_chunk_generation(
     gen_cfg: Res<WorldGenConfig>,
     game_config: Res<GameConfig>,
     ws: Res<WorldSave>,
-    q_cam: Query<&GlobalTransform, With<Camera3d>>,
+    q_cam: Query<&GlobalTransform, (With<Camera3d>, Without<BlockCatalogPreviewCam>)>,
     load_center: Option<Res<LoadCenter>>,
     app_state: Res<State<AppState>>,
 ) {
@@ -531,7 +532,7 @@ fn unload_far_chunks(
     ws: Res<WorldSave>,
     mut cache: ResMut<RegionCache>,
     q_mesh: Query<&Mesh3d>,
-    q_cam: Query<&GlobalTransform, With<Camera3d>>,
+    q_cam: Query<&GlobalTransform, (With<Camera3d>, Without<BlockCatalogPreviewCam>)>,
     mut ev_water_unload: EventWriter<ChunkUnloadEvent>,
     mut coll_backlog: ResMut<ColliderBacklog>,
 ) {

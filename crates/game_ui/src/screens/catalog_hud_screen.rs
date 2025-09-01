@@ -8,7 +8,7 @@ use bevy::ui::FocusPolicy;
 use bevy::window::{CursorGrabMode, PrimaryWindow};
 use game_core::states::{AppState, InGameStates};
 use game_core::world::block::*;
-use game_core::BlockCatalogPreviewCam;
+use game_core::{BlockCatalogPreviewCam, BlockCatalogUiState};
 
 /* ---------------- Plugin ---------------- */
 
@@ -33,30 +33,11 @@ impl Plugin for BlockCatalogUiPlugin {
 
 /* ---------------- State / Components ---------------- */
 
-#[derive(Resource, Default)]
-struct BlockCatalogUiState {
-    open: bool,
-    root: Option<Entity>,
-}
-
-#[derive(Component)]
-struct BlockCatalogRoot;
-
-#[derive(Component)]
-struct BlockItemButton {
-    block_id: BlockId,
-}
-
-#[derive(Component)]
-struct PreviewAnchor; // rotates, centered at origin
-
-#[derive(Component)]
-struct PreviewMesh;
-
-#[derive(Component)]
-struct Spin {
-    speed: f32,
-}
+#[derive(Component)] struct BlockCatalogRoot;
+#[derive(Component)] struct BlockItemButton { block_id: BlockId }
+#[derive(Component)] struct PreviewAnchor; // rotates, centered at origin
+#[derive(Component)] struct PreviewMesh;
+#[derive(Component)] struct Spin { speed: f32 }
 
 /* ---------------- Constants ---------------- */
 
@@ -74,15 +55,12 @@ fn toggle_block_catalog_ui(
     mut windows: Query<&mut Window, With<PrimaryWindow>>,
 ) {
     if !keys.just_pressed(KeyCode::Tab) { return; }
-
     ui.open = !ui.open;
-
     if let Some(root) = ui.root {
         if let Ok(mut v) = q_vis.get_mut(root) {
             *v = if ui.open { Visibility::Visible } else { Visibility::Hidden };
         }
     }
-
     if let Ok(mut win) = windows.single_mut() {
         if ui.open {
             win.cursor_options.grab_mode = CursorGrabMode::None;
@@ -123,7 +101,9 @@ fn spawn_block_catalog_ui(
     reg: Res<BlockRegistry>,
     mut images: ResMut<Assets<Image>>,
     mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>, // <-- add
 ) {
+    // Root panel
     let root = commands
         .spawn((
             BlockCatalogRoot,
@@ -133,7 +113,7 @@ fn spawn_block_catalog_ui(
                 top: Val::Px(0.0),
                 width: Val::Px(PANEL_WIDTH_PX),
                 height: Val::Percent(100.0),
-                padding: UiRect::axes(Val::Px(10.0), Val::Px(10.0)),
+                padding: UiRect::axes(Val::Px(20.0), Val::Px(20.0)),
                 flex_direction: FlexDirection::Column,
                 display: Display::Flex,
                 ..default()
@@ -193,24 +173,17 @@ fn spawn_block_catalog_ui(
     commands.entity(root).add_child(header);
     commands.entity(root).add_child(grid);
 
-    // Shared light (layer matches previews)
-    commands.spawn((
-        DirectionalLight { illuminance: 1000.0, ..default() },
-        Transform::from_xyz(7.0, 10.0, 6.0).looking_at(Vec3::ZERO, Vec3::Y),
-        GlobalTransform::default(),
-        Visibility::default(),
-        RenderLayers::layer(PREVIEW_LAYER_BASE),
-        Name::new("Preview:Light"),
-    ));
-
-    // Items
     for (block_id_idx, def) in reg.defs.iter().enumerate() {
         let block_id = block_id_idx as BlockId;
-        if block_id == 0 { continue; } // skip air
+        if block_id == 0 { continue; }
+
+        let layer_idx = (PREVIEW_LAYER_BASE + block_id_idx) % 32;
+        let layer = RenderLayers::layer(layer_idx);
 
         let rt = make_render_texture(&mut images, PREVIEW_SIZE_PX, PREVIEW_SIZE_PX);
         let rt_for_ui = rt.clone();
 
+        // Per-item camera
         commands.spawn((
             BlockCatalogPreviewCam,
             Camera3d::default(),
@@ -225,14 +198,14 @@ fn spawn_block_catalog_ui(
                 far: 50.0,
                 ..default()
             }),
-            Transform::from_xyz(2.2, 1.8, 2.2).looking_at(Vec3::ZERO, Vec3::Y),
+            Transform::from_xyz(2.05, 1.7, 2.05).looking_at(Vec3::ZERO, Vec3::Y),
             GlobalTransform::default(),
             Visibility::default(),
-            RenderLayers::layer(PREVIEW_LAYER_BASE),
+            layer.clone(), // <-- unique layer
             Name::new(format!("Preview:Cam({})", def.name)),
         ));
 
-        // Rotating anchor at origin; mesh is child translated by -0.5
+        // Rotating anchor
         let anchor = commands
             .spawn((
                 PreviewAnchor,
@@ -240,28 +213,41 @@ fn spawn_block_catalog_ui(
                 Transform::IDENTITY,
                 GlobalTransform::default(),
                 Visibility::default(),
-                RenderLayers::layer(PREVIEW_LAYER_BASE),
+                layer.clone(), // <-- unique layer
                 Name::new(format!("Preview:Anchor({})", def.name)),
             ))
             .id();
 
+        // **Unlit preview material** so textures always show
+        let preview_mat = materials.add(StandardMaterial {
+            base_color_texture: Some(def.image.clone()),
+            alpha_mode: if def.stats.opaque { AlphaMode::Opaque } else { AlphaMode::Blend },
+            base_color: if def.stats.opaque { Color::WHITE } else { Color::srgba(1.0,1.0,1.0,0.9) },
+            unlit: true,
+            perceptual_roughness: 1.0,
+            metallic: 0.0,
+            reflectance: 0.0,
+            ..default()
+        });
+
+        // Mesh
         let mesh = make_block_mesh(&reg, block_id, 1.0);
         commands.entity(anchor).with_children(|c| {
             c.spawn((
                 PreviewMesh,
                 Mesh3d(meshes.add(mesh)),
-                MeshMaterial3d(def.material.clone()),
+                MeshMaterial3d(preview_mat.clone()),
                 Transform::from_translation(Vec3::splat(-0.5))
-                    .with_rotation(Quat::from_euler(EulerRot::XYZ, -0.35, 0.0, 0.0))
-                    .with_scale(Vec3::splat(0.95)),
+                    .with_rotation(Quat::from_euler(EulerRot::XYZ, 0.35, 0.0, 0.0))
+                    .with_scale(Vec3::splat(0.75)),
                 GlobalTransform::default(),
                 Visibility::default(),
-                RenderLayers::layer(PREVIEW_LAYER_BASE),
+                layer, // <-- unique layer
                 Name::new(format!("Preview:Mesh({})", def.name)),
             ));
         });
 
-        // UI Button (children forward pointer with FocusPolicy::Pass)
+        // UI Button
         let button = commands
             .spawn((
                 Button,
@@ -271,7 +257,7 @@ fn spawn_block_catalog_ui(
                     height: Val::Px(PREVIEW_SIZE_PX as f32 + 28.0),
                     flex_direction: FlexDirection::Column,
                     align_items: AlignItems::Center,
-                    justify_content: JustifyContent::FlexStart,
+                    justify_content: JustifyContent::Center,
                     padding: UiRect::all(Val::Px(6.0)),
                     border: UiRect::all(Val::Px(1.0)),
                     ..default()
@@ -330,29 +316,24 @@ fn make_render_texture(images: &mut Assets<Image>, w: u32, h: u32) -> Handle<Ima
 
 fn make_block_mesh(reg: &BlockRegistry, id: BlockId, size: f32) -> Mesh {
     let f = FaceUvRectsLocal {
-        top:    reg.uv(id, Face::Top),
+        top: reg.uv(id, Face::Top),
         bottom: reg.uv(id, Face::Bottom),
-        north:  reg.uv(id, Face::North),
-        east:   reg.uv(id, Face::East),
-        south:  reg.uv(id, Face::South),
-        west:   reg.uv(id, Face::West),
+        north: reg.uv(id, Face::North),
+        east: reg.uv(id, Face::East),
+        south: reg.uv(id, Face::South),
+        west: reg.uv(id, Face::West),
     };
     cube_mesh_with_face_uvs_preview(&f, size)
 }
 
 #[derive(Clone)]
-struct FaceUvRectsLocal {
-    top: UvRect, bottom: UvRect, north: UvRect, east: UvRect, south: UvRect, west: UvRect
-}
+struct FaceUvRectsLocal { top: UvRect, bottom: UvRect, north: UvRect, east: UvRect, south: UvRect, west: UvRect }
 
 fn cube_mesh_with_face_uvs_preview(f: &FaceUvRectsLocal, size: f32) -> Mesh {
     #[inline]
     fn quad_uv(uv: &UvRect, flip_v: bool) -> [[f32;2];4] {
-        if !flip_v {
-            [[uv.u0,uv.v0],[uv.u1,uv.v0],[uv.u1,uv.v1],[uv.u0,uv.v1]]
-        } else {
-            [[uv.u0,uv.v1],[uv.u1,uv.v1],[uv.u1,uv.v0],[uv.u0,uv.v0]]
-        }
+        if !flip_v { [[uv.u0,uv.v0],[uv.u1,uv.v0],[uv.u1,uv.v1],[uv.u0,uv.v1]] }
+        else       { [[uv.u0,uv.v1],[uv.u1,uv.v1],[uv.u1,uv.v0],[uv.u0,uv.v0]] }
     }
     let s = size;
 
@@ -369,12 +350,13 @@ fn cube_mesh_with_face_uvs_preview(f: &FaceUvRectsLocal, size: f32) -> Mesh {
         idx.extend_from_slice(&[base, base+1, base+2, base, base+2, base+3]);
     };
 
-    push([[s,0.0,s],[s,0.0,0.0],[s,s,0.0],[s,s,s]], [ 1.0,0.0, 0.0], &f.east,   true);  // +X
-    push([[0.0,0.0,0.0],[0.0,0.0,s],[0.0,s,s],[0.0,s,0.0]], [-1.0,0.0, 0.0], &f.west,   true);  // -X
-    push([[0.0,s,s],[s,s,s],[s,s,0.0],[0.0,s,0.0]],        [ 0.0,1.0, 0.0], &f.top,    false); // +Y
-    push([[0.0,0.0,0.0],[s,0.0,0.0],[s,0.0,s],[0.0,0.0,s]], [ 0.0,-1.0,0.0], &f.bottom, false); // -Y
-    push([[0.0,0.0,s],[s,0.0,s],[s,s,s],[0.0,s,s]],        [ 0.0,0.0, 1.0], &f.south,  true);  // +Z
-    push([[s,0.0,0.0],[0.0,0.0,0.0],[0.0,s,0.0],[s,s,0.0]], [ 0.0,0.0,-1.0], &f.north,  true);  // -Z
+    // +X, -X, +Y, -Y, +Z, -Z
+    push([[s,0.0,s],[s,0.0,0.0],[s,s,0.0],[s,s,s]], [ 1.0,0.0, 0.0], &f.east,   true);
+    push([[0.0,0.0,0.0],[0.0,0.0,s],[0.0,s,s],[0.0,s,0.0]], [-1.0,0.0, 0.0], &f.west,   true);
+    push([[0.0,s,s],[s,s,s],[s,s,0.0],[0.0,s,0.0]],        [ 0.0,1.0, 0.0], &f.top,    false);
+    push([[0.0,0.0,0.0],[s,0.0,0.0],[s,0.0,s],[0.0,0.0,s]], [ 0.0,-1.0,0.0], &f.bottom, false);
+    push([[0.0,0.0,s],[s,0.0,s],[s,s,s],[0.0,s,s]],        [ 0.0,0.0, 1.0], &f.south,  true);
+    push([[s,0.0,0.0],[0.0,0.0,0.0],[0.0,s,0.0],[s,s,0.0]], [ 0.0,0.0,-1.0], &f.north,  true);
 
     let mut mesh = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::default());
     mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, pos);

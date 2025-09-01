@@ -10,7 +10,7 @@ use game_core::states::{AppState, InGameStates};
 use game_core::world::block::{block_name_from_registry, get_block_world, BlockRegistry, MiningState, VOXEL_SIZE};
 use game_core::world::chunk::ChunkMap;
 use game_core::world::chunk_dim::*;
-use game_core::BuildInfo;
+use game_core::{BlockCatalogPreviewCam, BuildInfo};
 use sysinfo::{CpuRefreshKind, MemoryRefreshKind, Pid, ProcessesToUpdate, RefreshKind, System};
 
 pub struct DebugOverlayPlugin;
@@ -84,7 +84,7 @@ fn toggle_overlay(
 fn toggle_grid(
     keys: Res<ButtonInput<KeyCode>>,
     mut state: ResMut<DebugGridState>,
-    q_cam: Query<&GlobalTransform, With<Camera3d>>,
+    q_cam: Query<&GlobalTransform, (With<Camera3d>, Without<BlockCatalogPreviewCam>)>,
     game_config: Res<GameConfig>
 ) {
     let key = convert(game_config.input.chunk_grid.as_str())
@@ -171,7 +171,7 @@ fn update_debug_text(
     diag: Res<DiagnosticsStore>,
     stats: Res<SysStats>,
     sel: Option<Res<SelectionState>>,
-    q_cam: Query<&GlobalTransform, With<Camera3d>>,
+    q_cam: Query<&GlobalTransform, (With<Camera3d>, Without<BlockCatalogPreviewCam>)>,
     mut q_text: Query<&mut Text>,
     build: Option<Res<BuildInfo>>,
     game_config: Res<GameConfig>,
@@ -276,7 +276,7 @@ fn update_debug_text(
 fn draw_chunk_grid(
     mut gizmos: Gizmos<ChunkGridGizmos>,
     grid: Res<DebugGridState>,
-    q_cam: Query<&GlobalTransform, With<Camera3d>>,
+    q_cam: Query<&GlobalTransform, (With<Camera3d>, Without<BlockCatalogPreviewCam>)>,
     cfg: Res<GameConfig>,
 ) {
     if !grid.show { return; }
