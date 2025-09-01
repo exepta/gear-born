@@ -13,6 +13,7 @@ pub mod shader;
 use crate::configuration::{CrosshairConfig, WorldGenConfig};
 use crate::events::EventModule;
 use crate::player::PlayerModule;
+use crate::world::block::SelectedBlock;
 use bevy::prelude::*;
 
 #[derive(Resource, Clone)]
@@ -29,6 +30,7 @@ impl Plugin for GameCorePlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<WorldGenConfig>();
         app.init_resource::<CrosshairConfig>();
+        app.init_resource::<SelectedBlock>();
         app.add_plugins((PlayerModule, EventModule));
     }
 }

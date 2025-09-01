@@ -51,7 +51,7 @@ impl Plugin for PlayerInitialize {
 fn spawn_scene(mut commands: Commands) {
     commands.spawn((
         DirectionalLight {
-            shadows_enabled: true,
+            shadows_enabled: false,
             illuminance: 1_000.0,
             color: Color::WHITE,
             ..default()

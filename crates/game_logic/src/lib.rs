@@ -1,14 +1,16 @@
 #![feature(coverage_attribute)]
 
 mod registry;
-mod world_services;
-mod player_services;
+mod world;
+mod player;
 mod debug_overlay;
+mod events;
 
 use crate::debug_overlay::DebugOverlayPlugin;
-use crate::player_services::PlayerServices;
+use crate::events::EventsHandler;
+use crate::player::PlayerServices;
 use crate::registry::block_registry::BlockInternalRegistry;
-use crate::world_services::WorldServices;
+use crate::world::WorldServices;
 use bevy::prelude::*;
 
 pub struct GameLogicPlugin;
@@ -20,6 +22,7 @@ impl Plugin for GameLogicPlugin {
             BlockInternalRegistry,
             WorldServices,
             PlayerServices,
+            EventsHandler,
             DebugOverlayPlugin
         ));
     }

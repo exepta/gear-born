@@ -52,6 +52,18 @@ pub struct BlockStats {
     pub emissive: f32,
 }
 
+#[derive(Resource, Clone, Debug)]
+pub struct SelectedBlock {
+    pub id:   u16,
+    pub name: String,
+}
+
+impl Default for SelectedBlock {
+    fn default() -> Self {
+        Self { id: 0, name: "air".to_string() }
+    }
+}
+
 #[derive(Resource)]
 pub struct BlockRegistry {
     pub defs: Vec<BlockDef>,

@@ -3,10 +3,10 @@ mod cross_hair;
 mod initialize;
 mod water_hud_fx;
 
-use crate::player_services::cross_hair::CrosshairPlugin;
-use crate::player_services::initialize::PlayerInitialize;
-use crate::player_services::look_at_service::LookAtService;
-use crate::player_services::water_hud_fx::UnderwaterFxPlugin;
+use crate::player::cross_hair::CrosshairPlugin;
+use crate::player::initialize::PlayerInitialize;
+use crate::player::look_at_service::LookAtService;
+use crate::player::water_hud_fx::UnderwaterFxPlugin;
 use bevy::prelude::*;
 
 pub struct PlayerServices;
