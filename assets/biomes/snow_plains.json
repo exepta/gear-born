@@ -1,0 +1,8 @@
+{
+  "biome": "snow_plains",
+  "top": ["snow_block", "snow"],
+  "filler": ["dirt_block", "dirt"],
+  "stone": ["stone_block", "stone"],
+  "seabed": ["sand_block", "sand", "dirt_block", "dirt"],
+  "beach_top": ["sand_block", "sand"]
+}

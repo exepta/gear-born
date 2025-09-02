@@ -1,0 +1,8 @@
+{
+  "biome": "mountain",
+  "top": ["stone_block", "stone"],
+  "filler": ["dirt_block", "dirt"],
+  "stone": ["stone_block", "stone"],
+  "seabed": ["sand_block", "sand", "dirt_block", "dirt"],
+  "beach_top": ["sand_block", "sand"]
+}

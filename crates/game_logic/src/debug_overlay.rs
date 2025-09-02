@@ -8,6 +8,7 @@ use game_core::key_converter::convert;
 use game_core::player::selection::SelectionState;
 use game_core::player::{GameMode, GameModeState};
 use game_core::states::{AppState, InGameStates};
+use game_core::world::biome::{BiomeSampler, BiomeStore, BiomeType};
 use game_core::world::block::{block_name_from_registry, get_block_world, BlockRegistry, MiningState, VOXEL_SIZE};
 use game_core::world::chunk::ChunkMap;
 use game_core::world::chunk_dim::*;
@@ -27,6 +28,7 @@ struct DebugSnapshot {
     chunk_cc: IVec2,
     facing_text: &'static str,
     yaw_deg: f32,
+    biome_text: String,
 
     // Selection / Mining
     block_line: String,
@@ -77,7 +79,7 @@ impl Plugin for DebugOverlayPlugin {
             .add_systems(
                 Update,
                 (
-                    (snap_perf, snap_camera_and_world, snap_selection, snap_build_and_mode).chain(),
+                    (snap_perf, snap_camera_and_world, snap_selection, snap_build_and_mode, snap_biome).chain(),
                     render_debug_text,
                 )
                     .run_if(in_state(AppState::InGame(InGameStates::Game)))
@@ -113,6 +115,36 @@ fn snap_camera_and_world(
     snap.chunk_range = game_cfg.graphics.chunk_range;
     snap.key_debug = game_cfg.input.debug_overlay.clone();
     snap.key_grid  = game_cfg.input.chunk_grid.clone();
+}
+
+fn snap_biome(
+    q_cam: Query<&GlobalTransform, (With<Camera3d>, Without<BlockCatalogPreviewCam>)>,
+    store: Option<Res<BiomeStore>>,
+    mut snap: ResMut<DebugSnapshot>,
+    mut cached: Local<(u32, Option<BiomeSampler>)>, // (seed, sampler)
+) {
+    let Some(store) = store else {
+        snap.biome_text = "—".to_string();
+        return;
+    };
+
+    // Rebuild sampler if seed changed or not built yet
+    if cached.1.is_none() || cached.0 != store.seed {
+        cached.0 = store.seed;
+        cached.1 = Some(store.make_sampler());
+    }
+    let sampler = cached.1.as_ref().unwrap();
+
+    let pos_bs = q_cam
+        .single()
+        .map(|t| t.translation())
+        .unwrap_or(Vec3::ZERO) / VOXEL_SIZE;
+
+    let wx = pos_bs.x.floor() as i32;
+    let wz = pos_bs.z.floor() as i32;
+
+    let b = sampler.biome_at_xz(wx, wz);
+    snap.biome_text = biome_name(b).to_string();
 }
 
 fn snap_selection(
@@ -223,6 +255,7 @@ fn render_debug_text(
          Location: ({:.2}, {:.2}, {:.2})\n\
          Facing: {} ({:.1}°)\n\
          Chunk: ({}, {})  (size: {}x{}, range: {})\n\
+         Biome: {}\n\
          {}\n\
          {}\n\
          Game Mode: {}\n\
@@ -235,6 +268,7 @@ fn render_debug_text(
         snap.pos_bs.x, snap.pos_bs.y, snap.pos_bs.z,
         snap.facing_text, snap.yaw_deg,
         snap.chunk_cc.x, snap.chunk_cc.y, CX, CZ, snap.chunk_range,
+        snap.biome_text,
         snap.block_line,
         snap.hit_str,
         snap.mode_text,
@@ -471,4 +505,22 @@ fn facing_dir_from_cam(cam_gt: &GlobalTransform) -> (&'static str, f32) {
 
 fn overlay_visible(state: Option<Res<DebugOverlayState>>) -> bool {
     state.map_or(false, |s| s.show)
+}
+
+#[inline]
+fn biome_name(b: BiomeType) -> &'static str {
+    match b {
+        BiomeType::Plains    => "Plains",
+        BiomeType::Forest    => "Forest",
+        BiomeType::Swamp     => "Swamp",
+        BiomeType::Mountain => "Mountain",
+        BiomeType::Desert    => "Desert",
+        BiomeType::WasteLand => "Wasteland",
+        BiomeType::Jungle    => "Jungle",
+        BiomeType::BloodForest   => "Blood Forest",
+        BiomeType::SnowPlains     => "Snow Plains",
+        BiomeType::SnowMountain    => "Snow Mountain",
+        BiomeType::Beach     => "Beach",
+        BiomeType::Ocean     => "Ocean",
+    }
 }

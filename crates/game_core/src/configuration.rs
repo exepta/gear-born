@@ -165,7 +165,7 @@ pub struct InputConfig {
 
     /// Key or button mapping for performing a standard world attack.
     pub attack: String,
-    
+
     pub toggle_game_mode: String,
 
     // UI
@@ -207,7 +207,7 @@ impl Default for InputConfig {
             interact: String::from("F"),
             attack: String::from("MouseLeft"),
             toggle_game_mode: String::from("F2"),
-            
+
             ui_menu: String::from("Escape"),
             ui_inventory: String::from("Tab"),
             ui_close_back: String::from("Escape"),
@@ -289,7 +289,7 @@ pub struct WorldGenConfig {
 impl Default for WorldGenConfig {
     fn default() -> Self {
         Self {
-            seed: 2261732,
+            seed: 900,
             enable_caves: false,
 
             base_height: 8,

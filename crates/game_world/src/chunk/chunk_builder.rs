@@ -9,12 +9,15 @@ use bevy_rapier3d::prelude::*;
 use game_core::configuration::{GameConfig, WorldGenConfig};
 use game_core::events::chunk_events::{ChunkUnloadEvent, SubChunkNeedRemeshEvent};
 use game_core::states::{AppState, InGameStates, LoadingStates};
-use game_core::world::block::{id_any, BlockRegistry, VOXEL_SIZE};
+use game_core::world::biome::BiomeStore;
+use game_core::world::biome_plate::BiomePaletteSet;
+use game_core::world::block::{BlockRegistry, VOXEL_SIZE};
 use game_core::world::chunk::*;
 use game_core::world::chunk_dim::*;
 use game_core::world::save::{RegionCache, WorldSave};
 use game_core::BlockCatalogPreviewCam;
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 
 const MAX_COLLIDERS_PER_FRAME: usize = 12;
 
@@ -191,13 +194,15 @@ fn check_base_gen_world_ready(
 fn schedule_chunk_generation(
     mut pending: ResMut<PendingGen>,
     chunk_map: Res<ChunkMap>,
-    reg: Res<BlockRegistry>,
+    _reg: Res<BlockRegistry>,                    // kept for consistency (not used here)
     gen_cfg: Res<WorldGenConfig>,
     game_config: Res<GameConfig>,
     ws: Res<WorldSave>,
     q_cam: Query<&GlobalTransform, (With<Camera3d>, Without<BlockCatalogPreviewCam>)>,
     load_center: Option<Res<LoadCenter>>,
     app_state: Res<State<AppState>>,
+    store: Res<BiomeStore>,
+    palettes: Res<BiomePaletteSet>,
 ) {
     let center_c = if let Ok(t) = q_cam.single() {
         let (c, _) = world_to_chunk_xz(
@@ -212,8 +217,8 @@ fn schedule_chunk_generation(
     };
 
     let waiting = is_waiting(&app_state);
-    let max_inflight = if waiting { BIG } else { MAX_INFLIGHT_GEN };
-    let per_frame_submit = if waiting { BIG } else { 8 };
+    let max_inflight = if waiting { MAX_INFLIGHT_GEN.max(BIG) } else { MAX_INFLIGHT_GEN };
+    let per_frame_submit = if waiting { 64 } else { 8 };
 
     if pending.0.len() >= max_inflight { return; }
 
@@ -222,15 +227,13 @@ fn schedule_chunk_generation(
         .saturating_sub(pending.0.len())
         .min(per_frame_submit);
 
-    let ids = (
-        id_any(&reg, &["grass_block","grass"]),
-        id_any(&reg, &["dirt_block","dirt"]),
-        id_any(&reg, &["stone_block","stone"]),
-        id_any(&reg, &["sand_block","sand"]),
-    );
     let cfg_clone = gen_cfg.clone();
     let ws_root = ws.root.clone();
     let pool = AsyncComputeTaskPool::get();
+
+    // Clone resources for async move.
+    let store_arc = Arc::new(store.as_ref().clone());
+    let palettes_base = palettes.as_ref().clone();
 
     for dz in -load_radius..=load_radius {
         for dx in -load_radius..=load_radius {
@@ -238,11 +241,13 @@ fn schedule_chunk_generation(
             let c = IVec2::new(center_c.x + dx, center_c.y + dz);
             if chunk_map.chunks.contains_key(&c) || pending.0.contains_key(&c) { continue; }
 
-            let ids_copy = ids;
             let cfg = cfg_clone.clone();
             let root = ws_root.clone();
+            let s = store_arc.clone();
+            let p = palettes_base.clone();
+
             let task = pool.spawn(async move {
-                let data = load_or_gen_chunk_async(root, c, ids_copy, cfg).await;
+                let data = load_or_gen_chunk_async_biome(root, c, s, p, cfg).await;
                 (c, data)
             });
             pending.0.insert(c, task);

@@ -3,6 +3,8 @@ pub mod chunk_dim;
 pub mod chunk;
 pub mod save;
 pub mod fluid;
+pub mod biome;
+pub mod biome_plate;
 
 use crate::events::chunk_events::SubChunkNeedRemeshEvent;
 use crate::player::selection::BlockHit;

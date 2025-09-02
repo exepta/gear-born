@@ -13,6 +13,7 @@ pub mod shader;
 use crate::configuration::{CrosshairConfig, WorldGenConfig};
 use crate::events::EventModule;
 use crate::player::PlayerModule;
+use crate::world::biome::{BiomeConfig, BiomeStore};
 use crate::world::block::{MiningOverlayRoot, MiningState, SelectedBlock};
 use bevy::prelude::*;
 
@@ -44,6 +45,7 @@ impl Plugin for GameCorePlugin {
         app.init_resource::<SelectedBlock>();
         app.init_resource::<MiningState>();
         app.init_resource::<MiningOverlayRoot>();
+        app.insert_resource(BiomeStore { seed: 2222, cfg: BiomeConfig::default() });
         app.add_plugins((PlayerModule, EventModule));
     }
 }
