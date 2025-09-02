@@ -16,7 +16,8 @@ features = [
     "bevy_log",
     "bevy_asset",
     "bevy_animation",
-    "png"
+    "png",
+    "bevy_text"
 ]
 
 [dependencies.bevy_rapier3d]
