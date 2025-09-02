@@ -6,12 +6,45 @@ use game_core::configuration::GameConfig;
 use game_core::debug::*;
 use game_core::key_converter::convert;
 use game_core::player::selection::SelectionState;
+use game_core::player::{GameMode, GameModeState};
 use game_core::states::{AppState, InGameStates};
 use game_core::world::block::{block_name_from_registry, get_block_world, BlockRegistry, MiningState, VOXEL_SIZE};
 use game_core::world::chunk::ChunkMap;
 use game_core::world::chunk_dim::*;
 use game_core::{BlockCatalogPreviewCam, BuildInfo};
+use std::ops::Neg;
 use sysinfo::{CpuRefreshKind, MemoryRefreshKind, Pid, ProcessesToUpdate, RefreshKind, System};
+
+#[derive(Resource, Default)]
+struct DebugSnapshot {
+    // Numbers
+    fps: f32,
+    cpu_percent: f32,
+    app_mem_bytes: u64,
+
+    // Cam / World
+    pos_bs: Vec3,
+    chunk_cc: IVec2,
+    facing_text: &'static str,
+    yaw_deg: f32,
+
+    // Selection / Mining
+    block_line: String,
+    hit_str: String,
+
+    // Build / Config
+    app_name: &'static str,
+    app_ver: &'static str,
+    bevy_ver: &'static str,
+    backend_name: String,
+    backend_str: &'static str,
+    chunk_range: i32,
+    mode_text: &'static str,
+
+    // Hotkeys (for Ui)
+    key_debug: String,
+    key_grid: String,
+}
 
 pub struct DebugOverlayPlugin;
 
@@ -22,8 +55,13 @@ impl Plugin for DebugOverlayPlugin {
             .init_resource::<DebugOverlayState>()
             .init_resource::<DebugGridState>()
             .init_resource::<SysStats>()
+            .init_resource::<DebugSnapshot>()
             .init_gizmo_group::<ChunkGridGizmos>()
-            .add_systems(OnEnter(AppState::InGame(InGameStates::Game)), (setup_sys_info, setup_chunk_grid_gizmos))
+            .add_systems(
+                OnEnter(AppState::InGame(InGameStates::Game)),
+                (setup_sys_info, setup_chunk_grid_gizmos),
+            )
+
             .add_systems(
                 Update,
                 (
@@ -31,12 +69,114 @@ impl Plugin for DebugOverlayPlugin {
                     toggle_grid,
                     poll_sys_info,
                     ensure_overlay_exists,
-                    update_debug_text,
                     draw_chunk_grid,
                 )
                     .run_if(in_state(AppState::InGame(InGameStates::Game))),
+            )
+
+            .add_systems(
+                Update,
+                (
+                    (snap_perf, snap_camera_and_world, snap_selection, snap_build_and_mode).chain(),
+                    render_debug_text,
+                )
+                    .run_if(in_state(AppState::InGame(InGameStates::Game)))
+                    .run_if(overlay_visible),
             );
     }
+}
+
+fn snap_perf(diag: Res<DiagnosticsStore>, stats: Res<SysStats>, mut snap: ResMut<DebugSnapshot>) {
+    snap.fps = diag.get(&FrameTimeDiagnosticsPlugin::FPS)
+        .and_then(|d| d.smoothed()).unwrap_or(0.0) as f32;
+    snap.cpu_percent = stats.cpu_percent;
+    snap.app_mem_bytes = stats.app_mem_bytes;
+}
+
+fn snap_camera_and_world(
+    q_cam: Query<&GlobalTransform, (With<Camera3d>, Without<BlockCatalogPreviewCam>)>,
+    game_cfg: Res<GameConfig>,
+    mut snap: ResMut<DebugSnapshot>,
+) {
+    let pos = q_cam.single().map(|t| t.translation()).unwrap_or(Vec3::ZERO) / VOXEL_SIZE;
+    let (cc, _) = world_to_chunk_xz(pos.x.floor() as i32, pos.z.floor() as i32);
+
+    let (facing_text, yaw_deg) = q_cam.single()
+        .ok()
+        .map(|gt| facing_dir_from_cam(gt))
+        .unwrap_or(("—", 0.0));
+
+    snap.pos_bs = pos;
+    snap.chunk_cc = IVec2::new(cc.x, cc.y);
+    snap.facing_text = facing_text;
+    snap.yaw_deg = yaw_deg;
+    snap.chunk_range = game_cfg.graphics.chunk_range;
+    snap.key_debug = game_cfg.input.debug_overlay.clone();
+    snap.key_grid  = game_cfg.input.chunk_grid.clone();
+}
+
+fn snap_selection(
+    sel: Option<Res<SelectionState>>,
+    reg: Res<BlockRegistry>,
+    chunk_map: Res<ChunkMap>,
+    time: Res<Time>,
+    mining: Option<Res<MiningState>>,
+    mut snap: ResMut<DebugSnapshot>,
+) {
+    let (hit_str, block_line) = if let Some(sel) = sel {
+        if let Some(h) = sel.hit {
+            let id = get_block_world(&chunk_map, h.block_pos);
+            let name = if id != 0 { block_name_from_registry(&reg, id) } else { "air".into() };
+
+            let pct_opt = mining.as_ref()
+                .and_then(|m| m.target.as_ref())
+                .and_then(|t| {
+                    if t.loc == h.block_pos && t.id == id && t.duration > 0.0 {
+                        let p = ((time.elapsed_secs() - t.started_at) / t.duration)
+                            .clamp(0.0, 1.0);
+                        Some((p * 100.0).round() as i32)
+                    } else { None }
+                });
+
+            let block_line = if id != 0 {
+                if let Some(pct) = pct_opt {
+                    format!("Block: {} progress ({}%)", name, pct)
+                } else {
+                    format!("Block: {}", name)
+                }
+            } else { "Block: —".into() };
+
+            (
+                format!("{:?} at ({},{},{})", h.face, h.block_pos.x, h.block_pos.y, h.block_pos.z),
+                block_line
+            )
+        } else { ("—".into(), "Block: —".into()) }
+    } else { ("—".into(), "Block: —".into()) };
+
+    snap.hit_str = hit_str;
+    snap.block_line = block_line;
+}
+
+// Build/Backend/Mode
+fn snap_build_and_mode(
+    build: Option<Res<BuildInfo>>,
+    backend: Res<RenderAdapterInfo>,
+    game_mode: Res<GameModeState>,
+    mut snap: ResMut<DebugSnapshot>,
+) {
+    let (app_name, app_ver, bevy_ver) = if let Some(b) = build {
+        (b.app_name, b.app_version, b.bevy_version)
+    } else { ("<app>", "?", "0.16.1") };
+
+    snap.app_name = app_name;
+    snap.app_ver = app_ver;
+    snap.bevy_ver = bevy_ver;
+    snap.backend_name = backend.name.clone();
+    snap.backend_str = backend_to_str(backend.backend.to_str());
+    snap.mode_text = match game_mode.0 {
+        GameMode::Creative => "Creative",
+        GameMode::Survival => "Survival",
+    };
 }
 
 fn setup_chunk_grid_gizmos(mut store: ResMut<GizmoConfigStore>) {
@@ -64,6 +204,50 @@ fn setup_sys_info(mut stats: ResMut<SysStats>) {
     stats.app_mem_bytes = app_mem_bytes;
     stats.app_cpu_percent = app_cpu;
     stats.sys = s;
+}
+
+fn render_debug_text(
+    state: Res<DebugOverlayState>,
+    mut q_text: Query<&mut Text>,
+    snap: Res<DebugSnapshot>,
+) {
+    if !state.show { return; }
+    let Some(text_e) = state.text else { return; };
+
+    let mem_str = fmt_mem_from_bytes(snap.app_mem_bytes);
+    let txt = format!(
+        "{app} {app_ver}  (Bevy {bevy_ver})\n\
+         FPS: {:>5.1}\n\
+         Graphic: {}\n\
+         CPU: {:>4.1}%  RAM(proc): {}  Backend: {}\n\
+         Location: ({:.2}, {:.2}, {:.2})\n\
+         Facing: {} ({:.1}°)\n\
+         Chunk: ({}, {})  (size: {}x{}, range: {})\n\
+         {}\n\
+         {}\n\
+         Game Mode: {}\n\
+         {}: Toggle Debug Overlay   {}: Toggle Chunk Grid",
+        snap.fps,
+        snap.backend_name,
+        snap.cpu_percent,
+        mem_str,
+        snap.backend_str,
+        snap.pos_bs.x, snap.pos_bs.y, snap.pos_bs.z,
+        snap.facing_text, snap.yaw_deg,
+        snap.chunk_cc.x, snap.chunk_cc.y, CX, CZ, snap.chunk_range,
+        snap.block_line,
+        snap.hit_str,
+        snap.mode_text,
+        snap.key_debug,
+        snap.key_grid,
+        app = snap.app_name,
+        app_ver = snap.app_ver,
+        bevy_ver = snap.bevy_ver,
+    );
+
+    if let Ok(mut t) = q_text.get_mut(text_e) {
+        *t = Text::new(txt);
+    }
 }
 
 /* ---------- Toggles ---------- */
@@ -163,111 +347,6 @@ fn poll_sys_info(time: Res<Time>, mut stats: ResMut<SysStats>) {
         stats.cpu_percent = cpu_percent;
         stats.app_mem_bytes = app_mem_bytes;
         stats.app_cpu_percent = app_cpu_percent;
-    }
-}
-
-fn update_debug_text(
-    state: Res<DebugOverlayState>,
-    diag: Res<DiagnosticsStore>,
-    stats: Res<SysStats>,
-    sel: Option<Res<SelectionState>>,
-    q_cam: Query<&GlobalTransform, (With<Camera3d>, Without<BlockCatalogPreviewCam>)>,
-    mut q_text: Query<&mut Text>,
-    build: Option<Res<BuildInfo>>,
-    game_config: Res<GameConfig>,
-    backend: Res<RenderAdapterInfo>,
-    reg: Res<BlockRegistry>,
-    chunk_map: Res<ChunkMap>,
-
-    time: Res<Time>,
-    mining: Option<Res<MiningState>>,
-) {
-    if !state.show { return; }
-    let Some(text_e) = state.text else { return; };
-
-    let fps = diag.get(&FrameTimeDiagnosticsPlugin::FPS)
-        .and_then(|d| d.smoothed())
-        .unwrap_or(0.0);
-
-    let pos_bs = q_cam.single().map(|t| t.translation()).unwrap_or(Vec3::ZERO) / VOXEL_SIZE;
-    let (cc, _local) = world_to_chunk_xz(pos_bs.x.floor() as i32, pos_bs.z.floor() as i32);
-
-    let (hit_str, _, block_line) = if let Some(sel) = sel {
-        if let Some(h) = sel.hit {
-            let id = get_block_world(&chunk_map, h.block_pos);
-            let name = if id != 0 { block_name_from_registry(&reg, id) } else { "air".into() };
-
-            let pct_opt = mining
-                .as_ref()
-                .and_then(|m| m.target.as_ref())
-                .and_then(|t| {
-                    if t.loc == h.block_pos && t.id == id && t.duration > 0.0 {
-                        let p = ((time.elapsed_secs() - t.started_at) / t.duration)
-                            .clamp(0.0, 1.0);
-                        Some((p * 100.0).round() as i32)
-                    } else {
-                        None
-                    }
-                });
-
-            let block_line = if id != 0 {
-                if let Some(pct) = pct_opt {
-                    format!("Block: {} progress ({}%)", name, pct)
-                } else {
-                    format!("Block: {}", name)
-                }
-            } else {
-                "Block: —".into()
-            };
-
-            (
-                format!("{:?} at ({},{},{})", h.face, h.block_pos.x, h.block_pos.y, h.block_pos.z),
-                format!("place: ({},{},{})", h.place_pos.x, h.place_pos.y, h.place_pos.z),
-                block_line,
-            )
-        } else {
-            ("—".into(), "—".into(), "Block: —".into())
-        }
-    } else {
-        ("—".into(), "—".into(), "Block: —".into())
-    };
-
-    let mem_str = fmt_mem_from_bytes(stats.app_mem_bytes);
-    let (app_name, app_ver, bevy_ver) = if let Some(b) = build {
-        (b.app_name, b.app_version, b.bevy_version)
-    } else { ("<app>", "?", "0.16.1") };
-
-    let backend_str = backend_to_str(backend.backend.to_str());
-    let chunk_range = game_config.graphics.chunk_range;
-
-    let txt = format!(
-        "{app} {app_ver}  (Bevy {bevy_ver})\n\
-         FPS: {:>5.1}\n\
-         Graphic: {}\n\
-         CPU: {:>4.1}%  RAM(proc): {}  Backend: {}\n\
-         Location: ({:.2}, {:.2}, {:.2})\n\
-         Chunk: ({}, {})  (size: {}x{}, range: {})\n\
-         {}\n\
-         {}\n\
-         {}: Toggle Debug Overlay   {}: Toggle Chunk Grid",
-        fps,
-        backend.name,
-        stats.cpu_percent,
-        mem_str,
-        backend_str,
-        pos_bs.x, pos_bs.y, pos_bs.z,
-        cc.x, cc.y, CX, CZ, chunk_range,
-        block_line,
-        hit_str,
-        game_config.input.debug_overlay.as_str(),
-        game_config.input.chunk_grid.as_str(),
-        app = app_name,
-        app_ver = app_ver,
-        bevy_ver = bevy_ver,
-    );
-
-    if let Ok(mut t) = q_text.get_mut(text_e) {
-        *t = Text::new(txt);
     }
 }
 
@@ -372,4 +451,24 @@ fn backend_to_str(b: &str) -> &'static str {
         "dx11" | "DX11" => "DirectX11",
         _ => "Unknown",
     }
+}
+
+const DIR8: [&str; 8] = [
+    "North","North East","East","South East","South","South West","West","North West"
+];
+
+fn facing_dir_from_cam(cam_gt: &GlobalTransform) -> (&'static str, f32) {
+    let (_, rot, _) = cam_gt.to_scale_rotation_translation();
+    let v = (rot * -Vec3::Z).xz();
+
+    if v.length_squared() < f32::EPSILON { return ("North", 0.0); }
+
+    let deg_cw  = v.y.neg().atan2(v.x).to_degrees().rem_euclid(360.0);
+    let deg_ccw = (360.0 - deg_cw).rem_euclid(360.0);
+    let sector  = ((deg_ccw + 22.5) / 45.0).floor() as usize % 8;
+    (DIR8[sector], deg_cw)
+}
+
+fn overlay_visible(state: Option<Res<DebugOverlayState>>) -> bool {
+    state.map_or(false, |s| s.show)
 }

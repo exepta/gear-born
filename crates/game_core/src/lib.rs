@@ -31,6 +31,9 @@ pub struct BlockCatalogUiState { pub open: bool, pub root: Option<Entity> }
 
 pub const UI_ACCENT_COLOR: Color = Color::srgb_u8(96, 94, 230);
 
+#[derive(Resource)]
+pub struct DefaultGameFont(pub Handle<Font>);
+
 pub struct GameCorePlugin;
 
 impl Plugin for GameCorePlugin {
