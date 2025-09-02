@@ -47,8 +47,8 @@ impl Plugin for BlockCatalogUiPlugin {
 
 /* ---------------- Constants ---------------- */
 
-const PANEL_WIDTH_PX: f32 = 580.0;
-const PREVIEW_SIZE_PX: u32 = 100;
+const PANEL_WIDTH_PX: f32 = 680.0;
+const PREVIEW_SIZE_PX: u32 = 150;
 const PREVIEW_LAYER_BASE: usize = 3;
 const PREVIEW_CAM_FOV_DEG: f32 = 32.0;
 
@@ -152,7 +152,8 @@ fn spawn_block_catalog_ui(
     reg: Res<BlockRegistry>,
     mut images: ResMut<Assets<Image>>,
     mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<StandardMaterial>>, // <-- add
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    game_config: Res<GameConfig>,
 ) {
     // Root panel
     let root = commands
@@ -195,7 +196,7 @@ fn spawn_block_catalog_ui(
                 Visibility::default(),
             ));
             c.spawn((
-                Text::new("(TAB to toggle)"),
+                Text::new(format!("({} to toggle)", game_config.input.ui_inventory)),
                 TextFont { font_size: 14.0, ..default() },
                 TextColor(Color::srgba(1.0,1.0,1.0,0.6)),
                 Visibility::default(),
@@ -308,6 +309,7 @@ fn spawn_block_catalog_ui(
                     flex_direction: FlexDirection::Column,
                     align_items: AlignItems::Center,
                     justify_content: JustifyContent::Center,
+                    row_gap: Val::Px(5.0),
                     padding: UiRect::all(Val::Px(6.0)),
                     border: UiRect::all(Val::Px(2.0)),
                     ..default()
@@ -330,8 +332,8 @@ fn spawn_block_catalog_ui(
                     Name::new("BlockItem:Preview"),
                 ));
                 c.spawn((
-                    Text::new(def.name.clone()),
-                    TextFont { font_size: 13.0, ..default() },
+                    Text::new(format_name(&def.name)),
+                    TextFont { font_size: 12.0, ..default() },
                     TextColor(Color::srgba(1.0, 1.0, 1.0, 0.85)),
                     FocusPolicy::Pass,
                     Visibility::default(),
@@ -362,4 +364,17 @@ fn make_render_texture(images: &mut Assets<Image>, w: u32, h: u32) -> Handle<Ima
             | TextureUsages::COPY_SRC
             | TextureUsages::COPY_DST;
     images.add(image)
+}
+
+fn format_name(name: &str) -> String {
+    name.split('_')
+        .map(|word| {
+            let mut chars = word.chars();
+            match chars.next() {
+                Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
+                None => String::new(),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
 }
