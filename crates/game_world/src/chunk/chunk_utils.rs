@@ -148,16 +148,15 @@ pub async fn generate_chunk_async_noise(
 
     // --- BIOMES
     #[inline]
-    fn blend_biome_gen(t: f32, m: f32, table: &BiomeTable) -> (f32, f32, f32) {
-        if table.list.is_empty() {
-            return (0.0, 1.0, 1.0);
-        }
+    fn blend_biome_gen(t: f32, m: f32, table: &BiomeTable) -> (f32, f32, f32, f32) {
+        if table.list.is_empty() { return (0.0, 1.0, 1.0, 1.0); }
         let sigma2 = (BIOME_BLEND_SIGMA * BIOME_BLEND_SIGMA).max(1e-6);
+
         let mut items: Vec<(usize, f32)> = table.list.iter().enumerate().map(|(i,b)| {
             let dt = t - b.temperature;
             let dm = m - b.moist;
             let d2 = dt*dt + dm*dm;
-            let w  = (-(d2) / (2.0 * sigma2)).exp() * (0.0001 + b.rarity.clamp(0.0,1.0));
+            let w  = (-d2 / (2.0 * sigma2)).exp() * (0.0001 + b.rarity.clamp(0.0, 1.0));
             (i, w)
         }).collect();
         items.sort_by(|a,b| b.1.partial_cmp(&a.1).unwrap());
@@ -165,7 +164,11 @@ pub async fn generate_chunk_async_noise(
         let k = BIOME_TOP_K.min(items.len());
         let mut sum = 0.0;
         for i in 0..k { sum += items[i].1; }
-        if sum <= 0.0 { return (0.0, 1.0, 1.0); }
+        if sum <= 0.0 { return (0.0, 1.0, 1.0, 1.0); }
+
+        let w0 = items[0].1;
+        let w1 = if k > 1 { items[1].1 } else { 0.0 };
+        let dominance = ((w0 - w1) / sum).clamp(0.0, 1.0);
 
         let mut h_off = 0.0;
         let mut ridge = 0.0;
@@ -178,10 +181,12 @@ pub async fn generate_chunk_async_noise(
             ridge += bw * g.ridge_amp_factor.max(0.0);
             roll  += bw * g.rolling_amp_factor.max(0.0);
         }
+
         (
-            h_off.clamp(-16.0, 16.0),
-            ridge.clamp(0.5, 1.5),
-            roll .clamp(0.5, 1.5),
+            h_off.clamp(-32.0, 32.0),
+            ridge.clamp(0.5, 2.2),
+            roll .clamp(0.5, 1.8),
+            dominance,
         )
     }
 
@@ -207,7 +212,6 @@ pub async fn generate_chunk_async_noise(
             plains_mask,
         );
 
-        let amp      = lerp(cfg.plains_span as f32, cfg.height_span as f32, plains_fac);
         let warp_amp = lerp(cfg.warp_amp_plains,              cfg.warp_amp,  plains_fac);
 
         // Domain warp
@@ -226,7 +230,15 @@ pub async fn generate_chunk_async_noise(
 
         let t = map01(temp_n.get_noise_2d(wxf, wzf));
         let m = map01(moist_n.get_noise_2d(wxf, wzf));
-        let (h_off, ridge_fac, roll_fac) = blend_biome_gen(t, m, &biomes);
+        let (h_off, ridge_fac, roll_fac, dom) = blend_biome_gen(t, m, &biomes);
+
+        let center_w = dom.powf(1.5);
+
+        let ridge_gate = smoothstep(0.8, 1.3, ridge_fac);
+
+        let relief_fac = (0.7 * roll_fac + 0.3 * ridge_fac).clamp(0.25, 1.0);
+        let amp0 = lerp(cfg.plains_span as f32, cfg.height_span as f32, plains_fac);
+        let amp  = amp0 * relief_fac;
 
         let land_mid = (SEA_LEVEL as f32 - 5.0) + inland_f * 18.0;
         let mut h_land = land_mid + (h01 - 0.5) * amp;
@@ -237,19 +249,24 @@ pub async fn generate_chunk_async_noise(
         let base_m = (map01(mount_base_n.get_noise_2d(wxf, wzf)) - 0.5) * 2.0;
         let ridge_raw = (map01(ridges_n.get_noise_2d(wxf, wzf)) - 0.5) * 2.0;
         let ridged = ridge_raw * 0.6 + ridge_raw * ridge_raw * ridge_raw * 0.4;
+
         let inland_mountain_mask =
             (inland_f * smoothstep((SEA_LEVEL+4) as f32, (SEA_LEVEL+34) as f32, h_land)).clamp(0.0, 1.0);
-        let base_amp   = lerp(0.0, 10.0, inland_mountain_mask * (1.0 - macro_pl * 0.85)) * roll_fac;
-        let ridged_amp = lerp(0.0,  6.0, inland_mountain_mask * (1.0 - macro_pl * 0.85)) * ridge_fac;
+
+        let mountain_w = (inland_mountain_mask * ridge_gate * center_w).clamp(0.0, 1.0);
+
+        let base_amp   = lerp(0.0, 10.0, mountain_w * (1.0 - macro_pl * 0.85)) * roll_fac;
+        let ridged_amp = lerp(0.0,  6.0, mountain_w * (1.0 - macro_pl * 0.85)) * ridge_fac;
         h_land += base_m * base_amp + ridged * ridged_amp;
 
         // Täler
         let valley = map01(valley_n.get_noise_2d(wxf, wzf));
-        let valley_cut = ((valley - 0.65).max(0.0) * 10.0) * inland_f * (1.0 - macro_pl * 0.7);
+        let valley_cut0 = ((valley - 0.65).max(0.0) * 10.0) * inland_f * (1.0 - macro_pl * 0.7);
+        let valley_cut  = valley_cut0 * (0.6 + 0.4 * center_w);
         h_land -= valley_cut;
 
         // River
-        let r_strength = river_strength_at(wxf, wzf, h_land, inland_f);
+        let r_strength = river_strength_at(wxf, wzf, h_land, inland_f) * (0.6 + 0.4 * center_w);
         if r_strength > 0.0 {
             let target = (SEA_LEVEL - 1) as f32;
             h_land = lerp(h_land, target, (r_strength * 0.85).clamp(0.0, 0.85));
@@ -258,16 +275,28 @@ pub async fn generate_chunk_async_noise(
             h_land -= r_strength * (1.0 + 2.0 * width_f);
         }
 
+        if mountain_w < 0.2 && r_strength < 0.05 {
+            let below = (SEA_LEVEL as f32 - h_land).max(0.0);
+            let fill = smoothstep(0.0, 3.5, below).min(0.75);
+            h_land += fill * below;
+        }
+
         h_land += LAND_LIFT;
 
         // BIOMES
         let coastal_scale = 0.25 + 0.75 * inland_f;
         let macro_scale   = 0.40 + 0.60 * macro_pl;
-        h_land += h_off * coastal_scale * macro_scale;
+        let edge_scale    = 0.35 + 0.65 * center_w;
+        h_land += h_off * coastal_scale * macro_scale * edge_scale;
 
         let dist_to_sea = h_land - SEA_LEVEL as f32;
         let ramp        = 1.0 - smoothstep(0.0, 18.0, dist_to_sea.abs());
-        let compress    = lerp(0.70, 1.0, 1.0 - ramp);
+
+        let comp_pos = lerp(0.70, 1.0, 1.0 - ramp);
+        let comp_neg_min = lerp(0.50, 0.70, mountain_w);
+        let comp_neg = lerp(comp_neg_min, 1.0, 1.0 - ramp);
+
+        let compress = if dist_to_sea >= 0.0 { comp_pos } else { comp_neg };
         h_land = SEA_LEVEL as f32 + dist_to_sea * compress;
 
         let dunes = coast_n.get_noise_2d(wxf, wzf);
@@ -328,10 +357,18 @@ pub async fn generate_chunk_async_noise(
             let slope = (h_e - h_f).abs().max((h_n - h_f).abs());
             let alt   = (h_f - 90.0).max(0.0) / 50.0;
 
+            let center_w_here = {
+                let t_here = map01(temp_n.get_noise_2d(wxf, wzf));
+                let m_here = map01(moist_n.get_noise_2d(wxf, wzf));
+                let (_, _, _, dom_here) = blend_biome_gen(t_here, m_here, &biomes);
+                dom_here.powf(1.5)
+            };
+
             let macro_pl = smoothstep(0.55, 0.78, map01(macro_plains_n.get_noise_2d(wxf * 0.6, wzf * 0.6)));
             let mut soil_depth = 2.6 + 1.2 * macro_pl;
             soil_depth -= slope * 1.1;
             soil_depth -= alt.clamp(0.0, 1.0) * 1.3;
+            soil_depth += 1.2 * (1.0 - center_w_here);
             soil_depth = soil_depth.clamp(0.0, 4.0);
 
             let near_coast = ((h_final as f32) - (SEA_LEVEL as f32)).abs() <= 4.0;
