@@ -3,7 +3,7 @@ use bevy::prelude::*;
 use bincode::{config, decode_from_slice, encode_to_vec};
 use game_core::configuration::WorldGenConfig;
 use game_core::states::{AppState, LoadingStates};
-use game_core::world::biome::{BiomeAsset, BiomeRegistry, BiomeSurface, WeightedBlock};
+use game_core::world::biome::{BiomeAsset, BiomeRegistry, BiomeSize, BiomeSurface, WeightedBlock};
 use game_core::world::block::{BlockId, Face};
 use game_core::world::chunk::{ChunkData, ChunkMap, ChunkMeshIndex};
 use game_core::world::chunk_dim::*;
@@ -12,6 +12,11 @@ use lz4_flex::{compress_prepend_size, decompress_size_prepended};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::OnceLock;
+
+// ---------------------------- Size-Gating ----------------------------
+#[derive(Clone, Copy, Default)]
+struct SizeInfo { freq: f32 }
+static SIZE_BANK: OnceLock<Vec<SizeInfo>> = OnceLock::new();
 
 pub const MAX_INFLIGHT_MESH: usize = 32;
 pub const MAX_INFLIGHT_GEN:  usize = 32;
@@ -23,9 +28,7 @@ pub(crate) const DIR4: [IVec2; 4] = [
     IVec2::new( 0, -1),
 ];
 
-/// ----------------------------------------------------------------
-/// Biome-Surface-Bank (gewichtet, mit Namen). Reihenfolge == BiomeTable.order
-/// ----------------------------------------------------------------
+// ------------------------- Surface (gewichtet) -----------------------
 #[derive(Clone, Default)]
 struct WName { name: String, w: f32 }
 #[derive(Clone, Default)]
@@ -38,15 +41,13 @@ struct SurfaceByName {
 static SURFACE_BANK: OnceLock<Vec<SurfaceByName>> = OnceLock::new();
 
 #[inline]
-fn wb_list_to_wname(list: &[WeightedBlock]) -> Vec<WName> {
-    // schon normalisiert in biome.rs? Wir normalisieren hier sicherheitshalber nochmal
+fn wb_list_to_w_name(list: &[WeightedBlock]) -> Vec<WName> {
     let sum: f32 = list.iter().map(|w| w.weight.max(0.0)).sum();
     if sum > 0.0 {
         list.iter()
             .map(|w| WName { name: w.name.clone(), w: w.weight.max(0.0) / sum })
             .collect()
     } else {
-        // gleichverteilt
         let n = list.len().max(1) as f32;
         list.iter().map(|w| WName { name: w.name.clone(), w: 1.0 / n }).collect()
     }
@@ -55,10 +56,10 @@ fn wb_list_to_wname(list: &[WeightedBlock]) -> Vec<WName> {
 #[inline]
 fn from_surface(s: &BiomeSurface) -> SurfaceByName {
     SurfaceByName {
-        top:        wb_list_to_wname(&s.top_blocks),
-        bottom:     wb_list_to_wname(&s.bottom_blocks),
-        under:      wb_list_to_wname(&s.under_blocks),
-        deep_under: wb_list_to_wname(&s.deep_under_blocks),
+        top:        wb_list_to_w_name(&s.top_blocks),
+        bottom:     wb_list_to_w_name(&s.bottom_blocks),
+        under:      wb_list_to_w_name(&s.under_blocks),
+        deep_under: wb_list_to_w_name(&s.deep_under_blocks),
     }
 }
 
@@ -87,7 +88,7 @@ fn name_to_id(name: &str, ids: (BlockId, BlockId, BlockId, BlockId)) -> BlockId 
         "dirt_block"  => dirt,
         "stone_block" => stone,
         "sand_block"  => sand,
-        "clay_block"  => dirt,   // Fallback: falls kein eigener Clay vorhanden
+        "clay_block"  => dirt,   // fallback falls kein eigener Clay vorhanden
         _ => stone,              // unbekannt -> neutraler Fallback
     }
 }
@@ -213,9 +214,27 @@ pub async fn generate_chunk_async_noise(
     moist_n.set_noise_type(Some(NoiseType::OpenSimplex2));
     moist_n.set_frequency(Some(BIOME_MOIST_FREQ));
 
-    // ---------- biome mixing ----------
+    // --- Size-Gate Hilfsfunktion (Seed als 1. Arg) ---
+    fn size_gate_at(cfg_seed: i32, idx: usize, x: f32, z: f32) -> f32 {
+        use fastnoise_lite::{FastNoiseLite, NoiseType};
+        if let Some(info) = SIZE_BANK.get().and_then(|v| v.get(idx)) {
+            let salt: i32 = 0x512E_0000;
+            let seed_i32 = cfg_seed ^ salt.wrapping_add(idx as i32);
+
+            let mut n = FastNoiseLite::with_seed(seed_i32);
+            n.set_noise_type(Some(NoiseType::OpenSimplex2));
+            n.set_frequency(Some(info.freq.max(0.0003)));
+            0.1 + 0.9 * smoothstep(0.25, 0.75, map01(n.get_noise_2d(x, z)))
+        } else {
+            1.0
+        }
+    }
+
+    // ---------- biome mixing mit Gate ----------
     #[inline]
-    fn blend_biome_gen(t: f32, m: f32, table: &BiomeTable) -> (f32, f32, f32, f32) {
+    fn blend_biome_gen_climate(
+        t: f32, m: f32, table: &BiomeTable
+    ) -> (f32, f32, f32, f32) {
         if table.list.is_empty() { return (0.0, 1.0, 1.0, 0.0); }
         let sigma2 = (BIOME_BLEND_SIGMA * BIOME_BLEND_SIGMA).max(1e-6);
 
@@ -249,27 +268,26 @@ pub async fn generate_chunk_async_noise(
             ridge += bw * g.ridge_amp_factor.max(0.0);
             roll  += bw * g.rolling_amp_factor.max(0.0);
         }
-
-        (
-            h_off.clamp(-120.0, 180.0),
-            ridge.clamp(0.5, 2.5),
-            roll .clamp(0.5, 2.0),
-            dominance,
-        )
+        (h_off.clamp(-120.0, 180.0), ridge.clamp(0.5, 2.5), roll.clamp(0.5, 2.0), dominance)
     }
 
-    // dominantes Biome-Index (für Surface-Pick)
     #[inline]
-    fn dominant_biome_index(t: f32, m: f32, table: &BiomeTable) -> usize {
+    fn dominant_biome_index_sized(
+        t: f32, m: f32, x: f32, z: f32, table: &BiomeTable, cfg_seed: i32
+    ) -> usize {
         if table.list.is_empty() { return 0; }
         let sigma2 = (BIOME_BLEND_SIGMA * BIOME_BLEND_SIGMA).max(1e-6);
+
         let mut best_i = 0usize;
         let mut best_w = f32::MIN;
+
         for (i, b) in table.list.iter().enumerate() {
             let dt = t - b.temperature;
             let dm = m - b.moist;
             let d2 = dt*dt + dm*dm;
-            let w  = (-d2 / (2.0 * sigma2)).exp() * (0.0001 + b.rarity.clamp(0.0, 1.0));
+            let base = (-d2 / (2.0 * sigma2)).exp() * (0.0001 + b.rarity.clamp(0.0, 1.0));
+            let gate = size_gate_at(cfg_seed, i, x, z);
+            let w = base * gate;
             if w > best_w { best_w = w; best_i = i; }
         }
         best_i
@@ -282,7 +300,7 @@ pub async fn generate_chunk_async_noise(
         lo + (r % (range + 1))
     }
 
-    // ---------- height sampler (keine Flüsse) ----------
+    // ---------- height sampler ----------
     let sample_height = |wxf: f32, wzf: f32| -> f32 {
         // plain mask & warp
         let plains_mask = map01(plains_n.get_noise_2d(wxf, wzf));
@@ -309,10 +327,12 @@ pub async fn generate_chunk_async_noise(
 
         let macro_pl = smoothstep(0.55, 0.78, map01(macro_plains_n.get_noise_2d(wxf * 0.6, wzf * 0.6)));
 
-        // biome mix
+        // biome mix (Größe beeinflusst NUR Auswahl, nicht Relief)
         let t = map01(temp_n.get_noise_2d(wxf, wzf));
         let m = map01(moist_n.get_noise_2d(wxf, wzf));
-        let (h_off, ridge_fac, roll_fac, dom) = blend_biome_gen(t, m, &biomes);
+        // Seed-capturing Gate:
+        let (h_off, ridge_fac, roll_fac, dom) =
+            blend_biome_gen_climate(t, m, &biomes);
         let center_w = dom.powf(1.5);
 
         let ridge_gate = smoothstep(0.8, 1.3, ridge_fac);
@@ -330,7 +350,7 @@ pub async fn generate_chunk_async_noise(
         let rolling = (map01(rolling_n.get_noise_2d(wxf, wzf)) - 0.5) * 8.0;
         h_land += rolling * (0.35 + 0.65 * macro_pl) * roll_fac;
 
-        // mountains
+        // mountains (basal + ridged)
         let base_m    = (map01(mount_base_n.get_noise_2d(wxf, wzf)) - 0.5) * 2.0;
         let ridge_raw = (map01(ridges_n.get_noise_2d(wxf, wzf))     - 0.5) * 2.0;
         let ridged    = ridge_raw * 0.6 + ridge_raw * ridge_raw * ridge_raw * 0.4;
@@ -346,12 +366,14 @@ pub async fn generate_chunk_async_noise(
         let ridged_amp = leap(0.0,  8.0, mountain_w * (1.0 - macro_pl * 0.85)) * ridge_fac;
         h_land += base_m * base_amp + ridged * ridged_amp;
 
+        // gerichtete Rücken
         let ang    = orient_n.get_noise_2d(wxf * 0.4, wzf * 0.4) * std::f32::consts::PI;
         let (ux, uz) = rot2(wxf, wzf, ang);
         let ridge_dir = (map01(ridge_long_n.get_noise_2d(ux * 0.06, uz * 0.45)) - 0.5) * 2.0;
         let ridge_dir_sharp = ridge_dir.signum() * ridge_dir.abs().powf(1.35);
         h_land += ridge_dir_sharp * (8.0 * mountain_w);
 
+        // highland shaping
         let above_sea = (h_land - SEA_LEVEL as f32).max(0.0);
         let cliff_w   = smoothstep(0.45, 0.85, mountain_w);
         let expo      = leap(1.0, 1.55, cliff_w);
@@ -361,17 +383,20 @@ pub async fn generate_chunk_async_noise(
         let step_h     = leap(3.0, 7.0, cliff_w) * (1.0 + strata_jit * 0.25);
         h_land = terrace(h_land, step_h.max(2.5), 0.55 * cliff_w);
 
+        // valleys
         let valley = map01(valley_n.get_noise_2d(wxf, wzf));
         let valley_cut0 = ((valley - 0.65).max(0.0) * 10.0) * inland_f * (1.0 - macro_pl * 0.7);
         let valley_cut  = valley_cut0 * (0.6 + 0.4 * (1.0 - mountain_w));
         h_land -= valley_cut;
 
+        // biome offsets (keine Größenänderung!)
         h_land += LAND_LIFT;
         let coastal_scale = 0.25 + 0.75 * inland_f;
         let macro_scale   = 0.40 + 0.60 * macro_pl;
-        let edge_scale    = 0.35 + 0.65 * dom.powf(1.5);
+        let edge_scale    = 0.35 + 0.65 * center_w;
         h_land += h_off * coastal_scale * macro_scale * edge_scale;
 
+        // near sea compression
         let dist_to_sea = h_land - SEA_LEVEL as f32;
         let ramp        = 1.0 - smoothstep(0.0, 18.0, dist_to_sea.abs());
         let comp_pos    = leap(0.70, 1.0, 1.0 - ramp);
@@ -379,6 +404,7 @@ pub async fn generate_chunk_async_noise(
         let compress    = if dist_to_sea >= 0.0 { comp_pos } else { comp_neg };
         h_land = SEA_LEVEL as f32 + dist_to_sea * compress;
 
+        // coast shaping
         let dunes = coast_n.get_noise_2d(wxf, wzf);
         let coast_target = (COAST_MAX as f32 + dunes * 1.6)
             .clamp(SEA_FLOOR_MIN as f32 + 2.0, COAST_MAX as f32);
@@ -386,6 +412,7 @@ pub async fn generate_chunk_async_noise(
         let coast_w  = 1.0 - smoothstep(8.0, 24.0, d_to_sea);
         h_land = leap(h_land, coast_target, coast_w * inland_f);
 
+        // ocean shaping
         let sea_hills  = map01(seafloor_n.get_noise_2d(wxf, wzf));
         let deep_ocean_base = (SEA_FLOOR_MIN as f32 - OCEAN_DEEPEN).max((Y_MIN + 1) as f32);
         let deep_ocean      = deep_ocean_base + sea_hills * 20.0;
@@ -399,7 +426,7 @@ pub async fn generate_chunk_async_noise(
             h_ocean = SEA_LEVEL as f32 - d * comp + ((map01(rolling_n.get_noise_2d(wxf, wzf)) - 0.5) * 12.0 * 0.25);
         }
 
-        return leap(h_land, h_ocean, ocean_f);
+        leap(h_land, h_ocean, ocean_f)
     };
 
     // --------- block fill ----------
@@ -424,10 +451,11 @@ pub async fn generate_chunk_async_noise(
             soil_depth -= alt.clamp(0.0, 1.0) * 1.3;
             soil_depth = soil_depth.clamp(0.0, 4.0);
 
-            // Biome bestimmen (für Surface)
+            // Biome (dominant) für Surface-Pick – mit Size-Gate
             let t_here = map01(temp_n.get_noise_2d(wxf, wzf));
             let m_here = map01(moist_n.get_noise_2d(wxf, wzf));
-            let b_idx  = dominant_biome_index(t_here, m_here, &biomes);
+            let b_idx = dominant_biome_index_sized(t_here, m_here, wxf, wzf, &biomes, cfg.seed);
+
             let surf_bank = SURFACE_BANK.get();
             let surf_opt  = surf_bank.and_then(|v| v.get(b_idx));
 
@@ -438,7 +466,7 @@ pub async fn generate_chunk_async_noise(
             let r_under  = col_rand_u32(wx, wz, r_seed ^ 0x30);
             let r_deep   = col_rand_u32(wx, wz, r_seed ^ 0x40);
 
-            // Falls Surface vorhanden: IDs picken, sonst Fallback
+            // IDs aus Surface (oder Fallback)
             let (top_id, bottom_id, under_id, deep_id) = if let Some(s) = surf_opt {
                 let top_name    = pick_weighted_name(&s.top,        r_top   ).unwrap_or("grass_block");
                 let bottom_name = pick_weighted_name(&s.bottom,     r_bottom).unwrap_or("dirt_block");
@@ -451,7 +479,6 @@ pub async fn generate_chunk_async_noise(
                     name_to_id(deep_name, ids),
                 )
             } else {
-                // Fallback: alte Standardblöcke
                 (grass, dirt, stone, stone)
             };
 
@@ -463,7 +490,6 @@ pub async fn generate_chunk_async_noise(
                 let wy = Y_MIN + ly as i32;
                 if wy > h_final { break; }
 
-                // Standard: Surface-Definition
                 let mut id = if wy == h_final {
                     top_id
                 } else if wy >= h_final - bottom_thick {
@@ -474,10 +500,8 @@ pub async fn generate_chunk_async_noise(
                     deep_id
                 };
 
-                // Fallback-Heuristik für explizite Küsten-/See-Fälle,
-                // falls das gewählte Biome z.B. keine Sandschicht definiert hat
+                // simple Wasser-/Ufer-Anpassung als Fallback
                 if h_final < SEA_LEVEL {
-                    // Unter Wasser -> falls top_id kein Sand/ähnlich ist, sanfter anpassen
                     if wy >= h_final - 3 && (id == top_id) && top_id == grass {
                         id = sand;
                     }
@@ -749,8 +773,9 @@ fn decode_chunk(buf: &[u8]) -> std::io::Result<ChunkData> {
 pub(crate) fn build_biome_table(assets: &Assets<BiomeAsset>, reg: &BiomeRegistry) -> BiomeTable {
     let mut list = Vec::new();
     let mut surfaces: Vec<SurfaceByName> = Vec::new();
+    let mut sizes: Vec<SizeInfo> = Vec::new();
 
-    for (name, handle) in reg.iter() {
+    for (_name, handle) in reg.iter() {
         if let Some(b) = assets.get(handle) {
             list.push(BiomeLite {
                 temperature: b.temperature.clamp(0.0, 1.0),
@@ -759,19 +784,44 @@ pub(crate) fn build_biome_table(assets: &Assets<BiomeAsset>, reg: &BiomeRegistry
                 generation:  b.generation.clone(),
             });
             surfaces.push(from_surface(&b.surface));
+
+            // Size -> Frequenz (Flächenausdehnung)
+            let freq = sizes_to_frequency(&b.sizes);
+            sizes.push(SizeInfo { freq });
         } else {
-            warn!("Biome handle '{}' not yet loaded", name);
+            warn!("Biome handle not yet loaded");
             list.push(BiomeLite {
                 temperature: 0.5, moist: 0.5, rarity: 0.0, generation: Default::default()
             });
             surfaces.push(SurfaceByName::default());
+            sizes.push(SizeInfo { freq: sizes_to_frequency(&[]) });
         }
     }
 
-    // In OnceLock ablegen (nur erstes Setzen erfolgreich, spätere Aufrufe ignoriert)
     let _ = SURFACE_BANK.set(surfaces);
+    let _ = SIZE_BANK.set(sizes);
 
     BiomeTable { list }
+}
+
+fn size_len_chunks(s: &BiomeSize) -> f32 {
+    match s {
+        BiomeSize::Small    => ((2.0   +  8.0)  * 0.5f32).sqrt(),   // ~2.236
+        BiomeSize::Medium   => ((18.0  + 22.0)  * 0.5f32).sqrt(),   // ~4.472
+        BiomeSize::Large    => ((54.0  + 60.0)  * 0.5f32).sqrt(),   // ~7.549
+        BiomeSize::Gigantic => ((120.0 + 128.0) * 0.5f32).sqrt(),   // ~11.136
+    }
+}
+
+fn sizes_to_frequency(sizes: &[BiomeSize]) -> f32 {
+    // Mittelwert der Kantenlängen in Chunk-Einheiten -> Frequenz
+    let len_chunks = if sizes.is_empty() {
+        size_len_chunks(&BiomeSize::Medium)
+    } else {
+        let sum: f32 = sizes.iter().map(size_len_chunks).sum();
+        sum / (sizes.len() as f32)
+    };
+    1.0 / (len_chunks * (CX as f32))
 }
 
 // ===============================================================

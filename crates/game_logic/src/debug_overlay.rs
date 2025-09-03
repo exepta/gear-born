@@ -9,7 +9,7 @@ use game_core::key_converter::convert;
 use game_core::player::selection::SelectionState;
 use game_core::player::{GameMode, GameModeState};
 use game_core::states::{AppState, InGameStates};
-use game_core::world::biome::{BiomeAsset, BiomeRegistry};
+use game_core::world::biome::{BiomeAsset, BiomeRegistry, BiomeSize};
 use game_core::world::block::{block_name_from_registry, get_block_world, BlockRegistry, MiningState, VOXEL_SIZE};
 use game_core::world::chunk::ChunkMap;
 use game_core::world::chunk_dim::*;
@@ -127,8 +127,7 @@ fn snap_biome(
 ) {
     let Ok(tf) = q_cam.single() else { return; };
     let pos_bs = tf.translation() / VOXEL_SIZE;
-    let x = pos_bs.x;
-    let z = pos_bs.z;
+    let (x, z) = (pos_bs.x, pos_bs.z);
 
     let mut temp_n = FastNoiseLite::with_seed(gen_cfg.seed ^ 0x0B10_0001);
     temp_n.set_noise_type(Some(NoiseType::OpenSimplex2));
@@ -138,13 +137,13 @@ fn snap_biome(
     moist_n.set_noise_type(Some(NoiseType::OpenSimplex2));
     moist_n.set_frequency(Some(0.0014));
 
-    let t = (temp_n.get_noise_2d(x, z) * 0.5) + 0.5;
-    let m = (moist_n.get_noise_2d(x, z) * 0.5) + 0.5;
+    let t = map01(temp_n.get_noise_2d(x, z));
+    let m = map01(moist_n.get_noise_2d(x, z));
 
-    let sigma = 0.15f32;
-    let sigma2 = sigma * sigma;
+    let sigma2 = 0.15f32 * 0.15f32;
 
     let mut best_name: Option<String> = None;
+    let mut best_sizes: Option<Vec<BiomeSize>> = None;
     let mut best_w = -1.0f32;
 
     for (_, handle) in registry.iter() {
@@ -152,15 +151,21 @@ fn snap_biome(
             let dt = t - b.temperature;
             let dm = m - b.moist;
             let d2 = dt * dt + dm * dm;
-            let w = (-(d2) / (2.0 * sigma2)).exp() * (0.0001 + b.rarity.clamp(0.0, 1.0));
+            let w = (-d2 / (2.0 * sigma2)).exp() * (0.0001 + b.rarity.clamp(0.0, 1.0));
             if w > best_w {
                 best_w = w;
                 best_name = Some(b.name.clone());
+                best_sizes = Some(b.sizes.clone()); // Vec<BiomeSize>
             }
         }
     }
 
-    snap.biome_name = best_name.unwrap_or_else(|| "—".to_string());
+    snap.biome_name = if let (Some(name), Some(sizes)) = (best_name, best_sizes) {
+        let label = active_size_label(&name, &sizes, gen_cfg.seed, x, z);
+        format!("{name} ({label})")
+    } else {
+        "—".to_string()
+    };
 }
 
 fn snap_selection(
@@ -521,4 +526,61 @@ fn facing_dir_from_cam(cam_gt: &GlobalTransform) -> (&'static str, f32) {
 
 fn overlay_visible(state: Option<Res<DebugOverlayState>>) -> bool {
     state.map_or(false, |s| s.show)
+}
+
+fn map01(x: f32) -> f32 { x * 0.5 + 0.5 }
+fn smoothstep(e0: f32, e1: f32, x: f32) -> f32 {
+    let t = ((x - e0) / (e1 - e0)).clamp(0.0, 1.0);
+    t * t * (3.0 - 2.0 * t)
+}
+fn size_to_str(s: &BiomeSize) -> &'static str {
+    match s {
+        BiomeSize::Small    => "Small",
+        BiomeSize::Medium   => "Medium",
+        BiomeSize::Large    => "Large",
+        BiomeSize::Gigantic => "Gigantic",
+    }
+}
+fn size_len_chunks(s: &BiomeSize) -> f32 {
+    match s {
+        BiomeSize::Small    => ((2.0   + 8.0  ) * 0.5f32).sqrt(),
+        BiomeSize::Medium   => ((18.0  + 22.0 ) * 0.5f32).sqrt(),
+        BiomeSize::Large    => ((54.0  + 60.0 ) * 0.5f32).sqrt(),
+        BiomeSize::Gigantic => ((120.0 + 128.0) * 0.5f32).sqrt(),
+    }
+}
+fn size_freq(s: &BiomeSize) -> f32 {
+    1.0 / (size_len_chunks(s) * (CX as f32))
+}
+fn size_salt(s: &BiomeSize) -> i32 {
+    match s {
+        BiomeSize::Small    => 0x10000,
+        BiomeSize::Medium   => 0x20000,
+        BiomeSize::Large    => 0x30000,
+        BiomeSize::Gigantic => 0x40000,
+    }
+}
+fn hash32_name(name: &str) -> i32 {
+    const OFF: u32 = 0x811C9DC5;
+    const PRM: u32 = 16777619;
+    let mut h = OFF;
+    for &b in name.as_bytes() {
+        h ^= b as u32;
+        h = h.wrapping_mul(PRM);
+    }
+    h as i32
+}
+fn active_size_label(name: &str, sizes: &[BiomeSize], seed: i32, x: f32, z: f32) -> String {
+    let list: Vec<BiomeSize> = if sizes.is_empty() { vec![BiomeSize::Medium] } else { sizes.to_vec() };
+    let salt_name = hash32_name(name);
+    let mut best: (&BiomeSize, f32) = (&list[0], -1.0);
+
+    for s in &list {
+        let mut n = FastNoiseLite::with_seed(seed ^ 0x512E_0000 ^ salt_name ^ size_salt(s));
+        n.set_noise_type(Some(NoiseType::OpenSimplex2));
+        n.set_frequency(Some(size_freq(s).max(0.0003)));
+        let g = 0.1 + 0.9 * smoothstep(0.25, 0.75, map01(n.get_noise_2d(x, z)));
+        if g > best.1 { best = (s, g); }
+    }
+    size_to_str(best.0).to_string()
 }

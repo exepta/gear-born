@@ -108,6 +108,8 @@ pub struct BiomeAsset {
     pub rarity: f32,
     pub temperature: f32,
     pub moist: f32,
+    #[serde(default)]
+    pub sizes: Vec<BiomeSize>,
     pub surface: BiomeSurface,
     pub generation: BiomeGeneration,
 }
@@ -300,4 +302,13 @@ impl Default for BiomeGeneration {
             river_allowed: true,
         }
     }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub enum BiomeSize {
+    Small,
+    Medium,
+    Large,
+    Gigantic,
 }

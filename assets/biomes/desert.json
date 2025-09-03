@@ -6,7 +6,8 @@
     "blue": 255,
     "alpha": 255
   },
-  "rarity": 0.15,
+  "sizes": ["Large", "Gigantic"],
+  "rarity": 0.1,
   "temperature": 0.1,
   "moist": 0.2,
   "surface": {
