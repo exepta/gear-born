@@ -16,8 +16,8 @@
     "deep_under_blocks": ["stone_block:1.0"]
   },
   "generation": {
-    "height_offset": 24.0,
-    "ridge_amp_factor": 1.8,
-    "rolling_amp_factor": 1.3
+    "height_offset": 112.0,
+    "ridge_amp_factor": 2.0,
+    "rolling_amp_factor": 1.4
   }
 }

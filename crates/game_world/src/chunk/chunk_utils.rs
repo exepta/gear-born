@@ -189,9 +189,9 @@ pub async fn generate_chunk_async_noise(
         }
 
         (
-            h_off.clamp(-32.0, 32.0),
-            ridge.clamp(0.5, 2.2),
-            roll .clamp(0.5, 1.8),
+            h_off.clamp(-120.0, 180.0),
+            ridge.clamp(0.5, 2.5),
+            roll .clamp(0.5, 2.0),
             dominance,
         )
     }
