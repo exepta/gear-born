@@ -1,0 +1,13 @@
+{
+  "name": "bloodsand_block",
+  "texture_dir": "textures/blocks/bloodsand",
+  "texture": {
+    "all": "bloodsand"
+  },
+  "stats": {
+    "hardness": 0.45,
+    "blast_resistance": 1.5,
+    "opaque": true,
+    "emissive": 0.0
+  }
+}

@@ -1,0 +1,9 @@
+{
+  "image": "clay.png",
+  "tile_size": 512,
+  "columns": 1,
+  "rows": 1,
+  "tiles": {
+    "clay": [0, 0]
+  }
+}

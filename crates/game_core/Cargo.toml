@@ -45,3 +45,6 @@ features = [
 
 [dependencies.sysinfo]
 version = "0.37.0"
+
+[dependencies.anyhow]
+version = "1.0.99"

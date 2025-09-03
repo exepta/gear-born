@@ -3,7 +3,9 @@ pub mod chunk_utils;
 mod chunk_struct;
 mod water_builder;
 mod water_utils;
+mod biome_load;
 
+use crate::chunk::biome_load::BiomeLoadHandler;
 use crate::chunk::chunk_builder::ChunkBuilder;
 use crate::chunk::water_builder::WaterBuilder;
 use bevy::prelude::*;
@@ -17,6 +19,6 @@ impl Plugin for ChunkHandlerService {
         app.add_event::<ChunkGeneratedEvent>();
         app.add_event::<SubChunkNeedRemeshEvent>();
         app.init_resource::<ChunkMap>();
-        app.add_plugins((ChunkBuilder, WaterBuilder));
+        app.add_plugins((BiomeLoadHandler, ChunkBuilder, WaterBuilder));
     }
 }

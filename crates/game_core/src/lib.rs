@@ -9,7 +9,9 @@ pub mod player;
 pub mod load_state;
 pub mod events;
 pub mod shader;
+mod assets;
 
+use crate::assets::BiomeJsonLoader;
 use crate::configuration::{CrosshairConfig, WorldGenConfig};
 use crate::events::EventModule;
 use crate::player::PlayerModule;
@@ -44,6 +46,7 @@ impl Plugin for GameCorePlugin {
         app.init_resource::<SelectedBlock>();
         app.init_resource::<MiningState>();
         app.init_resource::<MiningOverlayRoot>();
+        app.register_asset_loader(BiomeJsonLoader::new(&["json"]));
         app.add_plugins((PlayerModule, EventModule));
     }
 }

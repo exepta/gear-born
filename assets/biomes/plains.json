@@ -1,0 +1,23 @@
+{
+  "name": "plains",
+  "grass_color": {
+    "red": 255,
+    "green": 255,
+    "blue": 255,
+    "alpha": 255
+  },
+  "rarity": 0.3,
+  "temperature": 0.35,
+  "moist": 0.65,
+  "surface": {
+    "top_blocks": ["grass_block:0.8", "dirt_block:0.15", "sand_block:0.05"],
+    "bottom_blocks": ["dirt_block:0.95", "sand_block:0.05"],
+    "under_blocks": ["stone_block:0.9", "dirt_block:0.1"],
+    "deep_under_blocks": ["stone_block:1.0"]
+  },
+  "generation": {
+    "height_offset": 4.0,
+    "ridge_amp_factor": 0.9,
+    "rolling_amp_factor": 1.2
+  }
+}
