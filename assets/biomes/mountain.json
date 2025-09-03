@@ -11,14 +11,14 @@
   "moist": 0.5,
   "surface": {
     "top_blocks": ["grass_block:0.6", "stone_block:0.4"],
-    "bottom_blocks": ["dirt_block:0.8", "stone_block:0.2"],
+    "bottom_blocks": ["dirt_block:0.2", "stone_block:0.8"],
     "under_blocks": ["stone_block:0.85", "dirt_block:0.1", "clay_block:0.05"],
     "deep_under_blocks": ["stone_block:1.0"]
   },
   "generation": {
-    "height_offset": 112.0,
-    "ridge_amp_factor": 2.0,
-    "rolling_amp_factor": 1.4,
+    "height_offset": 120.0,
+    "ridge_amp_factor": 2.2,
+    "rolling_amp_factor": 0.9,
     "river_allowed": false
   }
 }

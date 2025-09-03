@@ -32,8 +32,7 @@ pub async fn generate_chunk_async_noise(
     biomes: BiomeTable,
 ) -> ChunkData {
     use fastnoise_lite::{FastNoiseLite, FractalType, NoiseType};
-
-    // --- world tunables ---
+    
     const SEA_LEVEL:      i32 = 58;
     const COAST_MAX:      i32 = 58;
     const SEA_FLOOR_MIN:  i32 = 5;
@@ -90,6 +89,22 @@ pub async fn generate_chunk_async_noise(
     ridges_n.set_frequency(Some(0.0032));
     ridges_n.set_fractal_type(Some(FractalType::Ridged));
     ridges_n.set_fractal_octaves(Some(3));
+
+    let mut ridge_long_n = FastNoiseLite::with_seed(cfg.seed ^ 0x00F0_0D11);
+    ridge_long_n.set_noise_type(Some(NoiseType::OpenSimplex2));
+    ridge_long_n.set_frequency(Some(0.0018));
+    ridge_long_n.set_fractal_type(Some(FractalType::Ridged));
+    ridge_long_n.set_fractal_octaves(Some(3));
+
+    let mut orient_n = FastNoiseLite::with_seed(cfg.seed ^ 0x009A_BEEF);
+    orient_n.set_noise_type(Some(NoiseType::OpenSimplex2));
+    orient_n.set_frequency(Some(0.0008));
+
+    let mut strata_n = FastNoiseLite::with_seed(cfg.seed ^ 0x0057_12A7);
+    strata_n.set_noise_type(Some(NoiseType::OpenSimplex2));
+    strata_n.set_frequency(Some(0.015));
+    strata_n.set_fractal_type(Some(FractalType::FBm));
+    strata_n.set_fractal_octaves(Some(2));
 
     let mut coast_n = FastNoiseLite::with_seed(cfg.seed ^ 0x000C_0457);
     coast_n.set_noise_type(Some(NoiseType::OpenSimplex2));
@@ -175,16 +190,14 @@ pub async fn generate_chunk_async_noise(
 
     #[inline]
     pub fn col_rand_range(x: i32, z: i32, seed: u32, lo: u32, hi: u32) -> u32 {
-        // Liefert eine ganzzahlige Zufallszahl im inklusiven Bereich [lo, hi],
-        // deterministisch je Spalten-Koordinate (x,z) und Seed.
         let r = col_rand_u32(x, z, seed);
-        let range = hi.saturating_sub(lo); // schützt, falls hi < lo
+        let range = hi.saturating_sub(lo);
         lo + (r % (range + 1))
     }
 
     // ---------- height sampler (no rivers) ----------
     let sample_height = |wxf: f32, wzf: f32| -> f32 {
-        // plains mask & warp
+        // plain mask & warp
         let plains_mask = map01(plains_n.get_noise_2d(wxf, wzf));
         let plains_fac  = smoothstep(
             cfg.plains_threshold - cfg.plains_blend,
@@ -230,7 +243,7 @@ pub async fn generate_chunk_async_noise(
         let rolling = (map01(rolling_n.get_noise_2d(wxf, wzf)) - 0.5) * 8.0;
         h_land += rolling * (0.35 + 0.65 * macro_pl) * roll_fac;
 
-        // mountains (base + ridged), constrained by belts + inland
+        // mountains (base and ridged), constrained by belts and inland
         let base_m    = (map01(mount_base_n.get_noise_2d(wxf, wzf)) - 0.5) * 2.0;
         let ridge_raw = (map01(ridges_n.get_noise_2d(wxf, wzf))     - 0.5) * 2.0;
         let ridged    = ridge_raw * 0.6 + ridge_raw * ridge_raw * ridge_raw * 0.4;
@@ -242,40 +255,50 @@ pub async fn generate_chunk_async_noise(
         let mut mountain_w = (inland_mountain_mask * ridge_gate * center_w).clamp(0.0, 1.0);
         mountain_w *= 0.35 + 0.65 * belts;
 
-        let base_amp   = leap(0.0, 14.0, mountain_w * (1.0 - macro_pl * 0.85)) * roll_fac;
-        let ridged_amp = leap(0.0,  8.0, mountain_w * (1.0 - macro_pl * 0.85)) * ridge_fac;
+        let base_amp   = leap(0.0, 11.5, mountain_w * (1.0 - macro_pl * 0.85)) * roll_fac;
+        let ridged_amp = leap(0.0,  9.5, mountain_w * (1.0 - macro_pl * 0.85)) * ridge_fac;
         h_land += base_m * base_amp + ridged * ridged_amp;
 
-        // Täler leicht ausfräsen
+        let ang    = orient_n.get_noise_2d(wxf * 0.4, wzf * 0.4) * std::f32::consts::PI;
+        let (ux, uz) = rot2(wxf, wzf, ang);
+        let ridge_dir = (map01(ridge_long_n.get_noise_2d(ux * 0.06, uz * 0.45)) - 0.5) * 2.0;
+        let ridge_dir_sharp = ridge_dir.signum() * ridge_dir.abs().powf(1.35);
+        h_land += ridge_dir_sharp * (8.0 * mountain_w);
+
+        let above_sea = (h_land - SEA_LEVEL as f32).max(0.0);
+        let cliff_w   = smoothstep(0.45, 0.85, mountain_w);
+        let expo      = leap(1.0, 1.55, cliff_w);
+        h_land = SEA_LEVEL as f32 + above_sea.powf(expo);
+
+        let strata_jit = (map01(strata_n.get_noise_2d(wxf * 0.8, wzf * 0.8)) - 0.5) * 0.6;
+        let step_h     = leap(3.0, 7.0, cliff_w) * (1.0 + strata_jit * 0.25);
+        h_land = terrace(h_land, step_h.max(2.5), 0.55 * cliff_w);
+        
         let valley = map01(valley_n.get_noise_2d(wxf, wzf));
         let valley_cut0 = ((valley - 0.65).max(0.0) * 10.0) * inland_f * (1.0 - macro_pl * 0.7);
         let valley_cut  = valley_cut0 * (0.6 + 0.4 * (1.0 - mountain_w));
         h_land -= valley_cut;
-
-        // leichte Anhebung, Biome-Offsets
+        
         h_land += LAND_LIFT;
         let coastal_scale = 0.25 + 0.75 * inland_f;
         let macro_scale   = 0.40 + 0.60 * macro_pl;
         let edge_scale    = 0.35 + 0.65 * center_w;
         h_land += h_off * coastal_scale * macro_scale * edge_scale;
-
-        // Kompression in der Nähe des Meeresspiegels
+        
         let dist_to_sea = h_land - SEA_LEVEL as f32;
         let ramp        = 1.0 - smoothstep(0.0, 18.0, dist_to_sea.abs());
         let comp_pos    = leap(0.70, 1.0, 1.0 - ramp);
         let comp_neg    = leap(leap(0.50, 0.70, mountain_w), 1.0, 1.0 - ramp);
         let compress    = if dist_to_sea >= 0.0 { comp_pos } else { comp_neg };
         h_land = SEA_LEVEL as f32 + dist_to_sea * compress;
-
-        // Küste/Ozean formen
+        
         let dunes = coast_n.get_noise_2d(wxf, wzf);
         let coast_target = (COAST_MAX as f32 + dunes * 1.6)
             .clamp(SEA_FLOOR_MIN as f32 + 2.0, COAST_MAX as f32);
         let d_to_sea = (h_land - SEA_LEVEL as f32).abs();
         let coast_w  = 1.0 - smoothstep(8.0, 24.0, d_to_sea);
         h_land = leap(h_land, coast_target, coast_w * inland_f);
-
-        // tiefer Ozean + Schelf
+        
         let sea_hills  = map01(seafloor_n.get_noise_2d(wxf, wzf));
         let deep_ocean_base = (SEA_FLOOR_MIN as f32 - OCEAN_DEEPEN).max((Y_MIN + 1) as f32);
         let deep_ocean      = deep_ocean_base + sea_hills * 20.0;
@@ -302,8 +325,7 @@ pub async fn generate_chunk_async_noise(
 
             let h_f = sample_height(wxf, wzf).clamp((Y_MIN + 1) as f32, MOUNTAIN_MAX as f32);
             let h_final = h_f.round() as i32;
-
-            // lokale Faktoren für Bodenaufbau
+            
             let h_e = sample_height(wxf + 1.0, wzf);
             let h_n = sample_height(wxf, wzf + 1.0);
             let slope = (h_e - h_f).abs().max((h_n - h_f).abs());
@@ -346,7 +368,6 @@ pub async fn generate_chunk_async_noise(
                         else { stone }
                     }
                 } else {
-                    // Unter Wasser
                     if seabed_is_dirt {
                         if wy >= h_final - 1 { dirt } else { stone }
                     } else {
@@ -676,4 +697,20 @@ pub(crate) fn neighbors_ready(chunk_map: &ChunkMap, c: IVec2) -> bool {
 #[inline]
 pub(crate) fn neighbors4_iter(c: IVec2) -> impl Iterator<Item = IVec2> {
     DIR4.into_iter().map(move |d| c + d)
+}
+
+#[inline]
+fn rot2(x: f32, z: f32, ang: f32) -> (f32, f32) {
+    let (ca, sa) = (ang.cos(), ang.sin());
+    (x * ca - z * sa, x * sa + z * ca)
+}
+
+#[inline]
+fn terrace(h: f32, step: f32, k: f32) -> f32 {
+    if step <= 0.0001 || k <= 0.0 { return h; }
+    let q = h / step;
+    let base = q.floor();
+    let frac = q - base;
+    let eased = frac.powf((1.0 - k).max(0.05));
+    (base + eased) * step
 }
