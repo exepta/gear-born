@@ -261,7 +261,7 @@ pub struct WorldGenConfig {
 impl Default for WorldGenConfig {
     fn default() -> Self {
         Self {
-            seed: 0,
+            seed: -1,
 
             height_span: 24,
             height_freq: 0.005,

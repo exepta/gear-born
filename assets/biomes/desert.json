@@ -18,6 +18,7 @@
   "generation": {
     "height_offset": 2.0,
     "ridge_amp_factor": 0.10,
-    "rolling_amp_factor": 0.55
+    "rolling_amp_factor": 0.55,
+    "river_allowed": true
   }
 }

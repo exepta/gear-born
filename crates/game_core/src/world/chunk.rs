@@ -9,6 +9,11 @@ pub const MAX_UPDATE_FRAMES: usize = 20;
 
 pub const SEA_LEVEL: i32 = 60;
 
+pub const TUNNEL_CHECK_RADIUS: f32 = 12.0;
+pub const TUNNEL_MIN_ROOF:    f32 = 14.0;
+pub const TUNNEL_HALF_HEIGHT: f32 = 4.5;
+pub const TUNNEL_FLOOR_OFFS:  f32 = -2.0;
+
 #[inline]
 pub fn idx(x: usize, y: usize, z: usize) -> usize { (y * CZ + z) * CX + x }
 

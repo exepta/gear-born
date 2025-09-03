@@ -279,6 +279,8 @@ pub struct BiomeGeneration {
     pub ridge_amp_factor: f32,
     #[serde(default = "default_one")]
     pub rolling_amp_factor: f32,
+    #[serde(default = "default_true")]
+    pub river_allowed: bool,
 }
 
 #[allow(dead_code)]
@@ -286,12 +288,16 @@ const fn default_one() -> f32 {
     1.0
 }
 
+#[allow(dead_code)]
+fn default_true() -> bool { true }
+
 impl Default for BiomeGeneration {
     fn default() -> Self {
         Self {
             height_offset: 0.0,
             ridge_amp_factor: 1.0,
             rolling_amp_factor: 1.0,
+            river_allowed: true,
         }
     }
 }
