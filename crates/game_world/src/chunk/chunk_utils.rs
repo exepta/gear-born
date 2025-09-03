@@ -31,9 +31,11 @@ pub async fn generate_chunk_async_noise(
     use fastnoise_lite::{FastNoiseLite, FractalType, NoiseType};
 
     const SEA_LEVEL:      i32 = 58;
-    const COAST_MAX:      i32 = 44;
-    const SEA_FLOOR_MIN:  i32 = -16;
+    const COAST_MAX:      i32 = 58;
+    const SEA_FLOOR_MIN:  i32 = 5;
     const MOUNTAIN_MAX:   i32 = 180;
+    const LAND_LIFT:   f32 = 5.0;
+    const OCEAN_DEEPEN: f32 = 12.0;
 
     let (grass, dirt, stone, sand) = ids;
     let mut c = ChunkData::new();
@@ -256,6 +258,8 @@ pub async fn generate_chunk_async_noise(
             h_land -= r_strength * (1.0 + 2.0 * width_f);
         }
 
+        h_land += LAND_LIFT;
+
         // BIOMES
         let coastal_scale = 0.25 + 0.75 * inland_f;
         let macro_scale   = 0.40 + 0.60 * macro_pl;
@@ -289,7 +293,8 @@ pub async fn generate_chunk_async_noise(
         }
 
         let sea_hills  = map01(seafloor_n.get_noise_2d(wxf, wzf));
-        let deep_ocean = SEA_FLOOR_MIN as f32 + sea_hills * 20.0;
+        let deep_ocean_base = (SEA_FLOOR_MIN as f32 - OCEAN_DEEPEN).max((Y_MIN + 1) as f32);
+        let deep_ocean      = deep_ocean_base + sea_hills * 20.0;
         let shelf      = (COAST_MAX as f32 + 2.0 + dunes * 0.8).clamp(56.0, 60.0);
         let deep_mix   = smoothstep(0.40, 0.75, 1.0 - inland_f);
         let mut h_ocean = lerp(shelf, deep_ocean.min((SEA_LEVEL-2) as f32), deep_mix);
