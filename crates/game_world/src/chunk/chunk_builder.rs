@@ -9,6 +9,7 @@ use bevy_rapier3d::prelude::*;
 use game_core::configuration::{GameConfig, WorldGenConfig};
 use game_core::events::chunk_events::{ChunkUnloadEvent, SubChunkNeedRemeshEvent};
 use game_core::states::{AppState, InGameStates, LoadingStates};
+use game_core::world::biome::{BiomeAsset, BiomeRegistry};
 use game_core::world::block::{id_any, BlockRegistry, VOXEL_SIZE};
 use game_core::world::chunk::*;
 use game_core::world::chunk_dim::*;
@@ -198,6 +199,8 @@ fn schedule_chunk_generation(
     q_cam: Query<&GlobalTransform, (With<Camera3d>, Without<BlockCatalogPreviewCam>)>,
     load_center: Option<Res<LoadCenter>>,
     app_state: Res<State<AppState>>,
+    biome_registry: Res<BiomeRegistry>,
+    biome_asset: Res<Assets<BiomeAsset>>
 ) {
     let center_c = if let Ok(t) = q_cam.single() {
         let (c, _) = world_to_chunk_xz(
@@ -241,8 +244,10 @@ fn schedule_chunk_generation(
             let ids_copy = ids;
             let cfg = cfg_clone.clone();
             let root = ws_root.clone();
+            let table = build_biome_table(&biome_asset, &biome_registry);
+
             let task = pool.spawn(async move {
-                let data = load_or_gen_chunk_async(root, c, ids_copy, cfg).await;
+                let data = load_or_gen_chunk_async(root, c, ids_copy, cfg, table).await;
                 (c, data)
             });
             pending.0.insert(c, task);

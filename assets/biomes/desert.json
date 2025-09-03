@@ -1,0 +1,23 @@
+{
+  "name": "desert",
+  "grass_color": {
+    "red": 255,
+    "green": 255,
+    "blue": 255,
+    "alpha": 255
+  },
+  "rarity": 0.15,
+  "temperature": 0.1,
+  "moist": 0.2,
+  "surface": {
+    "top_blocks": ["sand_block:1.0"],
+    "bottom_blocks": ["sand_block:1.0"],
+    "under_blocks": ["stone_block:0.9", "dirt_block:0.1"],
+    "deep_under_blocks": ["stone_block:1.0"]
+  },
+  "generation": {
+    "height_offset": 1.0,
+    "ridge_amp_factor": 0.012,
+    "rolling_amp_factor": 0.0913
+  }
+}

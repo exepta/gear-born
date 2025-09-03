@@ -2,6 +2,7 @@ use bevy::asset::RenderAssetUsages;
 use bevy::prelude::*;
 use bevy::render::mesh::{Indices, PrimitiveTopology, VertexAttributeValues};
 use bevy::tasks::Task;
+use game_core::world::biome::BiomeGeneration;
 use game_core::world::block::{BlockId, BlockRegistry, Face, UvRect};
 use game_core::world::chunk::ChunkData;
 use std::collections::{HashMap, VecDeque};
@@ -113,3 +114,26 @@ pub struct BorderSnapshot {
     pub south: Option<Vec<BlockId>>,
     pub north: Option<Vec<BlockId>>,
 }
+
+// ============================================
+//                   Biome
+// ============================================
+
+pub const BIOME_TEMP_FREQ:  f32 = 0.0018;
+pub const BIOME_MOIST_FREQ: f32 = 0.0014;
+pub const BIOME_BLEND_SIGMA: f32 = 0.15;
+pub const BIOME_TOP_K: usize = 2;
+
+#[derive(Debug, Clone)]
+pub struct BiomeLite {
+    pub temperature: f32,
+    pub moist: f32,
+    pub rarity: f32,
+    pub generation: BiomeGeneration,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct BiomeTable {
+    pub list: Vec<BiomeLite>,
+}
+

@@ -44,3 +44,6 @@ features = [
     "dim3",
     "debug-render"
 ]
+
+[dependencies.fastnoise-lite]
+version = "1.1.1"

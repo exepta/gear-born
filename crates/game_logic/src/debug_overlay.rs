@@ -2,12 +2,14 @@ use bevy::diagnostic::{DiagnosticsStore, EntityCountDiagnosticsPlugin, FrameTime
 use bevy::prelude::*;
 use bevy::render::renderer::RenderAdapterInfo;
 use bevy::render::view::RenderLayers;
-use game_core::configuration::GameConfig;
+use fastnoise_lite::{FastNoiseLite, NoiseType};
+use game_core::configuration::{GameConfig, WorldGenConfig};
 use game_core::debug::*;
 use game_core::key_converter::convert;
 use game_core::player::selection::SelectionState;
 use game_core::player::{GameMode, GameModeState};
 use game_core::states::{AppState, InGameStates};
+use game_core::world::biome::{BiomeAsset, BiomeRegistry};
 use game_core::world::block::{block_name_from_registry, get_block_world, BlockRegistry, MiningState, VOXEL_SIZE};
 use game_core::world::chunk::ChunkMap;
 use game_core::world::chunk_dim::*;
@@ -27,6 +29,7 @@ struct DebugSnapshot {
     chunk_cc: IVec2,
     facing_text: &'static str,
     yaw_deg: f32,
+    biome_name: String,
 
     // Selection / Mining
     block_line: String,
@@ -77,7 +80,7 @@ impl Plugin for DebugOverlayPlugin {
             .add_systems(
                 Update,
                 (
-                    (snap_perf, snap_camera_and_world, snap_selection, snap_build_and_mode).chain(),
+                    (snap_perf, snap_camera_and_world, snap_biome, snap_selection, snap_build_and_mode).chain(),
                     render_debug_text,
                 )
                     .run_if(in_state(AppState::InGame(InGameStates::Game)))
@@ -113,6 +116,51 @@ fn snap_camera_and_world(
     snap.chunk_range = game_cfg.graphics.chunk_range;
     snap.key_debug = game_cfg.input.debug_overlay.clone();
     snap.key_grid  = game_cfg.input.chunk_grid.clone();
+}
+
+fn snap_biome(
+    q_cam: Query<&GlobalTransform, (With<Camera3d>, Without<BlockCatalogPreviewCam>)>,
+    gen_cfg: Res<WorldGenConfig>,
+    assets: Res<Assets<BiomeAsset>>,
+    registry: Res<BiomeRegistry>,
+    mut snap: ResMut<DebugSnapshot>,
+) {
+    let Ok(tf) = q_cam.single() else { return; };
+    let pos_bs = tf.translation() / VOXEL_SIZE;
+    let x = pos_bs.x;
+    let z = pos_bs.z;
+
+    let mut temp_n = FastNoiseLite::with_seed(gen_cfg.seed ^ 0x0B10_0001);
+    temp_n.set_noise_type(Some(NoiseType::OpenSimplex2));
+    temp_n.set_frequency(Some(0.0018));
+
+    let mut moist_n = FastNoiseLite::with_seed(gen_cfg.seed ^ 0x0B10_0002);
+    moist_n.set_noise_type(Some(NoiseType::OpenSimplex2));
+    moist_n.set_frequency(Some(0.0014));
+
+    let t = (temp_n.get_noise_2d(x, z) * 0.5) + 0.5;
+    let m = (moist_n.get_noise_2d(x, z) * 0.5) + 0.5;
+
+    let sigma = 0.15f32;
+    let sigma2 = sigma * sigma;
+
+    let mut best_name: Option<String> = None;
+    let mut best_w = -1.0f32;
+
+    for (_, handle) in registry.iter() {
+        if let Some(b) = assets.get(handle) {
+            let dt = t - b.temperature;
+            let dm = m - b.moist;
+            let d2 = dt * dt + dm * dm;
+            let w = (-(d2) / (2.0 * sigma2)).exp() * (0.0001 + b.rarity.clamp(0.0, 1.0));
+            if w > best_w {
+                best_w = w;
+                best_name = Some(b.name.clone());
+            }
+        }
+    }
+
+    snap.biome_name = best_name.unwrap_or_else(|| "—".to_string());
 }
 
 fn snap_selection(
@@ -223,6 +271,7 @@ fn render_debug_text(
          Location: ({:.2}, {:.2}, {:.2})\n\
          Facing: {} ({:.1}°)\n\
          Chunk: ({}, {})  (size: {}x{}, range: {})\n\
+         Biome: {}\n\
          {}\n\
          {}\n\
          Game Mode: {}\n\
@@ -235,6 +284,7 @@ fn render_debug_text(
         snap.pos_bs.x, snap.pos_bs.y, snap.pos_bs.z,
         snap.facing_text, snap.yaw_deg,
         snap.chunk_cc.x, snap.chunk_cc.y, CX, CZ, snap.chunk_range,
+        snap.biome_name,
         snap.block_line,
         snap.hit_str,
         snap.mode_text,

@@ -3,6 +3,7 @@ use bevy::prelude::*;
 use bincode::{config, decode_from_slice, encode_to_vec};
 use game_core::configuration::WorldGenConfig;
 use game_core::states::{AppState, LoadingStates};
+use game_core::world::biome::{BiomeAsset, BiomeRegistry};
 use game_core::world::block::{BlockId, Face};
 use game_core::world::chunk::{ChunkData, ChunkMap, ChunkMeshIndex};
 use game_core::world::chunk_dim::*;
@@ -25,13 +26,14 @@ pub async fn generate_chunk_async_noise(
     coord: IVec2,
     ids: (BlockId, BlockId, BlockId, BlockId), // (grass, dirt, stone, sand)
     cfg: WorldGenConfig,
+    biomes: BiomeTable,
 ) -> ChunkData {
     use fastnoise_lite::{FastNoiseLite, FractalType, NoiseType};
 
-    const SEA_LEVEL:      i32 = 62;
-    const COAST_MAX:      i32 = 58;
-    const SEA_FLOOR_MIN:  i32 = 5;
-    const MOUNTAIN_MAX:   i32 = 96;
+    const SEA_LEVEL:      i32 = 58;
+    const COAST_MAX:      i32 = 44;
+    const SEA_FLOOR_MIN:  i32 = -16;
+    const MOUNTAIN_MAX:   i32 = 180;
 
     let (grass, dirt, stone, sand) = ids;
     let mut c = ChunkData::new();
@@ -113,6 +115,21 @@ pub async fn generate_chunk_async_noise(
     river_warp_n.set_noise_type(Some(NoiseType::OpenSimplex2));
     river_warp_n.set_frequency(Some(0.015));
 
+    let mut temp_n = FastNoiseLite::with_seed(cfg.seed ^ 0x0B10_0001);
+    temp_n.set_noise_type(Some(NoiseType::OpenSimplex2));
+    temp_n.set_frequency(Some(BIOME_TEMP_FREQ));
+
+    // --- BIOMES
+    let mut moist_n = FastNoiseLite::with_seed(cfg.seed ^ 0x0B10_0002);
+    moist_n.set_noise_type(Some(NoiseType::OpenSimplex2));
+    moist_n.set_frequency(Some(BIOME_MOIST_FREQ));    let mut temp_n = FastNoiseLite::with_seed(cfg.seed ^ 0x0B10_0001);
+    temp_n.set_noise_type(Some(NoiseType::OpenSimplex2));
+    temp_n.set_frequency(Some(BIOME_TEMP_FREQ));
+
+    let mut moist_n = FastNoiseLite::with_seed(cfg.seed ^ 0x0B10_0002);
+    moist_n.set_noise_type(Some(NoiseType::OpenSimplex2));
+    moist_n.set_frequency(Some(BIOME_MOIST_FREQ));
+
     // ---------- Helpers ----------
     #[inline] fn map01(x: f32) -> f32 { (x * 0.5) + 0.5 }
     #[inline]
@@ -125,6 +142,45 @@ pub async fn generate_chunk_async_noise(
     fn col_rand_range(x: i32, z: i32, seed: u32, lo: u32, hi: u32) -> u32 {
         let r = col_rand_u32(x, z, seed);
         lo + (r % (hi - lo + 1))
+    }
+
+    // --- BIOMES
+    #[inline]
+    fn blend_biome_gen(t: f32, m: f32, table: &BiomeTable) -> (f32, f32, f32) {
+        if table.list.is_empty() {
+            return (0.0, 1.0, 1.0);
+        }
+        let sigma2 = (BIOME_BLEND_SIGMA * BIOME_BLEND_SIGMA).max(1e-6);
+        let mut items: Vec<(usize, f32)> = table.list.iter().enumerate().map(|(i,b)| {
+            let dt = t - b.temperature;
+            let dm = m - b.moist;
+            let d2 = dt*dt + dm*dm;
+            let w  = (-(d2) / (2.0 * sigma2)).exp() * (0.0001 + b.rarity.clamp(0.0,1.0));
+            (i, w)
+        }).collect();
+        items.sort_by(|a,b| b.1.partial_cmp(&a.1).unwrap());
+
+        let k = BIOME_TOP_K.min(items.len());
+        let mut sum = 0.0;
+        for i in 0..k { sum += items[i].1; }
+        if sum <= 0.0 { return (0.0, 1.0, 1.0); }
+
+        let mut h_off = 0.0;
+        let mut ridge = 0.0;
+        let mut roll  = 0.0;
+        for i in 0..k {
+            let (idx, w) = items[i];
+            let bw = w / sum;
+            let g = &table.list[idx].generation;
+            h_off += bw * g.height_offset;
+            ridge += bw * g.ridge_amp_factor.max(0.0);
+            roll  += bw * g.rolling_amp_factor.max(0.0);
+        }
+        (
+            h_off.clamp(-16.0, 16.0),
+            ridge.clamp(0.5, 1.5),
+            roll .clamp(0.5, 1.5),
+        )
     }
 
     let river_strength_at = |wxf: f32, wzf: f32, h_local: f32, inland_f: f32| -> f32 {
@@ -148,6 +204,7 @@ pub async fn generate_chunk_async_noise(
             cfg.plains_threshold + cfg.plains_blend,
             plains_mask,
         );
+
         let amp      = lerp(cfg.plains_span as f32, cfg.height_span as f32, plains_fac);
         let warp_amp = lerp(cfg.warp_amp_plains,              cfg.warp_amp,  plains_fac);
 
@@ -165,19 +222,23 @@ pub async fn generate_chunk_async_noise(
 
         let macro_pl = smoothstep(0.55, 0.78, map01(macro_plains_n.get_noise_2d(wxf * 0.6, wzf * 0.6)));
 
+        let t = map01(temp_n.get_noise_2d(wxf, wzf));
+        let m = map01(moist_n.get_noise_2d(wxf, wzf));
+        let (h_off, ridge_fac, roll_fac) = blend_biome_gen(t, m, &biomes);
+
         let land_mid = (SEA_LEVEL as f32 - 5.0) + inland_f * 18.0;
         let mut h_land = land_mid + (h01 - 0.5) * amp;
 
         let rolling = (map01(rolling_n.get_noise_2d(wxf, wzf)) - 0.5) * 8.0;
-        h_land += rolling * (0.35 + 0.65 * macro_pl);
+        h_land += rolling * (0.35 + 0.65 * macro_pl) * roll_fac;
 
         let base_m = (map01(mount_base_n.get_noise_2d(wxf, wzf)) - 0.5) * 2.0;
         let ridge_raw = (map01(ridges_n.get_noise_2d(wxf, wzf)) - 0.5) * 2.0;
         let ridged = ridge_raw * 0.6 + ridge_raw * ridge_raw * ridge_raw * 0.4;
         let inland_mountain_mask =
             (inland_f * smoothstep((SEA_LEVEL+4) as f32, (SEA_LEVEL+34) as f32, h_land)).clamp(0.0, 1.0);
-        let base_amp   = lerp(0.0, 10.0, inland_mountain_mask * (1.0 - macro_pl * 0.85));
-        let ridged_amp = lerp(0.0,  6.0, inland_mountain_mask * (1.0 - macro_pl * 0.85));
+        let base_amp   = lerp(0.0, 10.0, inland_mountain_mask * (1.0 - macro_pl * 0.85)) * roll_fac;
+        let ridged_amp = lerp(0.0,  6.0, inland_mountain_mask * (1.0 - macro_pl * 0.85)) * ridge_fac;
         h_land += base_m * base_amp + ridged * ridged_amp;
 
         // Täler
@@ -185,6 +246,7 @@ pub async fn generate_chunk_async_noise(
         let valley_cut = ((valley - 0.65).max(0.0) * 10.0) * inland_f * (1.0 - macro_pl * 0.7);
         h_land -= valley_cut;
 
+        // River
         let r_strength = river_strength_at(wxf, wzf, h_land, inland_f);
         if r_strength > 0.0 {
             let target = (SEA_LEVEL - 1) as f32;
@@ -193,6 +255,11 @@ pub async fn generate_chunk_async_noise(
             let width_f   = (1.0 - (above_sea / 28.0)).clamp(0.0, 1.0);
             h_land -= r_strength * (1.0 + 2.0 * width_f);
         }
+
+        // BIOMES
+        let coastal_scale = 0.25 + 0.75 * inland_f;
+        let macro_scale   = 0.40 + 0.60 * macro_pl;
+        h_land += h_off * coastal_scale * macro_scale;
 
         let dist_to_sea = h_land - SEA_LEVEL as f32;
         let ramp        = 1.0 - smoothstep(0.0, 18.0, dist_to_sea.abs());
@@ -473,6 +540,7 @@ pub async fn load_or_gen_chunk_async(
     coord: IVec2,
     ids: (BlockId, BlockId, BlockId, BlockId),
     cfg: WorldGenConfig,
+    biomes: BiomeTable,
 ) -> ChunkData {
     let (r_coord, _) = chunk_to_region_slot(coord);
     let path = ws_root.join("region").join(format!("r.{}.{}.region", r_coord.x, r_coord.y));
@@ -490,7 +558,7 @@ pub async fn load_or_gen_chunk_async(
             }
         }
     }
-    generate_chunk_async_noise(coord, ids, cfg).await
+    generate_chunk_async_noise(coord, ids, cfg, biomes).await
 }
 
 pub fn snapshot_borders(chunk_map: &ChunkMap, coord: IVec2, y0: usize, y1: usize) -> BorderSnapshot {
@@ -599,6 +667,23 @@ fn decode_chunk(buf: &[u8]) -> std::io::Result<ChunkData> {
     let mut c = ChunkData::new();
     c.blocks.copy_from_slice(&blocks);
     Ok(c)
+}
+
+pub(crate) fn build_biome_table(assets: &Assets<BiomeAsset>, reg: &BiomeRegistry) -> BiomeTable {
+    let mut list = Vec::new();
+    for (name, handle) in reg.iter() {
+        if let Some(b) = assets.get(handle) {
+            list.push(BiomeLite {
+                temperature: b.temperature.clamp(0.0, 1.0),
+                moist:       b.moist.clamp(0.0, 1.0),
+                rarity:      b.rarity.clamp(0.0, 1.0),
+                generation:         b.generation.clone(),
+            });
+        } else {
+            warn!("Biome handle '{}' not yet loaded", name);
+        }
+    }
+    BiomeTable { list }
 }
 
 #[inline] pub fn leap(a:f32, b:f32, t:f32) -> f32 { a + (b - a) * t }

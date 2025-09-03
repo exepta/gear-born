@@ -2331,6 +2331,7 @@ version = "0.1.0"
 dependencies = [
  "bevy",
  "bevy_rapier3d",
+ "fastnoise-lite",
  "game_core",
  "game_world",
  "sysinfo",
