@@ -10,7 +10,7 @@
   "temperature": 0.32,
   "moist": 0.5,
   "surface": {
-    "top_blocks": ["grass_block:0.6", "stone_block:0.4"],
+    "top_blocks": ["grass_block:1.0"],
     "bottom_blocks": ["dirt_block:0.2", "stone_block:0.8"],
     "under_blocks": ["stone_block:0.85", "dirt_block:0.1", "clay_block:0.05"],
     "deep_under_blocks": ["stone_block:1.0"]

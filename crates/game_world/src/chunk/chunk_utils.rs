@@ -3,7 +3,7 @@ use bevy::prelude::*;
 use bincode::{config, decode_from_slice, encode_to_vec};
 use game_core::configuration::WorldGenConfig;
 use game_core::states::{AppState, LoadingStates};
-use game_core::world::biome::{BiomeAsset, BiomeRegistry};
+use game_core::world::biome::{BiomeAsset, BiomeRegistry, BiomeSurface, WeightedBlock};
 use game_core::world::block::{BlockId, Face};
 use game_core::world::chunk::{ChunkData, ChunkMap, ChunkMeshIndex};
 use game_core::world::chunk_dim::*;
@@ -11,6 +11,7 @@ use game_core::world::save::*;
 use lz4_flex::{compress_prepend_size, decompress_size_prepended};
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::OnceLock;
 
 pub const MAX_INFLIGHT_MESH: usize = 32;
 pub const MAX_INFLIGHT_GEN:  usize = 32;
@@ -22,6 +23,75 @@ pub(crate) const DIR4: [IVec2; 4] = [
     IVec2::new( 0, -1),
 ];
 
+/// ----------------------------------------------------------------
+/// Biome-Surface-Bank (gewichtet, mit Namen). Reihenfolge == BiomeTable.order
+/// ----------------------------------------------------------------
+#[derive(Clone, Default)]
+struct WName { name: String, w: f32 }
+#[derive(Clone, Default)]
+struct SurfaceByName {
+    top:       Vec<WName>,
+    bottom:    Vec<WName>,
+    under:     Vec<WName>,
+    deep_under:Vec<WName>,
+}
+static SURFACE_BANK: OnceLock<Vec<SurfaceByName>> = OnceLock::new();
+
+#[inline]
+fn wb_list_to_wname(list: &[WeightedBlock]) -> Vec<WName> {
+    // schon normalisiert in biome.rs? Wir normalisieren hier sicherheitshalber nochmal
+    let sum: f32 = list.iter().map(|w| w.weight.max(0.0)).sum();
+    if sum > 0.0 {
+        list.iter()
+            .map(|w| WName { name: w.name.clone(), w: w.weight.max(0.0) / sum })
+            .collect()
+    } else {
+        // gleichverteilt
+        let n = list.len().max(1) as f32;
+        list.iter().map(|w| WName { name: w.name.clone(), w: 1.0 / n }).collect()
+    }
+}
+
+#[inline]
+fn from_surface(s: &BiomeSurface) -> SurfaceByName {
+    SurfaceByName {
+        top:        wb_list_to_wname(&s.top_blocks),
+        bottom:     wb_list_to_wname(&s.bottom_blocks),
+        under:      wb_list_to_wname(&s.under_blocks),
+        deep_under: wb_list_to_wname(&s.deep_under_blocks),
+    }
+}
+
+#[inline]
+fn pick_weighted_name(list: &[WName], r_u32: u32) -> Option<&str> {
+    if list.is_empty() { return None; }
+    let sum: f32 = list.iter().map(|w| w.w).sum();
+    if sum <= 0.0 { return Some(list.last().unwrap().name.as_str()); }
+    let rf = (r_u32 as f64) / (u32::MAX as f64); // [0,1)
+    let target = (rf as f32) * sum;
+    let mut acc = 0.0;
+    for w in list {
+        acc += w.w;
+        if target <= acc {
+            return Some(w.name.as_str());
+        }
+    }
+    Some(list.last().unwrap().name.as_str())
+}
+
+#[inline]
+fn name_to_id(name: &str, ids: (BlockId, BlockId, BlockId, BlockId)) -> BlockId {
+    let (grass, dirt, stone, sand) = ids;
+    match name {
+        "grass_block" => grass,
+        "dirt_block"  => dirt,
+        "stone_block" => stone,
+        "sand_block"  => sand,
+        "clay_block"  => dirt,   // Fallback: falls kein eigener Clay vorhanden
+        _ => stone,              // unbekannt -> neutraler Fallback
+    }
+}
+
 // ===============================================================
 //                     Chunk Generation (Noise)
 // ===============================================================
@@ -32,7 +102,7 @@ pub async fn generate_chunk_async_noise(
     biomes: BiomeTable,
 ) -> ChunkData {
     use fastnoise_lite::{FastNoiseLite, FractalType, NoiseType};
-    
+
     const SEA_LEVEL:      i32 = 58;
     const COAST_MAX:      i32 = 58;
     const SEA_FLOOR_MIN:  i32 = 5;
@@ -188,6 +258,23 @@ pub async fn generate_chunk_async_noise(
         )
     }
 
+    // dominantes Biome-Index (für Surface-Pick)
+    #[inline]
+    fn dominant_biome_index(t: f32, m: f32, table: &BiomeTable) -> usize {
+        if table.list.is_empty() { return 0; }
+        let sigma2 = (BIOME_BLEND_SIGMA * BIOME_BLEND_SIGMA).max(1e-6);
+        let mut best_i = 0usize;
+        let mut best_w = f32::MIN;
+        for (i, b) in table.list.iter().enumerate() {
+            let dt = t - b.temperature;
+            let dm = m - b.moist;
+            let d2 = dt*dt + dm*dm;
+            let w  = (-d2 / (2.0 * sigma2)).exp() * (0.0001 + b.rarity.clamp(0.0, 1.0));
+            if w > best_w { best_w = w; best_i = i; }
+        }
+        best_i
+    }
+
     #[inline]
     pub fn col_rand_range(x: i32, z: i32, seed: u32, lo: u32, hi: u32) -> u32 {
         let r = col_rand_u32(x, z, seed);
@@ -195,7 +282,7 @@ pub async fn generate_chunk_async_noise(
         lo + (r % (range + 1))
     }
 
-    // ---------- height sampler (no rivers) ----------
+    // ---------- height sampler (keine Flüsse) ----------
     let sample_height = |wxf: f32, wzf: f32| -> f32 {
         // plain mask & warp
         let plains_mask = map01(plains_n.get_noise_2d(wxf, wzf));
@@ -243,7 +330,7 @@ pub async fn generate_chunk_async_noise(
         let rolling = (map01(rolling_n.get_noise_2d(wxf, wzf)) - 0.5) * 8.0;
         h_land += rolling * (0.35 + 0.65 * macro_pl) * roll_fac;
 
-        // mountains (base and ridged), constrained by belts and inland
+        // mountains
         let base_m    = (map01(mount_base_n.get_noise_2d(wxf, wzf)) - 0.5) * 2.0;
         let ridge_raw = (map01(ridges_n.get_noise_2d(wxf, wzf))     - 0.5) * 2.0;
         let ridged    = ridge_raw * 0.6 + ridge_raw * ridge_raw * ridge_raw * 0.4;
@@ -255,8 +342,8 @@ pub async fn generate_chunk_async_noise(
         let mut mountain_w = (inland_mountain_mask * ridge_gate * center_w).clamp(0.0, 1.0);
         mountain_w *= 0.35 + 0.65 * belts;
 
-        let base_amp   = leap(0.0, 11.5, mountain_w * (1.0 - macro_pl * 0.85)) * roll_fac;
-        let ridged_amp = leap(0.0,  9.5, mountain_w * (1.0 - macro_pl * 0.85)) * ridge_fac;
+        let base_amp   = leap(0.0, 14.0, mountain_w * (1.0 - macro_pl * 0.85)) * roll_fac;
+        let ridged_amp = leap(0.0,  8.0, mountain_w * (1.0 - macro_pl * 0.85)) * ridge_fac;
         h_land += base_m * base_amp + ridged * ridged_amp;
 
         let ang    = orient_n.get_noise_2d(wxf * 0.4, wzf * 0.4) * std::f32::consts::PI;
@@ -273,37 +360,37 @@ pub async fn generate_chunk_async_noise(
         let strata_jit = (map01(strata_n.get_noise_2d(wxf * 0.8, wzf * 0.8)) - 0.5) * 0.6;
         let step_h     = leap(3.0, 7.0, cliff_w) * (1.0 + strata_jit * 0.25);
         h_land = terrace(h_land, step_h.max(2.5), 0.55 * cliff_w);
-        
+
         let valley = map01(valley_n.get_noise_2d(wxf, wzf));
         let valley_cut0 = ((valley - 0.65).max(0.0) * 10.0) * inland_f * (1.0 - macro_pl * 0.7);
         let valley_cut  = valley_cut0 * (0.6 + 0.4 * (1.0 - mountain_w));
         h_land -= valley_cut;
-        
+
         h_land += LAND_LIFT;
         let coastal_scale = 0.25 + 0.75 * inland_f;
         let macro_scale   = 0.40 + 0.60 * macro_pl;
-        let edge_scale    = 0.35 + 0.65 * center_w;
+        let edge_scale    = 0.35 + 0.65 * dom.powf(1.5);
         h_land += h_off * coastal_scale * macro_scale * edge_scale;
-        
+
         let dist_to_sea = h_land - SEA_LEVEL as f32;
         let ramp        = 1.0 - smoothstep(0.0, 18.0, dist_to_sea.abs());
         let comp_pos    = leap(0.70, 1.0, 1.0 - ramp);
         let comp_neg    = leap(leap(0.50, 0.70, mountain_w), 1.0, 1.0 - ramp);
         let compress    = if dist_to_sea >= 0.0 { comp_pos } else { comp_neg };
         h_land = SEA_LEVEL as f32 + dist_to_sea * compress;
-        
+
         let dunes = coast_n.get_noise_2d(wxf, wzf);
         let coast_target = (COAST_MAX as f32 + dunes * 1.6)
             .clamp(SEA_FLOOR_MIN as f32 + 2.0, COAST_MAX as f32);
         let d_to_sea = (h_land - SEA_LEVEL as f32).abs();
         let coast_w  = 1.0 - smoothstep(8.0, 24.0, d_to_sea);
         h_land = leap(h_land, coast_target, coast_w * inland_f);
-        
+
         let sea_hills  = map01(seafloor_n.get_noise_2d(wxf, wzf));
         let deep_ocean_base = (SEA_FLOOR_MIN as f32 - OCEAN_DEEPEN).max((Y_MIN + 1) as f32);
         let deep_ocean      = deep_ocean_base + sea_hills * 20.0;
         let shelf      = (COAST_MAX as f32 + 2.0 + dunes * 0.8).clamp(56.0, 60.0);
-        let deep_mix   = smoothstep(0.40, 0.75, 1.0 - inland_f);
+        let deep_mix = smoothstep(0.40, 0.75, ocean_f);
         let mut h_ocean = leap(shelf, deep_ocean.min((SEA_LEVEL-2) as f32), deep_mix);
         if h_ocean < SEA_LEVEL as f32 {
             let d    = (SEA_LEVEL as f32 - h_ocean).min(20.0);
@@ -312,7 +399,7 @@ pub async fn generate_chunk_async_noise(
             h_ocean = SEA_LEVEL as f32 - d * comp + ((map01(rolling_n.get_noise_2d(wxf, wzf)) - 0.5) * 12.0 * 0.25);
         }
 
-        leap(h_land, h_ocean, 1.0 - inland_f)
+        return leap(h_land, h_ocean, ocean_f);
     };
 
     // --------- block fill ----------
@@ -325,55 +412,76 @@ pub async fn generate_chunk_async_noise(
 
             let h_f = sample_height(wxf, wzf).clamp((Y_MIN + 1) as f32, MOUNTAIN_MAX as f32);
             let h_final = h_f.round() as i32;
-            
+
+            // Spalten-Parameter
             let h_e = sample_height(wxf + 1.0, wzf);
             let h_n = sample_height(wxf, wzf + 1.0);
             let slope = (h_e - h_f).abs().max((h_n - h_f).abs());
-
             let macro_pl = smoothstep(0.55, 0.78, map01(macro_plains_n.get_noise_2d(wxf * 0.6, wzf * 0.6)));
             let mut soil_depth = 2.6 + 1.2 * macro_pl;
             let alt            = (h_f - 90.0).max(0.0) / 50.0;
-
             soil_depth -= slope * 1.1;
             soil_depth -= alt.clamp(0.0, 1.0) * 1.3;
             soil_depth = soil_depth.clamp(0.0, 4.0);
 
-            let near_coast = ((h_final as f32) - (SEA_LEVEL as f32)).abs() <= 4.0;
-            let coast_mix  = map01(coast_n.get_noise_2d(wxf * 2.0, wzf * 2.0)) > 0.62;
-            let patch_val  = map01(patches_n.get_noise_2d(wxf, wzf));
-            let seabed_is_dirt = (h_final < SEA_LEVEL) && (patch_val > 0.75);
+            // Biome bestimmen (für Surface)
+            let t_here = map01(temp_n.get_noise_2d(wxf, wzf));
+            let m_here = map01(moist_n.get_noise_2d(wxf, wzf));
+            let b_idx  = dominant_biome_index(t_here, m_here, &biomes);
+            let surf_bank = SURFACE_BANK.get();
+            let surf_opt  = surf_bank.and_then(|v| v.get(b_idx));
 
+            // deterministische Zufallswerte pro Schichttyp
             let r_seed: u32 = (cfg.seed as u32) ^ 0xABCD_1234;
-            let mut dirt_under_grass = col_rand_range(wx, wz, r_seed ^ 0x11, 2, 3) as i32;
-            let mut sand_under_sand  = col_rand_range(wx, wz, r_seed ^ 0x22, 2, 5) as i32;
-            let     dirt_after_sand  = col_rand_range(wx, wz, r_seed ^ 0x33, 1, 2) as i32;
+            let r_top    = col_rand_u32(wx, wz, r_seed ^ 0x10);
+            let r_bottom = col_rand_u32(wx, wz, r_seed ^ 0x20);
+            let r_under  = col_rand_u32(wx, wz, r_seed ^ 0x30);
+            let r_deep   = col_rand_u32(wx, wz, r_seed ^ 0x40);
 
-            dirt_under_grass = dirt_under_grass.min((soil_depth.floor() as i32).max(0));
-            sand_under_sand  = sand_under_sand .min((soil_depth.ceil()  as i32).max(0));
+            // Falls Surface vorhanden: IDs picken, sonst Fallback
+            let (top_id, bottom_id, under_id, deep_id) = if let Some(s) = surf_opt {
+                let top_name    = pick_weighted_name(&s.top,        r_top   ).unwrap_or("grass_block");
+                let bottom_name = pick_weighted_name(&s.bottom,     r_bottom).unwrap_or("dirt_block");
+                let under_name  = pick_weighted_name(&s.under,      r_under ).unwrap_or("stone_block");
+                let deep_name   = pick_weighted_name(&s.deep_under, r_deep  ).unwrap_or("stone_block");
+                (
+                    name_to_id(top_name, ids),
+                    name_to_id(bottom_name, ids),
+                    name_to_id(under_name, ids),
+                    name_to_id(deep_name, ids),
+                )
+            } else {
+                // Fallback: alte Standardblöcke
+                (grass, dirt, stone, stone)
+            };
+
+            // Schichtdicken
+            let bottom_thick: i32 = soil_depth.ceil() as i32;                  // 0..4
+            let under_thick:  i32 = 2 + (col_rand_range(wx, wz, r_seed ^ 0x55, 0, 2) as i32); // 2..4
 
             for ly in 0..CY {
                 let wy = Y_MIN + ly as i32;
                 if wy > h_final { break; }
 
-                let id = if h_final >= SEA_LEVEL {
-                    // Land
-                    if near_coast && coast_mix {
-                        if wy == h_final { sand }
-                        else if wy >= h_final - sand_under_sand { sand }
-                        else if wy >= h_final - sand_under_sand - dirt_after_sand { dirt }
-                        else { stone }
-                    } else {
-                        if wy == h_final { grass }
-                        else if wy >= h_final - dirt_under_grass { dirt }
-                        else { stone }
-                    }
+                // Standard: Surface-Definition
+                let mut id = if wy == h_final {
+                    top_id
+                } else if wy >= h_final - bottom_thick {
+                    bottom_id
+                } else if wy >= h_final - bottom_thick - under_thick {
+                    under_id
                 } else {
-                    if seabed_is_dirt {
-                        if wy >= h_final - 1 { dirt } else { stone }
-                    } else {
-                        if wy >= h_final - 3 { sand } else { stone }
-                    }
+                    deep_id
                 };
+
+                // Fallback-Heuristik für explizite Küsten-/See-Fälle,
+                // falls das gewählte Biome z.B. keine Sandschicht definiert hat
+                if h_final < SEA_LEVEL {
+                    // Unter Wasser -> falls top_id kein Sand/ähnlich ist, sanfter anpassen
+                    if wy >= h_final - 3 && (id == top_id) && top_id == grass {
+                        id = sand;
+                    }
+                }
 
                 if id != 0 { c.set(lx, ly, lz, id); }
             }
@@ -640,6 +748,8 @@ fn decode_chunk(buf: &[u8]) -> std::io::Result<ChunkData> {
 // ===============================================================
 pub(crate) fn build_biome_table(assets: &Assets<BiomeAsset>, reg: &BiomeRegistry) -> BiomeTable {
     let mut list = Vec::new();
+    let mut surfaces: Vec<SurfaceByName> = Vec::new();
+
     for (name, handle) in reg.iter() {
         if let Some(b) = assets.get(handle) {
             list.push(BiomeLite {
@@ -648,10 +758,19 @@ pub(crate) fn build_biome_table(assets: &Assets<BiomeAsset>, reg: &BiomeRegistry
                 rarity:      b.rarity.clamp(0.0, 1.0),
                 generation:  b.generation.clone(),
             });
+            surfaces.push(from_surface(&b.surface));
         } else {
             warn!("Biome handle '{}' not yet loaded", name);
+            list.push(BiomeLite {
+                temperature: 0.5, moist: 0.5, rarity: 0.0, generation: Default::default()
+            });
+            surfaces.push(SurfaceByName::default());
         }
     }
+
+    // In OnceLock ablegen (nur erstes Setzen erfolgreich, spätere Aufrufe ignoriert)
+    let _ = SURFACE_BANK.set(surfaces);
+
     BiomeTable { list }
 }
 
