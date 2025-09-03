@@ -56,6 +56,12 @@ pub async fn generate_chunk_async_noise(
     plains_n.set_noise_type(Some(NoiseType::OpenSimplex2));
     plains_n.set_frequency(Some(cfg.plains_freq));
 
+    let mut belts_n = FastNoiseLite::with_seed(cfg.seed ^ 0x00DE_ADB1);
+    belts_n.set_noise_type(Some(NoiseType::OpenSimplex2));
+    belts_n.set_frequency(Some(0.0009));
+    belts_n.set_fractal_type(Some(FractalType::FBm));
+    belts_n.set_fractal_octaves(Some(2));
+
     let mut continent_n = FastNoiseLite::with_seed(cfg.seed ^ 0x00C0_FFEE);
     continent_n.set_noise_type(Some(NoiseType::OpenSimplex2));
     continent_n.set_frequency(Some(0.0010));
@@ -68,7 +74,7 @@ pub async fn generate_chunk_async_noise(
 
     let mut mount_base_n = FastNoiseLite::with_seed(cfg.seed ^ 0x00B0_55E0);
     mount_base_n.set_noise_type(Some(NoiseType::OpenSimplex2));
-    mount_base_n.set_frequency(Some(0.0028));
+    mount_base_n.set_frequency(Some(0.0018));
     mount_base_n.set_fractal_type(Some(FractalType::FBm));
     mount_base_n.set_fractal_octaves(Some(4));
     mount_base_n.set_fractal_gain(Some(0.5));
@@ -76,7 +82,7 @@ pub async fn generate_chunk_async_noise(
 
     let mut ridges_n = FastNoiseLite::with_seed(cfg.seed ^ 0x00F1_ABCD);
     ridges_n.set_noise_type(Some(NoiseType::OpenSimplex2));
-    ridges_n.set_frequency(Some(0.0045));
+    ridges_n.set_frequency(Some(0.0032));
     ridges_n.set_fractal_type(Some(FractalType::Ridged));
     ridges_n.set_fractal_octaves(Some(3));
 
@@ -250,23 +256,27 @@ pub async fn generate_chunk_async_noise(
         let ridge_raw = (map01(ridges_n.get_noise_2d(wxf, wzf)) - 0.5) * 2.0;
         let ridged = ridge_raw * 0.6 + ridge_raw * ridge_raw * ridge_raw * 0.4;
 
+        let belts = smoothstep(0.50, 0.70, map01(belts_n.get_noise_2d(wxf*0.55, wzf*0.55)));
+
         let inland_mountain_mask =
             (inland_f * smoothstep((SEA_LEVEL+4) as f32, (SEA_LEVEL+34) as f32, h_land)).clamp(0.0, 1.0);
 
-        let mountain_w = (inland_mountain_mask * ridge_gate * center_w).clamp(0.0, 1.0);
+        let mut mountain_w = (inland_mountain_mask * ridge_gate * center_w).clamp(0.0, 1.0);
+        mountain_w *= 0.35 + 0.65 * belts;
 
-        let base_amp   = lerp(0.0, 10.0, mountain_w * (1.0 - macro_pl * 0.85)) * roll_fac;
-        let ridged_amp = lerp(0.0,  6.0, mountain_w * (1.0 - macro_pl * 0.85)) * ridge_fac;
+        let base_amp   = lerp(0.0, 14.0, mountain_w * (1.0 - macro_pl * 0.85)) * roll_fac;
+        let ridged_amp = lerp(0.0,  8.0, mountain_w * (1.0 - macro_pl * 0.85)) * ridge_fac;
         h_land += base_m * base_amp + ridged * ridged_amp;
 
         // Täler
         let valley = map01(valley_n.get_noise_2d(wxf, wzf));
         let valley_cut0 = ((valley - 0.65).max(0.0) * 10.0) * inland_f * (1.0 - macro_pl * 0.7);
-        let valley_cut  = valley_cut0 * (0.6 + 0.4 * center_w);
+        let valley_cut  = valley_cut0 * (0.6 + 0.4 * (1.0 - mountain_w));
         h_land -= valley_cut;
 
         // River
-        let r_strength = river_strength_at(wxf, wzf, h_land, inland_f) * (0.6 + 0.4 * center_w);
+        let r_strength = river_strength_at(wxf, wzf, h_land, inland_f)
+            * (0.5 + 0.5 * (1.0 - mountain_w));
         if r_strength > 0.0 {
             let target = (SEA_LEVEL - 1) as f32;
             h_land = lerp(h_land, target, (r_strength * 0.85).clamp(0.0, 0.85));
