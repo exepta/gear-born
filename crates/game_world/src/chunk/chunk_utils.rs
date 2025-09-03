@@ -31,7 +31,7 @@ pub async fn generate_chunk_async_noise(
     const SEA_LEVEL:      i32 = 62;
     const COAST_MAX:      i32 = 58;
     const SEA_FLOOR_MIN:  i32 = 5;
-    const MOUNTAIN_MAX:   i32 = 170;
+    const MOUNTAIN_MAX:   i32 = 96;
 
     let (grass, dirt, stone, sand) = ids;
     let mut c = ChunkData::new();
@@ -165,24 +165,24 @@ pub async fn generate_chunk_async_noise(
 
         let macro_pl = smoothstep(0.55, 0.78, map01(macro_plains_n.get_noise_2d(wxf * 0.6, wzf * 0.6)));
 
-        let land_mid = (SEA_LEVEL as f32 - 8.0) + inland_f * 60.0;
+        let land_mid = (SEA_LEVEL as f32 - 5.0) + inland_f * 18.0;
         let mut h_land = land_mid + (h01 - 0.5) * amp;
 
-        let rolling = (map01(rolling_n.get_noise_2d(wxf, wzf)) - 0.5) * 12.0;
-        h_land += rolling * (0.5 + 0.5 * macro_pl);
+        let rolling = (map01(rolling_n.get_noise_2d(wxf, wzf)) - 0.5) * 8.0;
+        h_land += rolling * (0.35 + 0.65 * macro_pl);
 
         let base_m = (map01(mount_base_n.get_noise_2d(wxf, wzf)) - 0.5) * 2.0;
         let ridge_raw = (map01(ridges_n.get_noise_2d(wxf, wzf)) - 0.5) * 2.0;
         let ridged = ridge_raw * 0.6 + ridge_raw * ridge_raw * ridge_raw * 0.4;
         let inland_mountain_mask =
             (inland_f * smoothstep((SEA_LEVEL+4) as f32, (SEA_LEVEL+34) as f32, h_land)).clamp(0.0, 1.0);
-        let base_amp   = lerp(0.0, 48.0, inland_mountain_mask * (1.0 - macro_pl * 0.85));
-        let ridged_amp = lerp(0.0, 28.0, inland_mountain_mask * (1.0 - macro_pl * 0.85));
+        let base_amp   = lerp(0.0, 10.0, inland_mountain_mask * (1.0 - macro_pl * 0.85));
+        let ridged_amp = lerp(0.0,  6.0, inland_mountain_mask * (1.0 - macro_pl * 0.85));
         h_land += base_m * base_amp + ridged * ridged_amp;
 
         // Täler
         let valley = map01(valley_n.get_noise_2d(wxf, wzf));
-        let valley_cut = ((valley - 0.65).max(0.0) * 18.0) * inland_f * (1.0 - macro_pl * 0.7);
+        let valley_cut = ((valley - 0.65).max(0.0) * 10.0) * inland_f * (1.0 - macro_pl * 0.7);
         h_land -= valley_cut;
 
         let r_strength = river_strength_at(wxf, wzf, h_land, inland_f);
@@ -196,7 +196,7 @@ pub async fn generate_chunk_async_noise(
 
         let dist_to_sea = h_land - SEA_LEVEL as f32;
         let ramp        = 1.0 - smoothstep(0.0, 18.0, dist_to_sea.abs());
-        let compress    = lerp(0.40, 1.0, 1.0 - ramp);
+        let compress    = lerp(0.70, 1.0, 1.0 - ramp);
         h_land = SEA_LEVEL as f32 + dist_to_sea * compress;
 
         let dunes = coast_n.get_noise_2d(wxf, wzf);

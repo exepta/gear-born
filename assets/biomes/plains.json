@@ -17,7 +17,7 @@
   },
   "generation": {
     "height_offset": 4.0,
-    "ridge_amp_factor": 0.9,
-    "rolling_amp_factor": 1.2
+    "ridge_amp_factor": 0.3,
+    "rolling_amp_factor": 0.6
   }
 }
