@@ -13,6 +13,7 @@ use lz4_flex::{compress_prepend_size, decompress_size_prepended};
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::OnceLock;
+use fastnoise_lite::{FastNoiseLite, NoiseType};
 
 pub const MAX_INFLIGHT_MESH: usize = 32;
 pub const MAX_INFLIGHT_GEN:  usize = 32;
@@ -792,34 +793,63 @@ pub fn voronoi_biome_label_at(
     assets: &Assets<BiomeAsset>,
     reg: &BiomeRegistry,
 ) -> String {
-
     let table = build_biome_table(assets, reg);
     let surf_bank = SURFACE_BANK
         .get()
         .expect("SURFACE_BANK missing – build_biome_table must run at least once");
     let acc = BioAcc { table: &table, surfaces: surf_bank };
 
+    // 2) Domain-Warp wie in generate_chunk_async_noise
+    let mut bwx = FastNoiseLite::with_seed((seed as u32 ^ 0xB1E0_A45C_u32) as i32);
+    bwx.set_noise_type(Some(NoiseType::OpenSimplex2));
+    bwx.set_frequency(Some(0.0022));
+
+    let mut bwz = FastNoiseLite::with_seed((seed as u32 ^ 0xB1E0_A45D_u32) as i32);
+    bwz.set_noise_type(Some(NoiseType::OpenSimplex2));
+    bwz.set_frequency(Some(0.0022));
+
     let base_world = chunks_to_world(BASE_CHUNK as f32);
-    let gx = (wx as f32 / base_world).floor() as i32;
-    let gz = (wz as f32 / base_world).floor() as i32;
+    let warp_amp   = 0.35 * base_world;
 
-    let west  = (gx > i32::MIN).then(|| pick_biome_for_cell(&acc, gx - 1, gz, seed as u32, None, None));
-    let north = (gz > i32::MIN).then(|| pick_biome_for_cell(&acc, gx, gz - 1, seed as u32, west, None));
-    let b_idx = pick_biome_for_cell(&acc, gx, gz, seed as u32, west, north);
-    let name  = table.names.get(b_idx).cloned().unwrap_or_else(|| "—".to_string());
+    let wxf = wx as f32 + bwx.get_noise_2d(wx as f32,            wz as f32)            * warp_amp;
+    let wzf = wz as f32 + bwz.get_noise_2d(wx as f32 + 1000.0,   wz as f32 - 1000.0)   * warp_amp;
 
-    let r0 = u_rand01(gx, gz, (seed as u32) ^ 0x51A_0001);
-    let label = if r0 < 0.28 {
-        "Small"
-    } else if r0 < 0.55 {
-        "Medium"
-    } else if r0 < 0.78 {
-        "Large"
-    } else if r0 < 0.93 {
-        "Very Large"
-    } else {
-        "Gigantic"
-    };
+    let gx = (wxf / base_world).floor() as i32;
+    let gz = (wzf / base_world).floor() as i32;
+
+    let mut best_dist = f32::INFINITY;
+    let mut best_bi   = 0usize;
+    let mut best_rad  = 0.0f32;
+
+    for dz in -1..=1 {
+        for dx in -1..=1 {
+            let cx = gx + dx;
+            let cz = gz + dz;
+            let site = site_of_cell(&acc, cx, cz, seed as u32);
+            let sx = (cx as f32 + 0.5) * base_world + site.jx;
+            let sz = (cz as f32 + 0.5) * base_world + site.jz;
+
+            let dxw = wxf - sx;
+            let dzw = wzf - sz;
+            let r_world = chunks_to_world(site.radius_chunks);
+            let d = (dxw * dxw + dzw * dzw).sqrt() / r_world.max(1.0);
+
+            if d < best_dist {
+                best_dist = d;
+                best_bi   = site.biome_idx;
+                best_rad  = site.radius_chunks;
+            }
+        }
+    }
+
+    let name = table.names.get(best_bi).cloned().unwrap_or_else(|| "—".to_string());
+    let diameter_chunks = (best_rad * 2.0).round() as i32;
+
+    let label = if diameter_chunks < MEDIUM.min       { "Small" }
+    else if diameter_chunks < LARGE.min       { "Medium" }
+    else if diameter_chunks < VERY_LARGE.min  { "Large" }
+    else if diameter_chunks < GIGANTIC.min    { "Very Large" }
+    else                                      { "Gigantic" };
 
     format!("{name} ({label})")
 }
