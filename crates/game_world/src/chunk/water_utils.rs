@@ -1,4 +1,3 @@
-use crate::chunk::chunk_utils::col_rand_u32;
 use bevy::asset::RenderAssetUsages;
 use bevy::prelude::*;
 use game_core::states::{AppState, LoadingStates};
@@ -9,6 +8,7 @@ use game_core::world::fluid::{FluidChunk, FluidMap, SolidSnapshot, WaterMeshInde
 use game_core::world::save::{container_find, container_upsert, slot_is_container, unpack_slot_bytes, RegionCache, RegionFile, WorldSave, REGION_SIZE, TAG_WAT1};
 use lz4_flex::{compress_prepend_size, decompress_size_prepended};
 use std::collections::HashMap;
+use crate::chunk::chunk_utils::col_rand_u32;
 
 pub(crate) const WATER_MAGIC_V1: u32 = 0x3154_4157;
 pub(crate) const WATER_MAGIC_V2: u32 = 0x3254_4157;

@@ -1,3 +1,4 @@
+// chunk_utils.rs
 use crate::chunk::chunk_struct::*;
 use bevy::prelude::*;
 use bincode::{config, decode_from_slice, encode_to_vec};
@@ -13,11 +14,6 @@ use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::OnceLock;
 
-// ---------------------------- Size-Gating ----------------------------
-#[derive(Clone, Copy, Default)]
-struct SizeInfo { freq: f32 }
-static SIZE_BANK: OnceLock<Vec<SizeInfo>> = OnceLock::new();
-
 pub const MAX_INFLIGHT_MESH: usize = 32;
 pub const MAX_INFLIGHT_GEN:  usize = 32;
 
@@ -28,7 +24,13 @@ pub(crate) const DIR4: [IVec2; 4] = [
     IVec2::new( 0, -1),
 ];
 
-// ------------------------- Surface (gewichtet) -----------------------
+#[inline] pub fn leap(a:f32, b:f32, t:f32) -> f32 { a + (b - a) * t }
+#[inline] pub fn smoothstep(e0:f32, e1:f32, x:f32) -> f32 {
+    let t = ((x - e0) / (e1 - e0)).clamp(0.0, 1.0);
+    t * t * (3.0 - 2.0 * t)
+}
+#[inline] pub fn map01(x: f32) -> f32 { x * 0.5 + 0.5 }
+
 #[derive(Clone, Default)]
 struct WName { name: String, w: f32 }
 #[derive(Clone, Default)]
@@ -52,7 +54,6 @@ fn wb_list_to_w_name(list: &[WeightedBlock]) -> Vec<WName> {
         list.iter().map(|w| WName { name: w.name.clone(), w: 1.0 / n }).collect()
     }
 }
-
 #[inline]
 fn from_surface(s: &BiomeSurface) -> SurfaceByName {
     SurfaceByName {
@@ -62,24 +63,20 @@ fn from_surface(s: &BiomeSurface) -> SurfaceByName {
         deep_under: wb_list_to_w_name(&s.deep_under_blocks),
     }
 }
-
 #[inline]
 fn pick_weighted_name(list: &[WName], r_u32: u32) -> Option<&str> {
     if list.is_empty() { return None; }
     let sum: f32 = list.iter().map(|w| w.w).sum();
     if sum <= 0.0 { return Some(list.last().unwrap().name.as_str()); }
-    let rf = (r_u32 as f64) / (u32::MAX as f64); // [0,1)
+    let rf = (r_u32 as f64) / (u32::MAX as f64);
     let target = (rf as f32) * sum;
     let mut acc = 0.0;
     for w in list {
         acc += w.w;
-        if target <= acc {
-            return Some(w.name.as_str());
-        }
+        if target <= acc { return Some(w.name.as_str()); }
     }
     Some(list.last().unwrap().name.as_str())
 }
-
 #[inline]
 fn name_to_id(name: &str, ids: (BlockId, BlockId, BlockId, BlockId)) -> BlockId {
     let (grass, dirt, stone, sand) = ids;
@@ -88,18 +85,189 @@ fn name_to_id(name: &str, ids: (BlockId, BlockId, BlockId, BlockId)) -> BlockId 
         "dirt_block"  => dirt,
         "stone_block" => stone,
         "sand_block"  => sand,
-        "clay_block"  => dirt,   // fallback falls kein eigener Clay vorhanden
-        _ => stone,              // unbekannt -> neutraler Fallback
+        "clay_block"  => dirt,
+        _ => stone,
     }
 }
 
-// ===============================================================
-//                     Chunk Generation (Noise)
-// ===============================================================
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Clim { Cold, Normal, Hot }
+impl From<Climate> for Clim {
+    fn from(c: Climate) -> Self {
+        match c {
+            Climate::Cold   => Clim::Cold,
+            Climate::Normal => Clim::Normal,
+            Climate::Hot    => Clim::Hot,
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+struct SizeRange { min: i32, max: i32 }
+const SMALL:      SizeRange = SizeRange{min:  4, max:  8};
+const MEDIUM:     SizeRange = SizeRange{min: 12, max: 18};
+const LARGE:      SizeRange = SizeRange{min: 42, max: 60};
+const VERY_LARGE: SizeRange = SizeRange{min: 66, max: 96};
+const GIGANTIC:   SizeRange = SizeRange{min:120, max:160};
+
+const BASE_CHUNK: i32 = 8;
+
+#[inline]
+fn h2u(x: i32, z: i32, seed: u32) -> u32 {
+    let mut n = (x as u32).wrapping_mul(374761393)
+        ^ (z as u32).wrapping_mul(668265263)
+        ^ seed;
+    n ^= n >> 13;
+    n = n.wrapping_mul(1274126177);
+    n ^ (n >> 16)
+}
+#[inline]
+fn u_rand01(x: i32, z: i32, seed: u32) -> f32 {
+    (h2u(x,z,seed) as f64 / (u32::MAX as f64)) as f32
+}
+
+struct BioAcc<'a> {
+    table: &'a BiomeTable,
+    surfaces: &'a [SurfaceByName],
+}
+impl<'a> BioAcc<'a> {
+    fn climate(&self, i: usize) -> Clim {
+        Clim::from(self.table.climate[i])
+    }
+    fn forbids(&self, a: usize, b: usize) -> bool {
+        self.table.forbids(a, b)
+    }
+    fn surface(&self, i: usize) -> Option<&'a SurfaceByName> {
+        self.surfaces.get(i)
+    }
+}
+
+#[derive(Clone, Copy)]
+struct Site {
+    biome_idx: usize,
+    radius_chunks: f32,
+    jx: f32, jz: f32,
+}
+
+#[derive(Clone, Copy)]
+struct BiomeAt {
+    primary: usize,
+    secondary: usize,
+    edge_mix: f32,
+}
+
+#[inline]
+fn chunks_to_world(c: f32) -> f32 {
+    c * (CX as f32)
+}
+
+fn allowed_neighbors(acc: &BioAcc, a: usize, b: usize) -> bool {
+    if acc.forbids(a, b) { return false; }
+    match (acc.climate(a), acc.climate(b)) {
+        (Clim::Cold, Clim::Hot) | (Clim::Hot, Clim::Cold) => false,
+        _ => true,
+    }
+}
+
+fn pick_size_chunks(xc: i32, zc: i32, seed: u32) -> i32 {
+    let r0 = u_rand01(xc, zc, seed ^ 0x51A_0001);
+    let size_rng = if r0 < 0.28 {
+        SMALL
+    } else if r0 < 0.55 {
+        MEDIUM
+    } else if r0 < 0.78 {
+        LARGE
+    } else if r0 < 0.93 {
+        VERY_LARGE
+    } else {
+        GIGANTIC
+    };
+    let r1 = u_rand01(xc, zc, seed ^ 0x51A_0002);
+    (size_rng.min as f32 + (size_rng.max - size_rng.min) as f32 * r1).round() as i32
+}
+
+fn pick_biome_for_cell(
+    acc: &BioAcc,
+    xc: i32, zc: i32, seed: u32,
+    west: Option<usize>, north: Option<usize>,
+) -> usize {
+    let tries = 8;
+    for t in 0..tries {
+        let r = u_rand01(xc + t, zc - t, seed ^ 0xB10_0001);
+        let mut total = 0.0f32;
+        for b in &acc.table.list { total += b.rarity.max(0.0); }
+        let target = r * total.max(0.000_001);
+        let mut acc_w = 0.0f32;
+        let mut pick = 0usize;
+        for (i, b) in acc.table.list.iter().enumerate() {
+            acc_w += b.rarity.max(0.0);
+            if target <= acc_w { pick = i; break; }
+        }
+        let ok_w = west.map_or(true, |w| allowed_neighbors(acc, pick, w));
+        let ok_n = north.map_or(true, |n| allowed_neighbors(acc, pick, n));
+        if ok_w && ok_n { return pick; }
+    }
+    for i in 0..acc.table.list.len() {
+        let ok_w = west.map_or(true, |w| allowed_neighbors(acc, i, w));
+        let ok_n = north.map_or(true, |n| allowed_neighbors(acc, i, n));
+        if ok_w && ok_n { return i; }
+    }
+    0
+}
+
+fn site_of_cell(acc: &BioAcc, xc: i32, zc: i32, seed: u32) -> Site {
+    let west  = (xc > i32::MIN).then(|| pick_biome_for_cell(acc, xc-1, zc, seed, None, None));
+    let north = (zc > i32::MIN).then(|| pick_biome_for_cell(acc, xc, zc-1, seed, west, None));
+    let biome = pick_biome_for_cell(acc, xc, zc, seed, west, north);
+
+    let edge_chunks = pick_size_chunks(xc, zc, seed);
+    let radius_chunks = (edge_chunks as f32) * 0.5;
+
+    let base_world = chunks_to_world(BASE_CHUNK as f32);
+    let jx = (u_rand01(xc, zc, seed ^ 0xABCD_1001) - 0.5) * 0.70 * base_world;
+    let jz = (u_rand01(xc, zc, seed ^ 0xABCD_1002) - 0.5) * 0.70 * base_world;
+
+    Site { biome_idx: biome, radius_chunks: radius_chunks.max(2.0), jx, jz }
+}
+
+fn biome_query(acc: &BioAcc, seed: u32, wx: i32, wz: i32) -> BiomeAt {
+    let base_world = chunks_to_world(BASE_CHUNK as f32);
+    let gx = (wx as f32 / base_world).floor() as i32;
+    let gz = (wz as f32 / base_world).floor() as i32;
+
+    let mut best = (f32::INFINITY, 0usize);
+    let mut second = (f32::INFINITY, 0usize);
+    for dz in -1..=1 {
+        for dx in -1..=1 {
+            let cx = gx + dx;
+            let cz = gz + dz;
+            let site = site_of_cell(acc, cx, cz, seed);
+
+            let sx = (cx as f32 + 0.5) * base_world + site.jx;
+            let sz = (cz as f32 + 0.5) * base_world + site.jz;
+            let dxw = (wx as f32) - sx;
+            let dzw = (wz as f32) - sz;
+
+            let r_world = chunks_to_world(site.radius_chunks);
+            let d = (dxw*dxw + dzw*dzw).sqrt() / r_world.max(1.0);
+
+            if d < best.0 {
+                second = best;
+                best = (d, site.biome_idx);
+            } else if d < second.0 {
+                second = (d, site.biome_idx);
+            }
+        }
+    }
+
+    let k = ((second.0 - best.0) / 0.35).clamp(0.0, 1.0);
+    let edge_mix = 1.0 - k; // 0 .. 1
+    BiomeAt { primary: best.1, secondary: second.1, edge_mix }
+}
 
 pub async fn generate_chunk_async_noise(
     coord: IVec2,
-    ids: (BlockId, BlockId, BlockId, BlockId), // (grass, dirt, stone, sand)
+    ids: (BlockId, BlockId, BlockId, BlockId),
     cfg: WorldGenConfig,
     biomes: BiomeTable,
 ) -> ChunkData {
@@ -112,10 +280,9 @@ pub async fn generate_chunk_async_noise(
     const LAND_LIFT:   f32 = 5.0;
     const OCEAN_DEEPEN: f32 = 12.0;
 
-    let (grass, dirt, stone, sand) = ids;
     let mut c = ChunkData::new();
 
-    // ---- base noises ----
+    // ---- base noises
     let mut height_n = FastNoiseLite::with_seed(cfg.seed);
     height_n.set_noise_type(Some(NoiseType::OpenSimplex2));
     height_n.set_frequency(Some(cfg.height_freq));
@@ -206,104 +373,11 @@ pub async fn generate_chunk_async_noise(
     valley_n.set_fractal_type(Some(FractalType::FBm));
     valley_n.set_fractal_octaves(Some(3));
 
-    // --- BIOMES (climate) ---
-    let mut temp_n = FastNoiseLite::with_seed(cfg.seed ^ 0x0B10_0001);
-    temp_n.set_noise_type(Some(NoiseType::OpenSimplex2));
-    temp_n.set_frequency(Some(BIOME_TEMP_FREQ));
+    // --- Biome-Access (Surfaces etc.) ---
+    let surf_bank = SURFACE_BANK.get().expect("SURFACE_BANK missing – call build_biome_table first");
+    let acc = BioAcc { table: &biomes, surfaces: surf_bank };
 
-    let mut moist_n = FastNoiseLite::with_seed(cfg.seed ^ 0x0B10_0002);
-    moist_n.set_noise_type(Some(NoiseType::OpenSimplex2));
-    moist_n.set_frequency(Some(BIOME_MOIST_FREQ));
-
-    // --- Size-Gate Hilfsfunktion (Seed als 1. Arg) ---
-    fn size_gate_at(cfg_seed: i32, idx: usize, x: f32, z: f32) -> f32 {
-        use fastnoise_lite::{FastNoiseLite, NoiseType};
-        if let Some(info) = SIZE_BANK.get().and_then(|v| v.get(idx)) {
-            let salt: i32 = 0x512E_0000;
-            let seed_i32 = cfg_seed ^ salt.wrapping_add(idx as i32);
-
-            let mut n = FastNoiseLite::with_seed(seed_i32);
-            n.set_noise_type(Some(NoiseType::OpenSimplex2));
-            n.set_frequency(Some(info.freq.max(0.0003)));
-            0.1 + 0.9 * smoothstep(0.25, 0.75, map01(n.get_noise_2d(x, z)))
-        } else {
-            1.0
-        }
-    }
-
-    // ---------- biome mixing mit Gate ----------
-    #[inline]
-    fn blend_biome_gen_climate(
-        t: f32, m: f32, table: &BiomeTable
-    ) -> (f32, f32, f32, f32) {
-        if table.list.is_empty() { return (0.0, 1.0, 1.0, 0.0); }
-        let sigma2 = (BIOME_BLEND_SIGMA * BIOME_BLEND_SIGMA).max(1e-6);
-
-        let mut items: Vec<(usize, f32)> = table.list.iter().enumerate().map(|(i,b)| {
-            let dt = t - b.temperature;
-            let dm = m - b.moist;
-            let d2 = dt*dt + dm*dm;
-            let w  = (-d2 / (2.0 * sigma2)).exp() * (0.0001 + b.rarity.clamp(0.0, 1.0));
-            (i, w)
-        }).collect();
-        items.sort_by(|a,b| b.1.partial_cmp(&a.1).unwrap());
-
-        let k = BIOME_TOP_K.min(items.len());
-        let mut sum = 0.0;
-        for i in 0..k { sum += items[i].1; }
-        if sum <= 0.0 { return (0.0, 1.0, 1.0, 0.0); }
-
-        let w0 = items[0].1;
-        let w1 = if k > 1 { items[1].1 } else { 0.0 };
-        let dominance = ((w0 - w1) / sum).clamp(0.0, 1.0);
-
-        let mut h_off = 0.0;
-        let mut ridge = 0.0;
-        let mut roll  = 0.0;
-
-        for i in 0..k {
-            let (idx, w) = items[i];
-            let bw = w / sum;
-            let g = &table.list[idx].generation;
-            h_off += bw * g.height_offset;
-            ridge += bw * g.ridge_amp_factor.max(0.0);
-            roll  += bw * g.rolling_amp_factor.max(0.0);
-        }
-        (h_off.clamp(-120.0, 180.0), ridge.clamp(0.5, 2.5), roll.clamp(0.5, 2.0), dominance)
-    }
-
-    #[inline]
-    fn biome_candidates_sized(
-        t: f32, m: f32, x: f32, z: f32, table: &BiomeTable, cfg_seed: i32, top_k: usize
-    ) -> Vec<(usize, f32)> {
-        if table.list.is_empty() { return vec![(0, 0.0)]; }
-        let sigma2 = (BIOME_BLEND_SIGMA * BIOME_BLEND_SIGMA).max(1e-6);
-
-        let mut items: Vec<(usize, f32)> = table.list.iter().enumerate().map(|(i, b)| {
-            let dt = t - b.temperature;
-            let dm = m - b.moist;
-            let d2 = dt*dt + dm*dm;
-            let base = (-d2 / (2.0 * sigma2)).exp() * (0.0001 + b.rarity.clamp(0.0, 1.0));
-            let gate = size_gate_at(cfg_seed, i, x, z);
-            (i, base * gate)
-        }).collect();
-
-        items.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
-        let k = top_k.min(items.len());
-        items.truncate(k);
-        items
-    }
-
-    #[inline]
-    pub fn col_rand_range(x: i32, z: i32, seed: u32, lo: u32, hi: u32) -> u32 {
-        let r = col_rand_u32(x, z, seed);
-        let range = hi.saturating_sub(lo);
-        lo + (r % (range + 1))
-    }
-
-    // ---------- height sampler ----------
     let sample_height = |wxf: f32, wzf: f32| -> f32 {
-        // plain mask & warp
         let plains_mask = map01(plains_n.get_noise_2d(wxf, wzf));
         let plains_fac  = smoothstep(
             cfg.plains_threshold - cfg.plains_blend,
@@ -312,45 +386,31 @@ pub async fn generate_chunk_async_noise(
         );
         let warp_amp = leap(cfg.warp_amp_plains, cfg.warp_amp, plains_fac);
 
-        // domain warp
         let dx = warp_n.get_noise_2d(wxf,          wzf) * warp_amp;
         let dz = warp_n.get_noise_2d(wxf + 1000.0, wzf - 1000.0) * warp_amp;
 
-        // base height
         let mut h01 = map01(height_n.get_noise_2d(wxf + dx, wzf + dz));
         let flatten = (1.0 - plains_fac) * cfg.plains_flatten;
         if flatten > 0.0 { h01 = leap(0.5, h01, 1.0 - flatten); }
 
-        // land/ocean split
         let cont     = map01(continent_n.get_noise_2d(wxf * 0.5, wzf * 0.5));
         let ocean_f  = 1.0 - smoothstep(0.35, 0.65, cont);
         let inland_f = 1.0 - ocean_f;
 
         let macro_pl = smoothstep(0.55, 0.78, map01(macro_plains_n.get_noise_2d(wxf * 0.6, wzf * 0.6)));
 
-        // biome mix (Größe beeinflusst NUR Auswahl, nicht Relief)
-        let t = map01(temp_n.get_noise_2d(wxf, wzf));
-        let m = map01(moist_n.get_noise_2d(wxf, wzf));
-        let (h_off, ridge_fac, roll_fac, dom) =
-            blend_biome_gen_climate(t, m, &biomes);
-        let center_w = dom.powf(1.5);
+        let ridge_gate = 1.0;
 
-        let ridge_gate = smoothstep(0.8, 1.3, ridge_fac);
-
-        // amplitude vs plains + relief
-        let relief_fac = (0.7 * roll_fac + 0.3 * ridge_fac).clamp(0.25, 1.0);
+        let relief_fac = 1.0;
         let amp0 = leap(cfg.plains_span as f32, cfg.height_span as f32, plains_fac);
         let amp  = amp0 * relief_fac;
 
-        // land baseline
         let land_mid = (SEA_LEVEL as f32 - 5.0) + inland_f * 18.0;
         let mut h_land = land_mid + (h01 - 0.5) * amp;
 
-        // rolling hills
         let rolling = (map01(rolling_n.get_noise_2d(wxf, wzf)) - 0.5) * 8.0;
-        h_land += rolling * (0.35 + 0.65 * macro_pl) * roll_fac;
+        h_land += rolling * (0.35 + 0.65 * macro_pl);
 
-        // mountains (basal + ridged)
         let base_m    = (map01(mount_base_n.get_noise_2d(wxf, wzf)) - 0.5) * 2.0;
         let ridge_raw = (map01(ridges_n.get_noise_2d(wxf, wzf))     - 0.5) * 2.0;
         let ridged    = ridge_raw * 0.6 + ridge_raw * ridge_raw * ridge_raw * 0.4;
@@ -359,21 +419,19 @@ pub async fn generate_chunk_async_noise(
         let inland_mountain_mask =
             (inland_f * smoothstep((SEA_LEVEL+4) as f32, (SEA_LEVEL+34) as f32, h_land)).clamp(0.0, 1.0);
 
-        let mut mountain_w = (inland_mountain_mask * ridge_gate * center_w).clamp(0.0, 1.0);
+        let mut mountain_w = (inland_mountain_mask * ridge_gate).clamp(0.0, 1.0);
         mountain_w *= 0.35 + 0.65 * belts;
 
-        let base_amp   = leap(0.0, 14.0, mountain_w * (1.0 - macro_pl * 0.85)) * roll_fac;
-        let ridged_amp = leap(0.0,  8.0, mountain_w * (1.0 - macro_pl * 0.85)) * ridge_fac;
+        let base_amp   = leap(0.0, 14.0, mountain_w * (1.0 - macro_pl * 0.85));
+        let ridged_amp = leap(0.0,  8.0, mountain_w * (1.0 - macro_pl * 0.85));
         h_land += base_m * base_amp + ridged * ridged_amp;
 
-        // gerichtete Rücken
         let ang    = orient_n.get_noise_2d(wxf * 0.4, wzf * 0.4) * std::f32::consts::PI;
         let (ux, uz) = rot2(wxf, wzf, ang);
         let ridge_dir = (map01(ridge_long_n.get_noise_2d(ux * 0.06, uz * 0.45)) - 0.5) * 2.0;
         let ridge_dir_sharp = ridge_dir.signum() * ridge_dir.abs().powf(1.35);
         h_land += ridge_dir_sharp * (8.0 * mountain_w);
 
-        // highland shaping
         let above_sea = (h_land - SEA_LEVEL as f32).max(0.0);
         let cliff_w   = smoothstep(0.45, 0.85, mountain_w);
         let expo      = leap(1.0, 1.55, cliff_w);
@@ -383,28 +441,20 @@ pub async fn generate_chunk_async_noise(
         let step_h     = leap(3.0, 7.0, cliff_w) * (1.0 + strata_jit * 0.25);
         h_land = terrace(h_land, step_h.max(2.5), 0.55 * cliff_w);
 
-        // valleys
         let valley = map01(valley_n.get_noise_2d(wxf, wzf));
         let valley_cut0 = ((valley - 0.65).max(0.0) * 10.0) * inland_f * (1.0 - macro_pl * 0.7);
         let valley_cut  = valley_cut0 * (0.6 + 0.4 * (1.0 - mountain_w));
         h_land -= valley_cut;
 
-        // biome offsets (keine Größenänderung!)
         h_land += LAND_LIFT;
-        let coastal_scale = 0.25 + 0.75 * inland_f;
-        let macro_scale   = 0.40 + 0.60 * macro_pl;
-        let edge_scale    = 0.35 + 0.65 * center_w;
-        h_land += h_off * coastal_scale * macro_scale * edge_scale;
 
-        // near sea compression
         let dist_to_sea = h_land - SEA_LEVEL as f32;
         let ramp        = 1.0 - smoothstep(0.0, 18.0, dist_to_sea.abs());
         let comp_pos    = leap(0.70, 1.0, 1.0 - ramp);
-        let comp_neg    = leap(leap(0.50, 0.70, mountain_w), 1.0, 1.0 - ramp);
+        let comp_neg    = leap(0.60, 1.0, 1.0 - ramp);
         let compress    = if dist_to_sea >= 0.0 { comp_pos } else { comp_neg };
         h_land = SEA_LEVEL as f32 + dist_to_sea * compress;
 
-        // coast shaping
         let dunes = coast_n.get_noise_2d(wxf, wzf);
         let coast_target = (COAST_MAX as f32 + dunes * 1.6)
             .clamp(SEA_FLOOR_MIN as f32 + 2.0, COAST_MAX as f32);
@@ -412,7 +462,6 @@ pub async fn generate_chunk_async_noise(
         let coast_w  = 1.0 - smoothstep(8.0, 24.0, d_to_sea);
         h_land = leap(h_land, coast_target, coast_w * inland_f);
 
-        // ocean shaping
         let sea_hills  = map01(seafloor_n.get_noise_2d(wxf, wzf));
         let deep_ocean_base = (SEA_FLOOR_MIN as f32 - OCEAN_DEEPEN).max((Y_MIN + 1) as f32);
         let deep_ocean      = deep_ocean_base + sea_hills * 20.0;
@@ -425,123 +474,80 @@ pub async fn generate_chunk_async_noise(
             let comp = leap(0.50, 1.0, 1.0 - r);
             h_ocean = SEA_LEVEL as f32 - d * comp + ((map01(rolling_n.get_noise_2d(wxf, wzf)) - 0.5) * 12.0 * 0.25);
         }
-
-        leap(h_land, h_ocean, ocean_f)
+        leap(h_land, h_ocean, 1.0 - inland_f)
     };
 
-    // --------- block fill (mit Blacklist-Filter & nahtsicherer Prognose) ----------
-    let mut biome_idx_grid = vec![0usize; CX * CZ];
-    let at = |x: usize, z: usize| -> usize { z * CX + x };
-
-    for lz in 0..CZ {         // z-outer, x-inner => Nord/West sind deterministisch gesetzt
+    for lz in 0..CZ {
         for lx in 0..CX {
             let wx = coord.x * CX as i32 + lx as i32;
             let wz = coord.y * CZ as i32 + lz as i32;
             let wxf = wx as f32;
             let wzf = wz as f32;
 
+            // 1) High fields
             let h_f = sample_height(wxf, wzf).clamp((Y_MIN + 1) as f32, MOUNTAIN_MAX as f32);
             let h_final = h_f.round() as i32;
 
-            // Spalten-Parameter
+            // 2) Biome (Voronoi)
+            let bq = biome_query(&acc, cfg.seed as u32, wx, wz);
+            let b0 = bq.primary;
+            let b1 = bq.secondary;
+            let edge_mix = bq.edge_mix;
+
+            // 3) Layer height
             let h_e = sample_height(wxf + 1.0, wzf);
             let h_n = sample_height(wxf, wzf + 1.0);
-            let slope = (h_e - h_f).abs().max((h_n - h_f).abs());
-            let macro_pl = smoothstep(0.55, 0.78, map01(macro_plains_n.get_noise_2d(wxf * 0.6, wzf * 0.6)));
-            let mut soil_depth = 2.6 + 1.2 * macro_pl;
-            let alt            = (h_f - 90.0).max(0.0) / 50.0;
-            soil_depth -= slope * 1.1;
-            soil_depth -= alt.clamp(0.0, 1.0) * 1.3;
-            soil_depth = soil_depth.clamp(0.0, 4.0);
+            let slope = (h_e - h_f).abs().max((h_n - h_f).abs()).clamp(0.0, 6.0);
+            let mut soil_depth = 3.2 - slope * 0.6;
+            soil_depth = soil_depth.clamp(1.0, 4.0);
+            let bottom_thick: i32 = soil_depth.ceil() as i32;
+            let under_thick:  i32 = 2;
 
-            // Biomekandidaten (Top-K)
-            let t_here = map01(temp_n.get_noise_2d(wxf, wzf));
-            let m_here = map01(moist_n.get_noise_2d(wxf, wzf));
-            const TOP_K: usize = 6;
-            let candidates = biome_candidates_sized(t_here, m_here, wxf, wzf, &biomes, cfg.seed, TOP_K);
-
-            // Nachbarn: lokal (innerhalb des Chunks) ...
-            let west_local  = (lx > 0).then(|| biome_idx_grid[at(lx - 1, lz)]);
-            let north_local = (lz > 0).then(|| biome_idx_grid[at(lx, lz - 1)]);
-
-            // ... und nahtsichere Prognose für fehlende Nachbarn (andere Chunks)
-            let west_pred = if lx == 0 {
-                let wx_west = wxf - 1.0;
-                let t_w = map01(temp_n.get_noise_2d(wx_west, wzf));
-                let m_w = map01(moist_n.get_noise_2d(wx_west, wzf));
-                let cand_w = biome_candidates_sized(t_w, m_w, wx_west, wzf, &biomes, cfg.seed, 1);
-                Some(cand_w[0].0)
-            } else { None };
-
-            let north_pred = if lz == 0 {
-                let wz_north = wzf - 1.0;
-                let t_n = map01(temp_n.get_noise_2d(wxf, wz_north));
-                let m_n = map01(moist_n.get_noise_2d(wxf, wz_north));
-                let cand_n = biome_candidates_sized(t_n, m_n, wxf, wz_north, &biomes, cfg.seed, 1);
-                Some(cand_n[0].0)
-            } else { None };
-
-            let west  = west_local.or(west_pred);
-            let north = north_local.or(north_pred);
-
-            // Kandidat wählen: erster, der keine verbotene Nachbarschaft verletzt
-            let mut chosen_idx = candidates[0].0; // Fallback: bester Kandidat
-            'pick: for &(cand_i, _w) in &candidates {
-                if let Some(wi) = west  { if biomes.forbids(cand_i, wi) { continue; } }
-                if let Some(ni) = north { if biomes.forbids(cand_i, ni) { continue; } }
-                chosen_idx = cand_i;
-                break 'pick;
-            }
-            biome_idx_grid[at(lx, lz)] = chosen_idx;
-
-            let surf_bank = SURFACE_BANK.get();
-            let surf_opt  = surf_bank.and_then(|v| v.get(chosen_idx));
-
-            // deterministische Zufallswerte pro Schichttyp
+            // 4) smooth layers
             let r_seed: u32 = (cfg.seed as u32) ^ 0xABCD_1234;
-            let r_top    = col_rand_u32(wx, wz, r_seed ^ 0x10);
-            let r_bottom = col_rand_u32(wx, wz, r_seed ^ 0x20);
-            let r_under  = col_rand_u32(wx, wz, r_seed ^ 0x30);
-            let r_deep   = col_rand_u32(wx, wz, r_seed ^ 0x40);
+            let r_top    = h2u(wx, wz, r_seed ^ 0x10);
+            let r_bottom = h2u(wx, wz, r_seed ^ 0x20);
+            let r_under  = h2u(wx, wz, r_seed ^ 0x30);
+            let r_deep   = h2u(wx, wz, r_seed ^ 0x40);
 
-            // IDs aus Surface (oder Fallback)
-            let (top_id, bottom_id, under_id, deep_id) = if let Some(s) = surf_opt {
-                let top_name    = pick_weighted_name(&s.top,        r_top   ).unwrap_or("grass_block");
-                let bottom_name = pick_weighted_name(&s.bottom,     r_bottom).unwrap_or("dirt_block");
-                let under_name  = pick_weighted_name(&s.under,      r_under ).unwrap_or("stone_block");
-                let deep_name   = pick_weighted_name(&s.deep_under, r_deep  ).unwrap_or("stone_block");
+            // Primary
+            let (p_top, p_bottom, p_under, p_deep) = if let Some(s) = acc.surface(b0) {
                 (
-                    name_to_id(top_name, ids),
-                    name_to_id(bottom_name, ids),
-                    name_to_id(under_name, ids),
-                    name_to_id(deep_name, ids),
+                    name_to_id(pick_weighted_name(&s.top,        r_top   ).unwrap_or("grass_block"), ids),
+                    name_to_id(pick_weighted_name(&s.bottom,     r_bottom).unwrap_or("dirt_block" ), ids),
+                    name_to_id(pick_weighted_name(&s.under,      r_under ).unwrap_or("stone_block"), ids),
+                    name_to_id(pick_weighted_name(&s.deep_under, r_deep  ).unwrap_or("stone_block"), ids),
                 )
-            } else {
-                (grass, dirt, stone, stone)
-            };
+            } else { (ids.0, ids.1, ids.2, ids.2) };
 
-            // Schichtdicken
-            let bottom_thick: i32 = soil_depth.ceil() as i32;                  // 0..4
-            let under_thick:  i32 = 2 + (col_rand_range(wx, wz, r_seed ^ 0x55, 0, 2) as i32); // 2..4
+            // Secondary
+            let s_top = if let Some(s) = acc.surface(b1) {
+                name_to_id(pick_weighted_name(&s.top, r_top).unwrap_or("grass_block"), ids)
+            } else { p_top };
+
+            // Blend
+            let mix = (edge_mix * 0.85).clamp(0.0, 0.5);
+            let top_id_blended = if mix <= 0.01 { p_top } else {
+                if u_rand01(wx, wz, r_seed ^ 0xDEAD_BEEF) < mix { s_top } else { p_top }
+            };
 
             for ly in 0..CY {
                 let wy = Y_MIN + ly as i32;
                 if wy > h_final { break; }
 
                 let mut id = if wy == h_final {
-                    top_id
+                    top_id_blended
                 } else if wy >= h_final - bottom_thick {
-                    bottom_id
+                    p_bottom
                 } else if wy >= h_final - bottom_thick - under_thick {
-                    under_id
+                    p_under
                 } else {
-                    deep_id
+                    p_deep
                 };
 
-                // simple Wasser-/Ufer-Anpassung als Fallback
                 if h_final < SEA_LEVEL {
-                    if wy >= h_final - 3 && (id == top_id) && top_id == grass {
-                        id = sand;
+                    if wy >= h_final - 3 && id == p_top && p_top == ids.0 {
+                        id = ids.3; // sand
                     }
                 }
 
@@ -553,10 +559,6 @@ pub async fn generate_chunk_async_noise(
     c
 }
 
-
-// ===============================================================
-//                       Meshing (per Subchunk)
-// ===============================================================
 pub async fn mesh_subchunk_async(
     chunk: &ChunkData,
     reg: &RegLite,
@@ -655,9 +657,6 @@ pub async fn mesh_subchunk_async(
     by_block.into_iter().map(|(k,b)| (k,b)).collect()
 }
 
-// ===============================================================
-//                       Save / Load
-// ===============================================================
 pub fn save_chunk_sync(
     ws: &WorldSave,
     cache: &mut RegionCache,
@@ -698,9 +697,96 @@ pub async fn load_or_gen_chunk_async(
     generate_chunk_async_noise(coord, ids, cfg, biomes).await
 }
 
-// ===============================================================
-//                       Border Snapshot
-// ===============================================================
+pub(crate) fn build_biome_table(
+    assets: &Assets<BiomeAsset>,
+    reg: &BiomeRegistry,
+) -> BiomeTable {
+    #[inline]
+    fn climate_from_temp(t: f32) -> Climate {
+        if t <= 0.33 { Climate::Cold }
+        else if t >= 0.66 { Climate::Hot }
+        else { Climate::Normal }
+    }
+
+    let mut list: Vec<BiomeLite>       = Vec::new();
+    let mut names: Vec<String>         = Vec::new();
+    let mut climates: Vec<Climate>     = Vec::new();
+    let mut surfaces_by_name: Vec<SurfaceByName> = Vec::new();
+
+    for (name, handle) in reg.iter() {
+        names.push(name.to_string());
+
+        if let Some(b) = assets.get(handle) {
+            list.push(BiomeLite {
+                temperature: b.temperature.clamp(0.0, 1.0),
+                moist:       b.moist.clamp(0.0, 1.0),
+                rarity:      b.rarity.clamp(0.0, 1.0),
+                generation:  b.generation.clone(),
+                climate: climate_from_temp(b.temperature)
+            });
+
+            climates.push(climate_from_temp(b.temperature));
+
+            surfaces_by_name.push(from_surface(&b.surface));
+        } else {
+            list.push(BiomeLite {
+                temperature: 0.5,
+                moist: 0.5,
+                rarity: 0.0,
+                generation: Default::default(),
+                climate: Climate::Normal,
+            });
+            climates.push(Climate::Normal);
+            surfaces_by_name.push(SurfaceByName::default());
+        }
+    }
+
+    let _ = SURFACE_BANK.set(surfaces_by_name);
+
+    let mut forbidden: Vec<HashSet<usize>> = vec![HashSet::new(); names.len()];
+    for (i, (name, handle)) in reg.iter().enumerate() {
+        if let Some(b) = assets.get(handle) {
+            for blk in &b.blacklist {
+                if let Some(j) = names.iter().position(|n| n == blk) {
+                    forbidden[i].insert(j);
+                    forbidden[j].insert(i);
+                } else {
+                    warn!("black_list entry '{}' not found among loaded biomes (referenced by '{}')", blk, name);
+                }
+            }
+        }
+    }
+
+    BiomeTable {
+        list,
+        names,
+        forbidden,
+        climate: climates,
+    }
+}
+
+pub fn encode_chunk(ch: &ChunkData) -> Vec<u8> {
+    let cfg = config::standard();
+    let ser = encode_to_vec(&ch.blocks, cfg).expect("encode blocks");
+    compress_prepend_size(&ser)
+}
+fn decode_chunk(buf: &[u8]) -> std::io::Result<ChunkData> {
+    let de = decompress_size_prepended(buf)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+    config::standard();
+
+    let (blocks, _len): (Vec<BlockId>, usize) = decode_from_slice(&de, config::standard())
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string()))?;
+
+    if blocks.len() != CX * CY * CZ {
+        return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "block array size mismatch"));
+    }
+
+    let mut c = ChunkData::new();
+    c.blocks.copy_from_slice(&blocks);
+    Ok(c)
+}
+
 pub fn snapshot_borders(chunk_map: &ChunkMap, coord: IVec2, y0: usize, y1: usize) -> BorderSnapshot {
     let mut snap = BorderSnapshot { y0, y1, east: None, west: None, south: None, north: None };
 
@@ -729,9 +815,6 @@ pub fn snapshot_borders(chunk_map: &ChunkMap, coord: IVec2, y0: usize, y1: usize
     snap
 }
 
-// ===============================================================
-//               Scheduling / Mesh lifecycle helpers
-// ===============================================================
 pub fn area_ready(
     center: IVec2,
     radius: i32,
@@ -781,122 +864,6 @@ pub fn enqueue_mesh(backlog: &mut MeshBacklog, pending: &PendingMesh, key: (IVec
     backlog.0.push_back(key);
 }
 
-// ===============================================================
-//                         Encoding
-// ===============================================================
-pub fn encode_chunk(ch: &ChunkData) -> Vec<u8> {
-    let cfg = config::standard();
-    let ser = encode_to_vec(&ch.blocks, cfg).expect("encode blocks");
-    compress_prepend_size(&ser)
-}
-fn decode_chunk(buf: &[u8]) -> std::io::Result<ChunkData> {
-    let de = decompress_size_prepended(buf)
-        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
-    config::standard();
-
-    let (blocks, _len): (Vec<BlockId>, usize) = decode_from_slice(&de, config::standard())
-        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string()))?;
-
-    if blocks.len() != CX * CY * CZ {
-        return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "block array size mismatch"));
-    }
-
-    let mut c = ChunkData::new();
-    c.blocks.copy_from_slice(&blocks);
-    Ok(c)
-}
-
-// ===============================================================
-//                       Biome table helper
-// ===============================================================
-pub(crate) fn build_biome_table(assets: &Assets<BiomeAsset>, reg: &BiomeRegistry) -> BiomeTable {
-    let mut list = Vec::new();
-    let mut surfaces: Vec<SurfaceByName> = Vec::new();
-    let mut sizes: Vec<SizeInfo> = Vec::new();
-
-    let mut names: Vec<String> = Vec::new();
-
-    for (name, handle) in reg.iter() {
-        names.push(name.to_string());
-
-        if let Some(b) = assets.get(handle) {
-            list.push(BiomeLite {
-                temperature: b.temperature.clamp(0.0, 1.0),
-                moist:       b.moist.clamp(0.0, 1.0),
-                rarity:      b.rarity.clamp(0.0, 1.0),
-                generation:  b.generation.clone(),
-            });
-            surfaces.push(from_surface(&b.surface));
-
-            let freq = sizes_to_frequency(&b.sizes);
-            sizes.push(SizeInfo { freq });
-        } else {
-            warn!("Biome handle not yet loaded");
-            list.push(BiomeLite {
-                temperature: 0.5, moist: 0.5, rarity: 0.0, generation: Default::default()
-            });
-            surfaces.push(SurfaceByName::default());
-            sizes.push(SizeInfo { freq: sizes_to_frequency(&[]) });
-        }
-    }
-
-    let mut index_by_name: HashMap<String, usize> = HashMap::new();
-    for (i, n) in names.iter().enumerate() {
-        index_by_name.insert(n.clone(), i);
-    }
-
-    let mut forbidden: Vec<HashSet<usize>> = vec![HashSet::new(); list.len()];
-
-    for (i, (_name, handle)) in reg.iter().enumerate() {
-        if let Some(b) = assets.get(handle) {
-            for other in &b.blacklist {
-                if let Some(&j) = index_by_name.get(other) {
-                    if i != j {
-                        forbidden[i].insert(j);
-                        forbidden[j].insert(i);
-                    }
-                } else {
-                    warn!("Biome '{}' blacklists unknown biome '{}'", b.name, other);
-                }
-            }
-        }
-    }
-
-    let _ = SURFACE_BANK.set(surfaces);
-    let _ = SIZE_BANK.set(sizes);
-
-    BiomeTable { list, forbidden }
-}
-
-fn size_len_chunks(s: &BiomeSize) -> f32 {
-    match s {
-        BiomeSize::Small    => ((2.0   +  8.0)  * 0.5f32).sqrt(),   // ~2.236
-        BiomeSize::Medium   => ((18.0  + 22.0)  * 0.5f32).sqrt(),   // ~4.472
-        BiomeSize::Large    => ((54.0  + 60.0)  * 0.5f32).sqrt(),   // ~7.549
-        BiomeSize::Gigantic => ((120.0 + 128.0) * 0.5f32).sqrt(),   // ~11.136
-    }
-}
-
-fn sizes_to_frequency(sizes: &[BiomeSize]) -> f32 {
-    // Mittelwert der Kantenlängen in Chunk-Einheiten -> Frequenz
-    let len_chunks = if sizes.is_empty() {
-        size_len_chunks(&BiomeSize::Medium)
-    } else {
-        let sum: f32 = sizes.iter().map(size_len_chunks).sum();
-        sum / (sizes.len() as f32)
-    };
-    1.0 / (len_chunks * (CX as f32))
-}
-
-// ===============================================================
-//                         Small utils
-// ===============================================================
-#[inline] pub fn leap(a:f32, b:f32, t:f32) -> f32 { a + (b - a) * t }
-#[inline] pub fn smoothstep(e0:f32, e1:f32, x:f32) -> f32 {
-    let t = ((x - e0) / (e1 - e0)).clamp(0.0, 1.0);
-    t * t * (3.0 - 2.0 * t)
-}
-#[inline] pub fn map01(x: f32) -> f32 { x * 0.5 + 0.5 }
 
 #[inline]
 pub fn chunk_to_region_slot(c: IVec2) -> (IVec2, usize) {
@@ -906,15 +873,6 @@ pub fn chunk_to_region_slot(c: IVec2) -> (IVec2, usize) {
     let lz = mod_floor(c.y, REGION_SIZE) as usize;
     let idx = lz * (REGION_SIZE as usize) + lx;
     (IVec2::new(rx, rz), idx)
-}
-#[inline]
-pub(crate) fn col_rand_u32(x: i32, z: i32, seed: u32) -> u32 {
-    let mut n = (x as u32).wrapping_mul(374761393)
-        ^ (z as u32).wrapping_mul(668265263)
-        ^ seed;
-    n ^= n >> 13;
-    n = n.wrapping_mul(1274126177);
-    n ^ (n >> 16)
 }
 #[inline] fn div_floor(a: i32, b: i32) -> i32 { (a as f32 / b as f32).floor() as i32 }
 #[inline] fn mod_floor(a: i32, b: i32) -> i32 { a - div_floor(a,b)*b }
@@ -946,4 +904,14 @@ fn terrace(h: f32, step: f32, k: f32) -> f32 {
     let frac = q - base;
     let eased = frac.powf((1.0 - k).max(0.05));
     (base + eased) * step
+}
+
+#[inline]
+pub(crate) fn col_rand_u32(x: i32, z: i32, seed: u32) -> u32 {
+    let mut n = (x as u32).wrapping_mul(374761393)
+        ^ (z as u32).wrapping_mul(668265263)
+        ^ seed;
+    n ^= n >> 13;
+    n = n.wrapping_mul(1274126177);
+    n ^ (n >> 16)
 }

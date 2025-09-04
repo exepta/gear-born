@@ -2,7 +2,7 @@ use bevy::asset::RenderAssetUsages;
 use bevy::prelude::*;
 use bevy::render::mesh::{Indices, PrimitiveTopology, VertexAttributeValues};
 use bevy::tasks::Task;
-use game_core::world::biome::BiomeGeneration;
+use game_core::world::biome::{BiomeGeneration, Climate};
 use game_core::world::block::{BlockId, BlockRegistry, Face, UvRect};
 use game_core::world::chunk::ChunkData;
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -125,20 +125,30 @@ pub struct BiomeLite {
     pub moist: f32,
     pub rarity: f32,
     pub generation: BiomeGeneration,
+    pub climate: Climate
 }
 
 #[derive(Debug, Clone, Default)]
 pub struct BiomeTable {
     pub list: Vec<BiomeLite>,
+    pub names: Vec<String>,
     pub forbidden: Vec<HashSet<usize>>,
+    pub climate: Vec<Climate>
 }
 
 impl BiomeTable {
     #[inline]
+    pub fn index_of(&self, name: &str) -> Option<usize> {
+        self.names.iter().position(|n| n == name)
+    }
+
+    #[inline]
     pub fn forbids(&self, a: usize, b: usize) -> bool {
         self.forbidden
-            .get(a)
-            .map_or(false, |set| set.contains(&b))
+            .get(a).map_or(false, |s| s.contains(&b))
+            ||
+            self.forbidden
+                .get(b).map_or(false, |s| s.contains(&a))
     }
 }
 

@@ -317,5 +317,18 @@ pub enum BiomeSize {
     Small,
     Medium,
     Large,
+    VeryLarge,
     Gigantic,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Climate {
+    Cold,
+    Normal,
+    Hot
+}
+
+#[inline]
+pub fn climate_from_step(temp: f32) -> Climate {
+    if temp <= 0.33 { Climate::Cold } else if temp >= 0.67 { Climate::Hot } else { Climate::Normal }
 }

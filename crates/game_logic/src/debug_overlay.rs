@@ -538,15 +538,17 @@ fn size_to_str(s: &BiomeSize) -> &'static str {
         BiomeSize::Small    => "Small",
         BiomeSize::Medium   => "Medium",
         BiomeSize::Large    => "Large",
+        BiomeSize::VeryLarge => "Very Large",
         BiomeSize::Gigantic => "Gigantic",
     }
 }
 fn size_len_chunks(s: &BiomeSize) -> f32 {
     match s {
-        BiomeSize::Small    => ((2.0   + 8.0  ) * 0.5f32).sqrt(),
-        BiomeSize::Medium   => ((18.0  + 22.0 ) * 0.5f32).sqrt(),
-        BiomeSize::Large    => ((54.0  + 60.0 ) * 0.5f32).sqrt(),
-        BiomeSize::Gigantic => ((120.0 + 128.0) * 0.5f32).sqrt(),
+        BiomeSize::Small    => ((4.0   + 8.0  ) * 0.5f32).sqrt(),
+        BiomeSize::Medium   => ((12.0  + 18.0 ) * 0.5f32).sqrt(),
+        BiomeSize::Large    => ((42.0  + 60.0 ) * 0.5f32).sqrt(),
+        BiomeSize::VeryLarge    => ((66.0 + 96.0 ) * 0.5f32).sqrt(),
+        BiomeSize::Gigantic => ((120.0 + 160.0) * 0.5f32).sqrt(),
     }
 }
 fn size_freq(s: &BiomeSize) -> f32 {
@@ -557,7 +559,8 @@ fn size_salt(s: &BiomeSize) -> i32 {
         BiomeSize::Small    => 0x10000,
         BiomeSize::Medium   => 0x20000,
         BiomeSize::Large    => 0x30000,
-        BiomeSize::Gigantic => 0x40000,
+        BiomeSize::VeryLarge    => 0x40000,
+        BiomeSize::Gigantic => 0x50000,
     }
 }
 fn hash32_name(name: &str) -> i32 {
