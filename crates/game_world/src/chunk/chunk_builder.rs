@@ -17,7 +17,7 @@ use game_core::world::save::{RegionCache, WorldSave};
 use game_core::BlockCatalogPreviewCam;
 use std::collections::{HashMap, HashSet};
 
-const MAX_COLLIDERS_PER_FRAME: usize = 12;
+const MAX_COLLIDERS_PER_FRAME: usize = 6;
 
 #[derive(Default, Resource)]
 struct ColliderBacklog(Vec<ColliderTodo>);

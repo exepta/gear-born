@@ -3,13 +3,13 @@ use bevy::prelude::*;
 use bincode::{config, decode_from_slice, encode_to_vec};
 use game_core::configuration::WorldGenConfig;
 use game_core::states::{AppState, LoadingStates};
-use game_core::world::biome::{BiomeAsset, BiomeRegistry, BiomeSize, BiomeSurface, WeightedBlock};
+use game_core::world::biome::*;
 use game_core::world::block::{BlockId, Face};
 use game_core::world::chunk::{ChunkData, ChunkMap, ChunkMeshIndex};
 use game_core::world::chunk_dim::*;
 use game_core::world::save::*;
 use lz4_flex::{compress_prepend_size, decompress_size_prepended};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::OnceLock;
 
@@ -96,6 +96,7 @@ fn name_to_id(name: &str, ids: (BlockId, BlockId, BlockId, BlockId)) -> BlockId 
 // ===============================================================
 //                     Chunk Generation (Noise)
 // ===============================================================
+
 pub async fn generate_chunk_async_noise(
     coord: IVec2,
     ids: (BlockId, BlockId, BlockId, BlockId), // (grass, dirt, stone, sand)
@@ -272,25 +273,25 @@ pub async fn generate_chunk_async_noise(
     }
 
     #[inline]
-    fn dominant_biome_index_sized(
-        t: f32, m: f32, x: f32, z: f32, table: &BiomeTable, cfg_seed: i32
-    ) -> usize {
-        if table.list.is_empty() { return 0; }
+    fn biome_candidates_sized(
+        t: f32, m: f32, x: f32, z: f32, table: &BiomeTable, cfg_seed: i32, top_k: usize
+    ) -> Vec<(usize, f32)> {
+        if table.list.is_empty() { return vec![(0, 0.0)]; }
         let sigma2 = (BIOME_BLEND_SIGMA * BIOME_BLEND_SIGMA).max(1e-6);
 
-        let mut best_i = 0usize;
-        let mut best_w = f32::MIN;
-
-        for (i, b) in table.list.iter().enumerate() {
+        let mut items: Vec<(usize, f32)> = table.list.iter().enumerate().map(|(i, b)| {
             let dt = t - b.temperature;
             let dm = m - b.moist;
             let d2 = dt*dt + dm*dm;
             let base = (-d2 / (2.0 * sigma2)).exp() * (0.0001 + b.rarity.clamp(0.0, 1.0));
             let gate = size_gate_at(cfg_seed, i, x, z);
-            let w = base * gate;
-            if w > best_w { best_w = w; best_i = i; }
-        }
-        best_i
+            (i, base * gate)
+        }).collect();
+
+        items.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
+        let k = top_k.min(items.len());
+        items.truncate(k);
+        items
     }
 
     #[inline]
@@ -330,7 +331,6 @@ pub async fn generate_chunk_async_noise(
         // biome mix (Größe beeinflusst NUR Auswahl, nicht Relief)
         let t = map01(temp_n.get_noise_2d(wxf, wzf));
         let m = map01(moist_n.get_noise_2d(wxf, wzf));
-        // Seed-capturing Gate:
         let (h_off, ridge_fac, roll_fac, dom) =
             blend_biome_gen_climate(t, m, &biomes);
         let center_w = dom.powf(1.5);
@@ -429,9 +429,12 @@ pub async fn generate_chunk_async_noise(
         leap(h_land, h_ocean, ocean_f)
     };
 
-    // --------- block fill ----------
-    for lx in 0..CX {
-        for lz in 0..CZ {
+    // --------- block fill (mit Blacklist-Filter & nahtsicherer Prognose) ----------
+    let mut biome_idx_grid = vec![0usize; CX * CZ];
+    let at = |x: usize, z: usize| -> usize { z * CX + x };
+
+    for lz in 0..CZ {         // z-outer, x-inner => Nord/West sind deterministisch gesetzt
+        for lx in 0..CX {
             let wx = coord.x * CX as i32 + lx as i32;
             let wz = coord.y * CZ as i32 + lz as i32;
             let wxf = wx as f32;
@@ -451,13 +454,48 @@ pub async fn generate_chunk_async_noise(
             soil_depth -= alt.clamp(0.0, 1.0) * 1.3;
             soil_depth = soil_depth.clamp(0.0, 4.0);
 
-            // Biome (dominant) für Surface-Pick – mit Size-Gate
+            // Biomekandidaten (Top-K)
             let t_here = map01(temp_n.get_noise_2d(wxf, wzf));
             let m_here = map01(moist_n.get_noise_2d(wxf, wzf));
-            let b_idx = dominant_biome_index_sized(t_here, m_here, wxf, wzf, &biomes, cfg.seed);
+            const TOP_K: usize = 6;
+            let candidates = biome_candidates_sized(t_here, m_here, wxf, wzf, &biomes, cfg.seed, TOP_K);
+
+            // Nachbarn: lokal (innerhalb des Chunks) ...
+            let west_local  = (lx > 0).then(|| biome_idx_grid[at(lx - 1, lz)]);
+            let north_local = (lz > 0).then(|| biome_idx_grid[at(lx, lz - 1)]);
+
+            // ... und nahtsichere Prognose für fehlende Nachbarn (andere Chunks)
+            let west_pred = if lx == 0 {
+                let wx_west = wxf - 1.0;
+                let t_w = map01(temp_n.get_noise_2d(wx_west, wzf));
+                let m_w = map01(moist_n.get_noise_2d(wx_west, wzf));
+                let cand_w = biome_candidates_sized(t_w, m_w, wx_west, wzf, &biomes, cfg.seed, 1);
+                Some(cand_w[0].0)
+            } else { None };
+
+            let north_pred = if lz == 0 {
+                let wz_north = wzf - 1.0;
+                let t_n = map01(temp_n.get_noise_2d(wxf, wz_north));
+                let m_n = map01(moist_n.get_noise_2d(wxf, wz_north));
+                let cand_n = biome_candidates_sized(t_n, m_n, wxf, wz_north, &biomes, cfg.seed, 1);
+                Some(cand_n[0].0)
+            } else { None };
+
+            let west  = west_local.or(west_pred);
+            let north = north_local.or(north_pred);
+
+            // Kandidat wählen: erster, der keine verbotene Nachbarschaft verletzt
+            let mut chosen_idx = candidates[0].0; // Fallback: bester Kandidat
+            'pick: for &(cand_i, _w) in &candidates {
+                if let Some(wi) = west  { if biomes.forbids(cand_i, wi) { continue; } }
+                if let Some(ni) = north { if biomes.forbids(cand_i, ni) { continue; } }
+                chosen_idx = cand_i;
+                break 'pick;
+            }
+            biome_idx_grid[at(lx, lz)] = chosen_idx;
 
             let surf_bank = SURFACE_BANK.get();
-            let surf_opt  = surf_bank.and_then(|v| v.get(b_idx));
+            let surf_opt  = surf_bank.and_then(|v| v.get(chosen_idx));
 
             // deterministische Zufallswerte pro Schichttyp
             let r_seed: u32 = (cfg.seed as u32) ^ 0xABCD_1234;
@@ -514,6 +552,7 @@ pub async fn generate_chunk_async_noise(
 
     c
 }
+
 
 // ===============================================================
 //                       Meshing (per Subchunk)
@@ -775,7 +814,11 @@ pub(crate) fn build_biome_table(assets: &Assets<BiomeAsset>, reg: &BiomeRegistry
     let mut surfaces: Vec<SurfaceByName> = Vec::new();
     let mut sizes: Vec<SizeInfo> = Vec::new();
 
-    for (_name, handle) in reg.iter() {
+    let mut names: Vec<String> = Vec::new();
+
+    for (name, handle) in reg.iter() {
+        names.push(name.to_string());
+
         if let Some(b) = assets.get(handle) {
             list.push(BiomeLite {
                 temperature: b.temperature.clamp(0.0, 1.0),
@@ -785,7 +828,6 @@ pub(crate) fn build_biome_table(assets: &Assets<BiomeAsset>, reg: &BiomeRegistry
             });
             surfaces.push(from_surface(&b.surface));
 
-            // Size -> Frequenz (Flächenausdehnung)
             let freq = sizes_to_frequency(&b.sizes);
             sizes.push(SizeInfo { freq });
         } else {
@@ -798,10 +840,32 @@ pub(crate) fn build_biome_table(assets: &Assets<BiomeAsset>, reg: &BiomeRegistry
         }
     }
 
+    let mut index_by_name: HashMap<String, usize> = HashMap::new();
+    for (i, n) in names.iter().enumerate() {
+        index_by_name.insert(n.clone(), i);
+    }
+
+    let mut forbidden: Vec<HashSet<usize>> = vec![HashSet::new(); list.len()];
+
+    for (i, (_name, handle)) in reg.iter().enumerate() {
+        if let Some(b) = assets.get(handle) {
+            for other in &b.blacklist {
+                if let Some(&j) = index_by_name.get(other) {
+                    if i != j {
+                        forbidden[i].insert(j);
+                        forbidden[j].insert(i);
+                    }
+                } else {
+                    warn!("Biome '{}' blacklists unknown biome '{}'", b.name, other);
+                }
+            }
+        }
+    }
+
     let _ = SURFACE_BANK.set(surfaces);
     let _ = SIZE_BANK.set(sizes);
 
-    BiomeTable { list }
+    BiomeTable { list, forbidden }
 }
 
 fn size_len_chunks(s: &BiomeSize) -> f32 {

@@ -5,7 +5,7 @@ use bevy::tasks::Task;
 use game_core::world::biome::BiomeGeneration;
 use game_core::world::block::{BlockId, BlockRegistry, Face, UvRect};
 use game_core::world::chunk::ChunkData;
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 
 #[derive(Resource, Default)]
 pub struct MeshBacklog(pub VecDeque<(IVec2, usize)>);
@@ -119,11 +119,6 @@ pub struct BorderSnapshot {
 //                   Biome
 // ============================================
 
-pub const BIOME_TEMP_FREQ:  f32 = 0.0018;
-pub const BIOME_MOIST_FREQ: f32 = 0.0014;
-pub const BIOME_BLEND_SIGMA: f32 = 0.15;
-pub const BIOME_TOP_K: usize = 2;
-
 #[derive(Debug, Clone)]
 pub struct BiomeLite {
     pub temperature: f32,
@@ -135,5 +130,15 @@ pub struct BiomeLite {
 #[derive(Debug, Clone, Default)]
 pub struct BiomeTable {
     pub list: Vec<BiomeLite>,
+    pub forbidden: Vec<HashSet<usize>>,
+}
+
+impl BiomeTable {
+    #[inline]
+    pub fn forbids(&self, a: usize, b: usize) -> bool {
+        self.forbidden
+            .get(a)
+            .map_or(false, |set| set.contains(&b))
+    }
 }
 

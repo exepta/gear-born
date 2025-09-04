@@ -9,7 +9,7 @@ use game_core::key_converter::convert;
 use game_core::player::selection::SelectionState;
 use game_core::player::{GameMode, GameModeState};
 use game_core::states::{AppState, InGameStates};
-use game_core::world::biome::{BiomeAsset, BiomeRegistry, BiomeSize};
+use game_core::world::biome::{BiomeAsset, BiomeRegistry, BiomeSize, BIOME_MOIST_FREQ, BIOME_TEMP_FREQ};
 use game_core::world::block::{block_name_from_registry, get_block_world, BlockRegistry, MiningState, VOXEL_SIZE};
 use game_core::world::chunk::ChunkMap;
 use game_core::world::chunk_dim::*;
@@ -131,11 +131,11 @@ fn snap_biome(
 
     let mut temp_n = FastNoiseLite::with_seed(gen_cfg.seed ^ 0x0B10_0001);
     temp_n.set_noise_type(Some(NoiseType::OpenSimplex2));
-    temp_n.set_frequency(Some(0.0018));
+    temp_n.set_frequency(Some(BIOME_TEMP_FREQ));
 
     let mut moist_n = FastNoiseLite::with_seed(gen_cfg.seed ^ 0x0B10_0002);
     moist_n.set_noise_type(Some(NoiseType::OpenSimplex2));
-    moist_n.set_frequency(Some(0.0014));
+    moist_n.set_frequency(Some(BIOME_MOIST_FREQ));
 
     let t = map01(temp_n.get_noise_2d(x, z));
     let m = map01(moist_n.get_noise_2d(x, z));

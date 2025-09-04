@@ -25,8 +25,13 @@
 use bevy::prelude::*;
 use serde::de::{Error, SeqAccess, Visitor};
 use serde::{Deserialize, Deserializer};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt;
+
+pub const BIOME_TEMP_FREQ:  f32 = 0.0018;
+pub const BIOME_MOIST_FREQ: f32 = 0.0014;
+pub const BIOME_BLEND_SIGMA: f32 = 0.15;
+pub const BIOME_TOP_K: usize = 2;
 
 #[derive(Debug, Default, Resource)]
 pub struct BiomeRegistry {
@@ -111,6 +116,8 @@ pub struct BiomeAsset {
     #[serde(default)]
     pub sizes: Vec<BiomeSize>,
     pub surface: BiomeSurface,
+    #[serde(default, rename = "black_list")]
+    pub blacklist: HashSet<String>,
     pub generation: BiomeGeneration,
 }
 
