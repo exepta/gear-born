@@ -1,0 +1,23 @@
+{
+  "localized_name": "plains",
+  "name": "Plains",
+  "climate": "normal",
+  "rarity": 0.4,
+  "sizes": [ "small", "medium", "large" ],
+  "surface": {
+    "top": [ "grass_block" ],
+    "bottom": [ "dirt_block" ],
+    "sea_floor": [ "sand_block:0.6", "gravel_block:0.3", "clay_block:0.1" ],
+    "upper_zero": [ "stone_block" ],
+    "under_zero": [ "stone_block" ]
+  },
+  "settings": {
+    "height_offset": 2.0,
+    "mountain_freq": 1.2
+  },
+  "generation": {
+    "rivers": false,
+    "sea": false,
+    "rift": false
+  }
+}

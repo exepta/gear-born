@@ -8,9 +8,11 @@ use game_core::key_converter::convert;
 use game_core::player::selection::SelectionState;
 use game_core::player::{GameMode, GameModeState};
 use game_core::states::{AppState, InGameStates};
+use game_core::world::biome::BiomeRegistry;
 use game_core::world::block::{block_name_from_registry, get_block_world, BlockRegistry, MiningState, VOXEL_SIZE};
 use game_core::world::chunk::ChunkMap;
 use game_core::world::chunk_dim::*;
+use game_core::world::region::BiomeRegionAllocator;
 use game_core::{BlockCatalogPreviewCam, BuildInfo};
 use std::ops::Neg;
 use sysinfo::{CpuRefreshKind, MemoryRefreshKind, Pid, ProcessesToUpdate, RefreshKind, System};
@@ -44,7 +46,11 @@ struct DebugSnapshot {
     // Hotkeys (for Ui)
     key_debug: String,
     key_grid: String,
+
+    // Biome (block-perfect)
+    biome_text: String,
 }
+
 
 pub struct DebugOverlayPlugin;
 
@@ -77,7 +83,7 @@ impl Plugin for DebugOverlayPlugin {
             .add_systems(
                 Update,
                 (
-                    (snap_perf, snap_camera_and_world, snap_selection, snap_build_and_mode).chain(),
+                    (snap_perf, snap_camera_and_world, snap_biome, snap_selection, snap_build_and_mode).chain(),
                     render_debug_text,
                 )
                     .run_if(in_state(AppState::InGame(InGameStates::Game)))
@@ -113,6 +119,36 @@ fn snap_camera_and_world(
     snap.chunk_range = game_cfg.graphics.chunk_range;
     snap.key_debug = game_cfg.input.debug_overlay.clone();
     snap.key_grid  = game_cfg.input.chunk_grid.clone();
+}
+
+fn snap_biome(
+    q_cam: Query<&GlobalTransform, (With<Camera3d>, Without<BlockCatalogPreviewCam>)>,
+    sel: Option<Res<SelectionState>>,
+    biome_reg: Res<BiomeRegistry>,
+    mut region_alloc: ResMut<BiomeRegionAllocator>,
+    mut snap: ResMut<DebugSnapshot>,
+) {
+    // Determine block coordinates to sample the biome for:
+    // Prefer the selected block (crosshair hit). Fallback to camera position (floored).
+    let (bx, bz) = if let Some(sel) = sel.as_ref() {
+        if let Some(h) = sel.hit {
+            (h.block_pos.x, h.block_pos.z)
+        } else {
+            let pos = q_cam.single().map(|t| t.translation()).unwrap_or(Vec3::ZERO) / VOXEL_SIZE;
+            (pos.x.floor() as i32, pos.z.floor() as i32)
+        }
+    } else {
+        let pos = q_cam.single().map(|t| t.translation()).unwrap_or(Vec3::ZERO) / VOXEL_SIZE;
+        (pos.x.floor() as i32, pos.z.floor() as i32)
+    };
+
+    // Convert to chunk coords and query the biome (chunk → biome).
+    let (cc, _) = world_to_chunk_xz(bx, bz);
+    let biome_name = region_alloc
+        .biome_for_chunk(cc, &biome_reg)
+        .unwrap_or_else(|| "—".to_string());
+
+    snap.biome_text = format!("Biome: {}", biome_name);
 }
 
 fn snap_selection(
@@ -225,6 +261,7 @@ fn render_debug_text(
          Chunk: ({}, {})  (size: {}x{}, range: {})\n\
          {}\n\
          {}\n\
+         {}\n\
          Game Mode: {}\n\
          {}: Toggle Debug Overlay   {}: Toggle Chunk Grid",
         snap.fps,
@@ -235,6 +272,7 @@ fn render_debug_text(
         snap.pos_bs.x, snap.pos_bs.y, snap.pos_bs.z,
         snap.facing_text, snap.yaw_deg,
         snap.chunk_cc.x, snap.chunk_cc.y, CX, CZ, snap.chunk_range,
+        snap.biome_text,            // <— NEW line: biome
         snap.block_line,
         snap.hit_str,
         snap.mode_text,

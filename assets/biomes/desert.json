@@ -1,0 +1,23 @@
+{
+  "localized_name": "desert",
+  "name": "Desert",
+  "climate": "hot",
+  "rarity": 0.2,
+  "sizes": [ "large", "very_large", "gigantic" ],
+  "surface": {
+    "top": [ "sand_block" ],
+    "bottom": [ "sand_block" ],
+    "sea_floor": [ "sand_block:0.9", "clay_block:0.1" ],
+    "upper_zero": [ "stone_block" ],
+    "under_zero": [ "stone_block" ]
+  },
+  "settings": {
+    "height_offset": 2.0,
+    "mountain_freq": 1.2
+  },
+  "generation": {
+    "rivers": false,
+    "sea": false,
+    "rift": false
+  }
+}

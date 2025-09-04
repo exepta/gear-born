@@ -246,7 +246,7 @@ pub struct WorldGenConfig {
     pub seed: i32,
     pub enable_caves: bool,
 
-    pub base_height: i32,
+    pub base_height: f32,
     pub height_span: i32,
     pub height_freq: f32,
     pub warp_freq: f32,
@@ -292,12 +292,14 @@ impl Default for WorldGenConfig {
             seed: 2261732,
             enable_caves: false,
 
-            base_height: 8,
-            height_span: 48,
-            height_freq: 0.007,
+            // Raise mean terrain a bit above sea level -> more land.
+            base_height: 4.0,     // vorher 0.0
+            height_span: 58,
+            height_freq: 0.0065,
 
-            warp_freq: 0.02,
-            warp_amp: 25.0,
+            warp_freq: 0.020,
+            warp_amp: 24.0,
+            warp_amp_plains: 6.0,
 
             caves_freq: 0.022,
             caves_thresh: 0.50,
@@ -323,15 +325,15 @@ impl Default for WorldGenConfig {
 
             cave_y_scale: 0.75,
 
-            plains_freq: 0.003,
+            plains_freq: 0.0030,
             plains_threshold: 0.55,
             plains_blend: 0.15,
-            plains_span: 8,
-            plains_flatten: 0.6,
-            warp_amp_plains: 6.0,
+            plains_span: 10,
+            plains_flatten: 0.55,
         }
     }
 }
+
 
 #[derive(Resource)]
 pub struct CrosshairConfig {

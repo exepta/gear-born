@@ -9,9 +9,11 @@ use bevy_rapier3d::prelude::*;
 use game_core::configuration::{GameConfig, WorldGenConfig};
 use game_core::events::chunk_events::{ChunkUnloadEvent, SubChunkNeedRemeshEvent};
 use game_core::states::{AppState, InGameStates, LoadingStates};
-use game_core::world::block::{id_any, BlockRegistry, VOXEL_SIZE};
+use game_core::world::biome::BiomeRegistry;
+use game_core::world::block::{BlockId, BlockRegistry, VOXEL_SIZE};
 use game_core::world::chunk::*;
 use game_core::world::chunk_dim::*;
+use game_core::world::region::BiomeRegionAllocator;
 use game_core::world::save::{RegionCache, WorldSave};
 use game_core::BlockCatalogPreviewCam;
 use std::collections::{HashMap, HashSet};
@@ -188,10 +190,13 @@ fn check_base_gen_world_ready(
 }
 
 //System
+// System
 fn schedule_chunk_generation(
     mut pending: ResMut<PendingGen>,
     chunk_map: Res<ChunkMap>,
     reg: Res<BlockRegistry>,
+    biome_reg: Res<BiomeRegistry>,
+    mut region_alloc: ResMut<BiomeRegionAllocator>,
     gen_cfg: Res<WorldGenConfig>,
     game_config: Res<GameConfig>,
     ws: Res<WorldSave>,
@@ -199,6 +204,96 @@ fn schedule_chunk_generation(
     load_center: Option<Res<LoadCenter>>,
     app_state: Res<State<AppState>>,
 ) {
+    // --- kleine lokale Helfer ---
+    #[inline]
+    fn hash64(x: i32, z: i32, seed: i32) -> u64 {
+        let xu = x as u32 as u64;
+        let zu = z as u32 as u64;
+        let su = seed as u32 as u64;
+        let mut v = xu.wrapping_mul(0x9E37_79B9_7F4A_7C15)
+            ^ zu.wrapping_mul(0xC2B2_AE3D_27D4_EB4F)
+            ^ su.rotate_left(13);
+        v ^= v >> 30;
+        v = v.wrapping_mul(0xBF58_476D_1CE4_E5B9);
+        v ^= v >> 27;
+        v = v.wrapping_mul(0x94D0_49BB_1331_11EB);
+        v ^ (v >> 31)
+    }
+
+    #[inline]
+    fn frand01(x: i32, z: i32, seed: i32, salt: u64) -> f32 {
+        let h = hash64(x, z, seed) ^ salt;
+        let m = ((h >> 40) & 0xFF_FFFF) as u32;
+        (m as f32) / 16_777_216.0
+    }
+
+    // gewichtete Auswahl deterministisch
+    fn pick_weighted(items: &[(String, f32)], r01: f32) -> Option<&(String, f32)> {
+        if items.is_empty() { return None; }
+        let sum: f32 = items.iter().map(|(_, w)| *w).sum();
+        let mut t = r01 * sum;
+        for it in items {
+            if t <= it.1 { return Some(it); }
+            t -= it.1;
+        }
+        items.last()
+    }
+
+    // Surface-IDs aus Biome bestimmen (top, bottom, stone, seafloor, beach)
+    fn resolve_surface_ids_for_biome(
+        blocks: &BlockRegistry,
+        biome_reg: &BiomeRegistry,
+        biome_name: &str,
+        world_seed: i32,
+        c: IVec2,
+    ) -> (BlockId, BlockId, BlockId, BlockId, BlockId) {
+        // Fallbacks
+        let grass_fb = blocks.id_or_air("grass_block");
+        let dirt_fb  = blocks.id_or_air("dirt_block");
+        let stone_fb = blocks.id_or_air("stone_block");
+        let sand_fb  = blocks.id_or_air("sand_block"); // Beach immer Sand
+
+        let b = if let Some(b) = biome_reg.get(biome_name) { b } else {
+            return (grass_fb, dirt_fb, stone_fb, sand_fb, sand_fb);
+        };
+
+        // top
+        let top_id = b.surface.top.get(0)
+            .map(|bc| blocks.id_or_air(&bc.id))
+            .unwrap_or(grass_fb);
+
+        // bottom
+        let bottom_id = b.surface.bottom.get(0)
+            .map(|bc| blocks.id_or_air(&bc.id))
+            .unwrap_or(dirt_fb);
+
+        // stone (unter_zero / upper_zero → stone als Default)
+        let stone_id = b.surface.under_zero.get(0)
+            .or_else(|| b.surface.upper_zero.get(0))
+            .map(|bc| blocks.id_or_air(&bc.id))
+            .unwrap_or(stone_fb);
+
+        // sea_floor: gewichtete Auswahl (deterministisch) – NUR unter Wasser nutzen!
+        let mut weighted: Vec<(String, f32)> = Vec::new();
+        for bc in &b.surface.sea_floor {
+            let w = if bc.weight > 0.0 { bc.weight } else { 1.0 };
+            weighted.push((bc.id.clone(), w));
+        }
+        let seafloor_id = if let Some((name, _w)) = pick_weighted(&weighted, frand01(c.x, c.y, world_seed, 0x5EA5_EAF1)) {
+            blocks.id_or_air(name)
+        } else {
+            b.surface.sea_floor.get(0)
+                .map(|bc| blocks.id_or_air(&bc.id))
+                .unwrap_or(sand_fb)
+        };
+
+        // beach_id ist absichtlich *immer* Sand, damit es keine Chunk-Kacheln an Land gibt
+        let beach_id = sand_fb;
+
+        (top_id, bottom_id, stone_id, seafloor_id, beach_id)
+    }
+
+    // --- ab hier Original-Logik + Biome-Integration ---
     let center_c = if let Ok(t) = q_cam.single() {
         let (c, _) = world_to_chunk_xz(
             (t.translation().x / VOXEL_SIZE).floor() as i32,
@@ -215,19 +310,9 @@ fn schedule_chunk_generation(
     let max_inflight = if waiting { BIG } else { MAX_INFLIGHT_GEN };
     let per_frame_submit = if waiting { BIG } else { 8 };
 
-    if pending.0.len() >= max_inflight { return; }
-
     let load_radius = game_config.graphics.chunk_range;
-    let mut budget = max_inflight
-        .saturating_sub(pending.0.len())
-        .min(per_frame_submit);
+    let mut budget = max_inflight.saturating_sub(pending.0.len()).min(per_frame_submit);
 
-    let ids = (
-        id_any(&reg, &["grass_block","grass"]),
-        id_any(&reg, &["dirt_block","dirt"]),
-        id_any(&reg, &["stone_block","stone"]),
-        id_any(&reg, &["sand_block","sand"]),
-    );
     let cfg_clone = gen_cfg.clone();
     let ws_root = ws.root.clone();
     let pool = AsyncComputeTaskPool::get();
@@ -238,11 +323,21 @@ fn schedule_chunk_generation(
             let c = IVec2::new(center_c.x + dx, center_c.y + dz);
             if chunk_map.chunks.contains_key(&c) || pending.0.contains_key(&c) { continue; }
 
-            let ids_copy = ids;
+            // Biome pro Chunk bestimmen
+            let biome_name = if let Some(name) = region_alloc.biome_for_chunk(c, &biome_reg) {
+                name
+            } else {
+                biome_reg.iter().next().map(|(_, b)| b.name.clone()).unwrap_or_else(|| "Plains".to_string())
+            };
+
+            // IDs auflösen
+            let ids = resolve_surface_ids_for_biome(&reg, &biome_reg, &biome_name, gen_cfg.seed, c);
+
+            // Task spawnen – beach_id wird jetzt mit übergeben (5-Tuple!)
             let cfg = cfg_clone.clone();
             let root = ws_root.clone();
             let task = pool.spawn(async move {
-                let data = load_or_gen_chunk_async(root, c, ids_copy, cfg).await;
+                let data = load_or_gen_chunk_async(root, c, ids, cfg).await;
                 (c, data)
             });
             pending.0.insert(c, task);
@@ -250,6 +345,7 @@ fn schedule_chunk_generation(
         }
     }
 }
+
 
 //System
 fn drain_mesh_backlog(
