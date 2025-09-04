@@ -104,13 +104,13 @@ impl From<Climate> for Clim {
 
 #[derive(Clone, Copy)]
 struct SizeRange { min: i32, max: i32 }
-const SMALL:      SizeRange = SizeRange{min:  4, max:  8};
-const MEDIUM:     SizeRange = SizeRange{min: 12, max: 18};
-const LARGE:      SizeRange = SizeRange{min: 42, max: 60};
-const VERY_LARGE: SizeRange = SizeRange{min: 66, max: 96};
-const GIGANTIC:   SizeRange = SizeRange{min:120, max:160};
+const SMALL:      SizeRange = SizeRange{min:  20, max:  24};
+const MEDIUM:     SizeRange = SizeRange{min: 48, max: 64};
+const LARGE:      SizeRange = SizeRange{min: 80, max: 140};
+const VERY_LARGE: SizeRange = SizeRange{min: 160, max: 240};
+const GIGANTIC:   SizeRange = SizeRange{min:260, max:420};
 
-const BASE_CHUNK: i32 = 8;
+const BASE_CHUNK: i32 = 12;
 
 #[inline]
 fn h2u(x: i32, z: i32, seed: u32) -> u32 {
@@ -230,10 +230,10 @@ fn site_of_cell(acc: &BioAcc, xc: i32, zc: i32, seed: u32) -> Site {
     Site { biome_idx: biome, radius_chunks: radius_chunks.max(2.0), jx, jz }
 }
 
-fn biome_query(acc: &BioAcc, seed: u32, wx: i32, wz: i32) -> BiomeAt {
+fn biome_query(acc: &BioAcc, seed: u32, wxf: f32, wzf: f32) -> BiomeAt {
     let base_world = chunks_to_world(BASE_CHUNK as f32);
-    let gx = (wx as f32 / base_world).floor() as i32;
-    let gz = (wz as f32 / base_world).floor() as i32;
+    let gx = (wxf / base_world).floor() as i32;
+    let gz = (wzf / base_world).floor() as i32;
 
     let mut best = (f32::INFINITY, 0usize);
     let mut second = (f32::INFINITY, 0usize);
@@ -245,8 +245,8 @@ fn biome_query(acc: &BioAcc, seed: u32, wx: i32, wz: i32) -> BiomeAt {
 
             let sx = (cx as f32 + 0.5) * base_world + site.jx;
             let sz = (cz as f32 + 0.5) * base_world + site.jz;
-            let dxw = (wx as f32) - sx;
-            let dzw = (wz as f32) - sz;
+            let dxw = (gx as f32) - sx;
+            let dzw = (gz as f32) - sz;
 
             let r_world = chunks_to_world(site.radius_chunks);
             let d = (dxw*dxw + dzw*dzw).sqrt() / r_world.max(1.0);
@@ -298,6 +298,18 @@ pub async fn generate_chunk_async_noise(
     let mut plains_n = FastNoiseLite::with_seed(cfg.seed ^ 0x000B_10E);
     plains_n.set_noise_type(Some(NoiseType::OpenSimplex2));
     plains_n.set_frequency(Some(cfg.plains_freq));
+
+    let mut blend_n = FastNoiseLite::with_seed((cfg.seed as u32 ^ 0xB1E0_A45E_u32) as i32);
+    blend_n.set_noise_type(Some(NoiseType::OpenSimplex2));
+    blend_n.set_frequency(Some(1.0 / 48.0));
+
+    let mut bwx = FastNoiseLite::with_seed((cfg.seed as u32 ^ 0xB1E0_A45C_u32) as i32);
+    bwx.set_noise_type(Some(NoiseType::OpenSimplex2));
+    bwx.set_frequency(Some(0.0022));
+
+    let mut bwz = FastNoiseLite::with_seed((cfg.seed as u32 ^ 0xB1E0_A45D_u32) as i32);
+    bwz.set_noise_type(Some(NoiseType::OpenSimplex2));
+    bwz.set_frequency(Some(0.0022));
 
     let mut belts_n = FastNoiseLite::with_seed(cfg.seed ^ 0x00DE_ADB1);
     belts_n.set_noise_type(Some(NoiseType::OpenSimplex2));
@@ -489,7 +501,12 @@ pub async fn generate_chunk_async_noise(
             let h_final = h_f.round() as i32;
 
             // 2) Biome (Voronoi)
-            let bq = biome_query(&acc, cfg.seed as u32, wx, wz);
+            let base_world = chunks_to_world(BASE_CHUNK as f32);
+            let warp_amp   = 0.35 * base_world;
+            let wx_f = wx as f32 + bwx.get_noise_2d(wx as f32, wz as f32) * warp_amp;
+            let wz_f = wz as f32 + bwz.get_noise_2d(wx as f32 + 1000.0, wz as f32 - 1000.0) * warp_amp;
+
+            let bq = biome_query(&acc, cfg.seed as u32, wx_f, wz_f);
             let b0 = bq.primary;
             let b1 = bq.secondary;
             let edge_mix = bq.edge_mix;
@@ -526,10 +543,10 @@ pub async fn generate_chunk_async_noise(
             } else { p_top };
 
             // Blend
-            let mix = (edge_mix * 0.85).clamp(0.0, 0.5);
-            let top_id_blended = if mix <= 0.01 { p_top } else {
-                if u_rand01(wx, wz, r_seed ^ 0xDEAD_BEEF) < mix { s_top } else { p_top }
-            };
+            let mix_max = (edge_mix * 0.45).clamp(0.0, 0.45);
+            let t = map01(blend_n.get_noise_2d(wx as f32 * 0.03, wz as f32 * 0.03));
+            let mask = smoothstep(0.5 - mix_max, 0.5 + mix_max, t);
+            let top_id_blended = if mask < 0.5 { p_top } else { s_top };
 
             for ly in 0..CY {
                 let wy = Y_MIN + ly as i32;
@@ -537,6 +554,9 @@ pub async fn generate_chunk_async_noise(
 
                 let mut id = if wy == h_final {
                     top_id_blended
+                } else if wy == h_final - 1 {
+                    let t2 = (t - 0.12).clamp(0.0, 1.0);
+                    if t2 > 0.62 { s_top } else { p_bottom }
                 } else if wy >= h_final - bottom_thick {
                     p_bottom
                 } else if wy >= h_final - bottom_thick - under_thick {
@@ -763,6 +783,45 @@ pub(crate) fn build_biome_table(
         forbidden,
         climate: climates,
     }
+}
+
+pub fn voronoi_biome_label_at(
+    wx: i32,
+    wz: i32,
+    seed: i32,
+    assets: &Assets<BiomeAsset>,
+    reg: &BiomeRegistry,
+) -> String {
+
+    let table = build_biome_table(assets, reg);
+    let surf_bank = SURFACE_BANK
+        .get()
+        .expect("SURFACE_BANK missing – build_biome_table must run at least once");
+    let acc = BioAcc { table: &table, surfaces: surf_bank };
+
+    let base_world = chunks_to_world(BASE_CHUNK as f32);
+    let gx = (wx as f32 / base_world).floor() as i32;
+    let gz = (wz as f32 / base_world).floor() as i32;
+
+    let west  = (gx > i32::MIN).then(|| pick_biome_for_cell(&acc, gx - 1, gz, seed as u32, None, None));
+    let north = (gz > i32::MIN).then(|| pick_biome_for_cell(&acc, gx, gz - 1, seed as u32, west, None));
+    let b_idx = pick_biome_for_cell(&acc, gx, gz, seed as u32, west, north);
+    let name  = table.names.get(b_idx).cloned().unwrap_or_else(|| "—".to_string());
+
+    let r0 = u_rand01(gx, gz, (seed as u32) ^ 0x51A_0001);
+    let label = if r0 < 0.28 {
+        "Small"
+    } else if r0 < 0.55 {
+        "Medium"
+    } else if r0 < 0.78 {
+        "Large"
+    } else if r0 < 0.93 {
+        "Very Large"
+    } else {
+        "Gigantic"
+    };
+
+    format!("{name} ({label})")
 }
 
 pub fn encode_chunk(ch: &ChunkData) -> Vec<u8> {
