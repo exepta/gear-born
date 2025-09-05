@@ -348,7 +348,7 @@ fn schedule_chunk_generation(
             let ids = resolve_surface_ids_for_biome(&reg, &biome_reg, &biome_name, gen_cfg.seed, c);
 
             // Build blend info: only set for edges where the **neighbor biome wins**.
-            let mut blend = BiomeEdgeBlend { radius: 12, ..Default::default() };
+            let mut blend = BiomeEdgeBlend { radius: 18, ..Default::default() };
             let rid_here = region_alloc.region_id_of(c);
 
             // west neighbor
