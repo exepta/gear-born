@@ -91,14 +91,28 @@ pub async fn generate_chunk_async_noise(
     river_warp_n.set_noise_type(Some(NoiseType::OpenSimplex2));
     river_warp_n.set_frequency(Some(0.015));
 
-    // Coherent mask inside the seam band (avoids salt-and-pepper)
+    // coherent mask inside the seam band (bigger blobs)
     let mut mixmask_n = FastNoiseLite::with_seed(cfg.seed ^ 0xB1D3_B10Du32 as i32);
     mixmask_n.set_noise_type(Some(NoiseType::OpenSimplex2));
-    mixmask_n.set_frequency(Some(0.08));
+    mixmask_n.set_frequency(Some(0.055));
     mixmask_n.set_fractal_type(Some(FractalType::FBm));
     mixmask_n.set_fractal_octaves(Some(2));
     mixmask_n.set_fractal_gain(Some(0.5));
     mixmask_n.set_fractal_lacunarity(Some(2.0));
+
+    // large-scale curve of the seam
+    let mut seam_large = FastNoiseLite::with_seed(cfg.seed ^ 0x7A61_5EAF);
+    seam_large.set_noise_type(Some(NoiseType::OpenSimplex2));
+    seam_large.set_frequency(Some(0.020));
+
+    // small details for the seam
+    let mut seam_detail = FastNoiseLite::with_seed(cfg.seed ^ 0x51DE_77A1);
+    seam_detail.set_noise_type(Some(NoiseType::OpenSimplex2));
+    seam_detail.set_frequency(Some(0.065));
+    seam_detail.set_fractal_type(Some(FractalType::FBm));
+    seam_detail.set_fractal_octaves(Some(2));
+    seam_detail.set_fractal_gain(Some(0.5));
+    seam_detail.set_fractal_lacunarity(Some(2.0));
 
     // Seam field (2D) → produces rounded bulges, shared across chunks.
     let mut seam_n = FastNoiseLite::with_seed(cfg.seed ^ 0x7A61_5EAF);
@@ -168,32 +182,55 @@ pub async fn generate_chunk_async_noise(
 
     // ---- seam math (world-space, curved) ----
     #[inline]
-    fn seam_weight_x(world_x: f32, world_z: f32, edge_x: f32, r: f32, salt: u32, seam: &FastNoiseLite) -> f32 {
+    fn seam_weight_x(
+        world_x: f32, world_z: f32,
+        edge_x: f32, r: f32, salt: u32,
+        large: &FastNoiseLite, detail: &FastNoiseLite
+    ) -> f32 {
         if r <= 0.5 { return 0.0; }
-        // pair-specific offset so both sides share the same seam curve
-        let ox = ((salt & 0xFFFF) as f32) * 0.00131;
-        let oz = ((salt >> 16) as f32) * 0.00173;
-        let sf = 0.09;
-        // curve: world 2D field -> offset of the center line away from the geometric edge
-        let off = seam.get_noise_2d(world_x * sf + ox, world_z * sf + oz) * (r * 0.85);
+
+        let ox = ((salt & 0xFFFF) as f32) * 0.00091;
+        let oz = ((salt >> 16) as f32) * 0.00123;
+        let dir = if (salt & 2) == 0 { 1.0 } else { -1.0 };
+
+        let along = world_z;
+
+        // variable radius → Bulges
+        let r_var = r * (0.75 + 0.45 * ((detail.get_noise_2d(along * 0.050 + ox * 2.0, world_x * 0.050 + oz * 2.0) * 0.5) + 0.5));
+        let off_l = large .get_noise_2d(along * 0.060 + ox, world_x * 0.060 + oz) * (r_var * 0.90);
+        let off_s = detail.get_noise_2d(world_x * 0.120 - oz, along * 0.120 + ox) * (r_var * 0.35);
+        let off   = (off_l + off_s) * dir;
+
         let s = ((world_x - edge_x) - off).abs();
-        if s >= r { 0.0 } else {
-            let u = 1.0 - (s / r);
-            (u * u) * (3.0 - 2.0 * u) // smooth bell
+        if s >= r_var { 0.0 } else {
+            let u = 1.0 - (s / r_var);
+            u * u * (3.0 - 2.0 * u) // smooth bell 0..1
         }
     }
 
     #[inline]
-    fn seam_weight_z(world_x: f32, world_z: f32, edge_z: f32, r: f32, salt: u32, seam: &FastNoiseLite) -> f32 {
+    fn seam_weight_z(
+        world_x: f32, world_z: f32,
+        edge_z: f32, r: f32, salt: u32,
+        large: &FastNoiseLite, detail: &FastNoiseLite
+    ) -> f32 {
         if r <= 0.5 { return 0.0; }
-        let ox = ((salt & 0xFFFF) as f32) * 0.00131;
-        let oz = ((salt >> 16) as f32) * 0.00173;
-        let sf = 0.09;
-        let off = seam.get_noise_2d(world_x * sf + ox, world_z * sf + oz) * (r * 0.85);
+
+        let ox = ((salt & 0xFFFF) as f32) * 0.00091;
+        let oz = ((salt >> 16) as f32) * 0.00123;
+        let dir = if (salt & 2) == 0 { 1.0 } else { -1.0 };
+
+        let along = world_x;
+
+        let r_var = r * (0.75 + 0.45 * ((detail.get_noise_2d(along * 0.050 + ox * 2.0, world_z * 0.050 + oz * 2.0) * 0.5) + 0.5));
+        let off_l = large .get_noise_2d(along * 0.060 + ox, world_z * 0.060 + oz) * (r_var * 0.90);
+        let off_s = detail.get_noise_2d(world_z * 0.120 - oz, along * 0.120 + ox) * (r_var * 0.35);
+        let off   = (off_l + off_s) * dir;
+
         let s = ((world_z - edge_z) - off).abs();
-        if s >= r { 0.0 } else {
-            let u = 1.0 - (s / r);
-            (u * u) * (3.0 - 2.0 * u)
+        if s >= r_var { 0.0 } else {
+            let u = 1.0 - (s / r_var);
+            u * u * (3.0 - 2.0 * u)
         }
     }
 
@@ -247,29 +284,39 @@ pub async fn generate_chunk_async_noise(
             let mut nei_bottom = block_bottom;
 
             if let Some(em) = blend.west  {
-                let w = seam_weight_x(xf, zf, wx0f, r_f, em.salt, &seam_n);
+                let w = seam_weight_x(xf, zf, wx0f, r_f, em.salt, &seam_large, &seam_detail);
                 if w > best_w { best_w = w; nei_top = em.top; nei_bottom = em.bottom; }
             }
             if let Some(em) = blend.east  {
-                let w = seam_weight_x(xf, zf, wx1f, r_f, em.salt, &seam_n);
+                let w = seam_weight_x(xf, zf, wx1f, r_f, em.salt, &seam_large, &seam_detail);
                 if w > best_w { best_w = w; nei_top = em.top; nei_bottom = em.bottom; }
             }
             if let Some(em) = blend.north {
-                let w = seam_weight_z(xf, zf, wz0f, r_f, em.salt, &seam_n);
+                let w = seam_weight_z(xf, zf, wz0f, r_f, em.salt, &seam_large, &seam_detail);
                 if w > best_w { best_w = w; nei_top = em.top; nei_bottom = em.bottom; }
             }
             if let Some(em) = blend.south {
-                let w = seam_weight_z(xf, zf, wz1f, r_f, em.salt, &seam_n);
+                let w = seam_weight_z(xf, zf, wz1f, r_f, em.salt, &seam_large, &seam_detail);
                 if w > best_w { best_w = w; nei_top = em.top; nei_bottom = em.bottom; }
             }
 
-            // softer on steep slopes; coverage decides if neighbor material wins
             let slope_factor = 1.0 - smoothstep(1.0, 4.0, slope_blocks as f32);
-            let coverage = (best_w * slope_factor).powf(1.2) * 0.72;
-            let mask = map01(mixmask_n.get_noise_2d(xf * 0.85, zf * 0.85));
-            let (col_top, col_bottom) = if best_w > 0.0 && mask < coverage {
+
+            let at_forced_border =
+                (blend.west.is_some()  && xf == wx0f) ||
+                    (blend.east.is_some()  && xf == wx1f) ||
+                    (blend.north.is_some() && zf == wz0f) ||
+                    (blend.south.is_some() && zf == wz1f);
+
+            let coverage = ((best_w * 1.15).clamp(0.0, 1.0) * slope_factor).powf(0.9);
+
+            let mask = map01(mixmask_n.get_noise_2d(xf * 0.55, zf * 0.55));
+
+            let (col_top, col_bottom) = if at_forced_border || (best_w > 0.0 && mask < coverage) {
                 (nei_top, nei_bottom)
-            } else { (block_top, block_bottom) };
+            } else {
+                (block_top, block_bottom)
+            };
 
             // ---- column fill (MC-like layering) ----
             // small per-column variation
