@@ -366,6 +366,7 @@ fn schedule_chunk_generation(
                                 bottom,
                                 salt,
                                 height_offset: nb.settings.height_offset,
+                                rivers: nb.generation.rivers,
                             });
                         }
                     }
@@ -386,6 +387,7 @@ fn schedule_chunk_generation(
                                 bottom,
                                 salt,
                                 height_offset: nb.settings.height_offset,
+                                rivers: nb.generation.rivers,
                             });
                         }
                     }
@@ -406,6 +408,7 @@ fn schedule_chunk_generation(
                                 bottom,
                                 salt,
                                 height_offset: nb.settings.height_offset,
+                                rivers: nb.generation.rivers,
                             });
                         }
                     }
@@ -426,6 +429,7 @@ fn schedule_chunk_generation(
                                 bottom,
                                 salt,
                                 height_offset: nb.settings.height_offset,
+                                rivers: nb.generation.rivers,
                             });
                         }
                     }
@@ -445,7 +449,8 @@ fn schedule_chunk_generation(
                 rivers: b.generation.rivers,
                 river_fill_threshold: b.generation.river_fill_threshold,
                 coast: b.generation.coast,
-                allow_lakes: b.generation.lakes
+                allow_lakes: b.generation.lakes,
+                lake_max_depth: b.generation.lake_max_depth.unwrap_or(2),
             };
 
             let task = pool.spawn(async move {

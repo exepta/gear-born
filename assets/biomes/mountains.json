@@ -2,7 +2,7 @@
   "localized_name": "mountains",
   "name": "Mountains",
   "climate": "normal",
-  "rarity": 0.05,
+  "rarity": 0.7,
   "sizes": [ "medium", "large" ],
   "surface": {
     "top": [ "grass_block" ],

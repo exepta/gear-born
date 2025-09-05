@@ -100,6 +100,7 @@ pub struct BiomeGeneration {
     pub coast: bool,
     #[serde(default = "default_true")]
     pub lakes: bool,
+    pub lake_max_depth: Option<i32>,
     pub rift: bool,
 }
 
@@ -123,6 +124,7 @@ pub struct EdgeMat {
     /// Edge-specific salt so both sides of the border share the same seam curve
     pub salt: u32,
     pub height_offset: f32,
+    pub rivers: bool,
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -136,6 +138,7 @@ pub struct BiomeTerrainParams {
     pub river_fill_threshold: f32,
     pub coast: bool,
     pub allow_lakes: bool,
+    pub lake_max_depth: i32,
 }
 
 /// Main biome data structure that mirrors your JSON.

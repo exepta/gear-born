@@ -293,7 +293,7 @@ impl Default for WorldGenConfig {
             enable_caves: false,
 
             // Raise mean terrain a bit above sea level -> more land.
-            base_height: 4.0,     // vorher 0.0
+            base_height: 8.0,
             height_span: 58,
             height_freq: 0.0065,
 
