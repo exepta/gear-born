@@ -239,12 +239,12 @@ pub fn pick_biome_for_size(
 #[inline]
 pub fn size_chunk_limits(size: BiomeSize) -> (u32, u32) {
     match size {
-        BiomeSize::Small     => (12, 16),
-        BiomeSize::Medium    => (36, 40),
-        BiomeSize::Large     => (60, 64),
-        BiomeSize::VeryLarge => (96, 100),
-        BiomeSize::Gigantic  => (160, 200),
-        BiomeSize::Unknown   => (12, 16),
+        BiomeSize::Small     => (20, 26),
+        BiomeSize::Medium    => (48, 56),
+        BiomeSize::Large     => (86, 120),
+        BiomeSize::VeryLarge => (144, 200),
+        BiomeSize::Gigantic  => (240, 400),
+        BiomeSize::Unknown   => (32, 32),
     }
 }
 

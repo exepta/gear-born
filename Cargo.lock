@@ -2348,6 +2348,7 @@ dependencies = [
  "futures-lite",
  "game_core",
  "lz4_flex",
+ "smallvec",
 ]
 
 [[package]]

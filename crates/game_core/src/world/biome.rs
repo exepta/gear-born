@@ -1,5 +1,6 @@
 use crate::world::block::BlockId;
 use bevy::prelude::*;
+use serde::de::Error;
 use serde::*;
 use std::collections::HashMap;
 use std::fs::*;
@@ -25,11 +26,11 @@ impl<'de> Deserialize<'de> for BlockChoice {
         let id = parts
             .next()
             .map(|s| s.trim().to_string())
-            .ok_or_else(|| serde::de::Error::custom("missing block id"))?;
+            .ok_or_else(|| Error::custom("missing block id"))?;
 
         let weight = if let Some(w) = parts.next() {
             w.trim().parse::<f32>().map_err(|_| {
-                serde::de::Error::custom(format!("invalid weight for block '{}': '{}'", id, w))
+                Error::custom(format!("invalid weight for block '{}': '{}'", id, w))
             })?
         } else {
             1.0
@@ -116,6 +117,16 @@ pub struct EdgeMat {
     pub bottom: BlockId,
     /// Edge-specific salt so both sides of the border share the same seam curve
     pub salt: u32,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+pub struct BiomeTerrainParams {
+    /// Adds to the global basis height (e.g., mountains: +28.0)
+    pub height_offset: f32,
+    /// Multiplies the main height frequency (e.g. mountains: 1.2)
+    pub mountain_freq: f32,
+    /// Enables river carving for this biome.
+    pub rivers: bool,
 }
 
 /// Main biome data structure that mirrors your JSON.

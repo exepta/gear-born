@@ -50,7 +50,8 @@ pub async fn generate_chunk_async_noise(
     let (block_top, block_bottom, block_stone, block_seafloor, block_beach) = ids;
     let mut out = ChunkData::new();
 
-    // ---- Noises (height & masks) ----
+    /* -------------------- Noises -------------------- */
+
     let mut base_n = FastNoiseLite::with_seed(cfg.seed);
     base_n.set_noise_type(Some(NoiseType::OpenSimplex2));
     base_n.set_frequency(Some(cfg.height_freq.max(0.0001)));
@@ -83,7 +84,7 @@ pub async fn generate_chunk_async_noise(
     coast_n.set_noise_type(Some(NoiseType::OpenSimplex2));
     coast_n.set_frequency(Some(0.010));
 
-    // Rivers (kept even if disabled → compiles)
+    // Rivers (kept even if disabled)
     let mut river_n = FastNoiseLite::with_seed(cfg.seed ^ 0x1357_9BDF);
     river_n.set_noise_type(Some(NoiseType::OpenSimplex2));
     river_n.set_frequency(Some(0.0016));
@@ -91,7 +92,7 @@ pub async fn generate_chunk_async_noise(
     river_warp_n.set_noise_type(Some(NoiseType::OpenSimplex2));
     river_warp_n.set_frequency(Some(0.015));
 
-    // coherent mask inside the seam band (bigger blobs)
+    // Coherent mask for dithering in the seam band
     let mut mix_mask_n = FastNoiseLite::with_seed(cfg.seed ^ 0xB1D3_B10Du32 as i32);
     mix_mask_n.set_noise_type(Some(NoiseType::OpenSimplex2));
     mix_mask_n.set_frequency(Some(0.045));
@@ -100,12 +101,11 @@ pub async fn generate_chunk_async_noise(
     mix_mask_n.set_fractal_gain(Some(0.5));
     mix_mask_n.set_fractal_lacunarity(Some(2.0));
 
-    // Large-scale curve of the seam (meanders along the border)
-    let mut seam_large = FastNoiseLite::with_seed(cfg.seed ^ 0x7A61_5EAF);
+    // Seam curving noises
+    let mut seam_large  = FastNoiseLite::with_seed(cfg.seed ^ 0x7A61_5EAF);
     seam_large.set_noise_type(Some(NoiseType::OpenSimplex2));
     seam_large.set_frequency(Some(0.019));
 
-    // Small detail wobble on top
     let mut seam_detail = FastNoiseLite::with_seed(cfg.seed ^ 0x51DE_77A1);
     seam_detail.set_noise_type(Some(NoiseType::OpenSimplex2));
     seam_detail.set_frequency(Some(0.065));
@@ -114,16 +114,13 @@ pub async fn generate_chunk_async_noise(
     seam_detail.set_fractal_gain(Some(0.5));
     seam_detail.set_fractal_lacunarity(Some(2.0));
 
-    // Seam field (2D) → produces rounded bulges, shared across chunks.
-    let mut seam_n = FastNoiseLite::with_seed(cfg.seed ^ 0x7A61_5EAF);
-    seam_n.set_noise_type(Some(NoiseType::OpenSimplex2));
-    seam_n.set_frequency(Some(0.035));
-    seam_n.set_fractal_type(Some(FractalType::FBm));
-    seam_n.set_fractal_octaves(Some(3));
-    seam_n.set_fractal_gain(Some(0.5));
-    seam_n.set_fractal_lacunarity(Some(2.0));
+    // Tiny tie-break jitter
+    let mut tie_jitter = FastNoiseLite::with_seed(cfg.seed ^ 0x00C1_E55E);
+    tie_jitter.set_noise_type(Some(NoiseType::Perlin));
+    tie_jitter.set_frequency(Some(0.11));
 
-    // ---- helpers ----
+    /* -------------------- Helpers -------------------- */
+
     #[inline] fn map01(x: f32) -> f32 { (x * 0.5) + 0.5 }
     #[inline]
     fn smoothstep(a: f32, b: f32, x: f32) -> f32 {
@@ -132,7 +129,7 @@ pub async fn generate_chunk_async_noise(
     }
     #[inline] fn lerp(a: f32, b: f32, t: f32) -> f32 { a + (b - a) * t }
 
-    // Height function; unchanged in principle (MC-like)
+    // Height function (MC-like)
     let height_at = |xf: f32, zf: f32| -> f32 {
         let p_raw = map01(plains_n.get_noise_2d(xf, zf));
         let plains_mask = smoothstep(
@@ -180,77 +177,103 @@ pub async fn generate_chunk_async_noise(
         h
     };
 
-    // ---- seam math (world-space, curved) ----
+    // Generic seam weight (for X- or Z-aligned borders).
+    // axis_x = true → vertical edge at x = edge_pos; axis_x = false → horizontal at z = edge_pos.
     #[inline]
-    fn seam_weight_x(
-        world_x: f32, world_z: f32,
-        edge_x: f32, r: f32, salt: u32,
-        large: &FastNoiseLite, detail: &FastNoiseLite
+    fn seam_weight(
+        world_x: f32,
+        world_z: f32,
+        edge_pos: f32,
+        axis_x: bool,
+        r: f32,
+        salt: u32,
+        large: &FastNoiseLite,
+        detail: &FastNoiseLite,
     ) -> (f32 /*score*/, f32 /*perp_dist*/) {
         if r <= 0.5 { return (0.0, 1e9); }
 
-        // Order-independent pair offset, consistent on both sides
+        // Deterministic pair data (shared by both chunks)
         let ox = ((salt & 0xFFFF) as f32) * 0.00091;
         let oz = ((salt >> 16) as f32) * 0.00123;
         let dir = if (salt & 2) == 0 { 1.0 } else { -1.0 };
+        let base_phase = (salt as f32) * 0.00025;
 
-        // Perpendicular distance to the true border
-        let perp = (world_x - edge_x).abs();
-
-        // Variable radius (mild), limited to keep the seam near the border
-        let r_var = r * (0.80 + 0.30 * ((detail.get_noise_2d(world_z * 0.05 + ox * 2.0, world_x * 0.05 + oz * 2.0) * 0.5) + 0.5));
-
-        // Limit how far the center line can drift away from the border: <= 0.6 * r_var
-        let off_l = large .get_noise_2d(world_z * 0.06 + ox, world_x * 0.06 + oz) * (r_var * 0.45);
-        let off_s = detail.get_noise_2d(world_x * 0.12 - oz, world_z * 0.12 + ox) * (r_var * 0.15);
-        let off   = (off_l + off_s) * dir;
-
-        // Bell around the (limited) center line
-        let s = ((world_x - edge_x) - off).abs();
-        let base = if s >= r_var { 0.0 } else {
-            let u = 1.0 - (s / r_var);
-            u * u * (3.0 - 2.0 * u) // 0..1
+        let (p_along, p_perp) = if axis_x {
+            (world_z, world_x)
+        } else {
+            (world_x, world_z)
         };
 
-        // Gate by distance to the *true* edge to keep the blend band tight
-        // fully on up to 0.45*r, fades to zero by 0.95*r
-        let gate = 1.0 - ((perp - (0.45 * r_var)) / ((0.95 * r_var) - (0.45 * r_var))).clamp(0.0, 1.0);
-        let score = base * gate;
+        let perp = (p_perp - edge_pos).abs();
 
-        (score, perp)
-    }
-
-    #[inline]
-    fn seam_weight_z(
-        world_x: f32, world_z: f32,
-        edge_z: f32, r: f32, salt: u32,
-        large: &FastNoiseLite, detail: &FastNoiseLite
-    ) -> (f32 /*score*/, f32 /*perp_dist*/) {
-        if r <= 0.5 { return (0.0, 1e9); }
-
-        let ox = ((salt & 0xFFFF) as f32) * 0.00091;
-        let oz = ((salt >> 16) as f32) * 0.00123;
-        let dir = if (salt & 2) == 0 { 1.0 } else { -1.0 };
-
-        let perp = (world_z - edge_z).abs();
-
+        // Mild variable radius
         let r_var = r * (0.80 + 0.30 * ((detail.get_noise_2d(world_x * 0.05 + ox * 2.0, world_z * 0.05 + oz * 2.0) * 0.5) + 0.5));
+
+        // Baseline sinusoidal curvature + limited noise warp
+        let base_amp  = r_var * 0.18;
+        let base_freq = 0.035;
+        let off_b = (p_along * base_freq + base_phase).sin() * base_amp;
 
         let off_l = large .get_noise_2d(world_x * 0.06 + ox, world_z * 0.06 + oz) * (r_var * 0.45);
         let off_s = detail.get_noise_2d(world_z * 0.12 - oz, world_x * 0.12 + ox) * (r_var * 0.15);
-        let off   = (off_l + off_s) * dir;
+        let off   = ((off_l + off_s + off_b) * dir).clamp(-0.60 * r_var, 0.60 * r_var);
 
-        let s = ((world_z - edge_z) - off).abs();
+        // Bell around the (limited) centerline
+        let s    = ((p_perp - edge_pos) - off).abs();
         let base = if s >= r_var { 0.0 } else {
             let u = 1.0 - (s / r_var);
             u * u * (3.0 - 2.0 * u)
         };
 
+        // Gate by true distance to the edge
         let gate = 1.0 - ((perp - (0.45 * r_var)) / ((0.95 * r_var) - (0.45 * r_var))).clamp(0.0, 1.0);
-        let score = base * gate;
-
-        (score, perp)
+        (base * gate, perp)
     }
+
+    // Decide block for a given column height and Y.
+    #[inline]
+    fn column_block(
+        wy: i32,
+        h_final: i32,
+        beach_top_ok: bool,
+        beach_sub_ok: bool,
+        dirt_under_top: i32,
+        sand_under_beach: i32,
+        after_sand_dirt: i32,
+        ids: (BlockId, BlockId, BlockId, BlockId, BlockId),
+        chosen_top: BlockId,
+        chosen_bottom: BlockId,
+    ) -> BlockId {
+        let (_block_top, block_bottom, block_stone, block_seafloor, block_beach) = ids;
+
+        if h_final >= SEA_LEVEL {
+            if beach_top_ok {
+                // beach above sea
+                if wy == h_final { block_beach }
+                else if wy >= h_final - sand_under_beach { block_beach }
+                else if wy >= h_final - sand_under_beach - after_sand_dirt { block_bottom }
+                else { block_stone }
+            } else {
+                // regular land
+                if wy == h_final { chosen_top }
+                else if wy >= h_final - dirt_under_top { chosen_bottom }
+                else { block_stone }
+            }
+        } else {
+            // underwater
+            if beach_sub_ok {
+                if wy == h_final { block_seafloor }
+                else if wy >= h_final - 2 { block_seafloor }
+                else { block_bottom }
+            } else {
+                if wy == h_final { block_seafloor }
+                else if wy >= h_final - 2 { block_seafloor }
+                else { block_bottom }
+            }
+        }
+    }
+
+    /* -------------------- Main loop -------------------- */
 
     let r_f = blend.radius.max(1) as f32;
 
@@ -259,6 +282,23 @@ pub async fn generate_chunk_async_noise(
     let wz0f = wz0 as f32;
     let wx1f = (wx0 + CX as i32) as f32;
     let wz1f = (wz0 + CZ as i32) as f32;
+
+    // Prepare active edges list to avoid four near-identical branches
+    #[derive(Copy, Clone)]
+    enum EdgeOri { X(f32), Z(f32) }
+    #[derive(Copy, Clone)]
+    struct ActiveEdge {
+        top: BlockId,
+        bottom: BlockId,
+        salt: u32,
+        ori: EdgeOri,
+    }
+
+    let mut edges: smallvec::SmallVec<[ActiveEdge; 4]> = smallvec::SmallVec::new();
+    if let Some(e) = blend.west  { edges.push(ActiveEdge{ top: e.top,  bottom: e.bottom, salt: e.salt, ori: EdgeOri::X(wx0f) }); }
+    if let Some(e) = blend.east  { edges.push(ActiveEdge{ top: e.top,  bottom: e.bottom, salt: e.salt, ori: EdgeOri::X(wx1f) }); }
+    if let Some(e) = blend.north { edges.push(ActiveEdge{ top: e.top,  bottom: e.bottom, salt: e.salt, ori: EdgeOri::Z(wz0f) }); }
+    if let Some(e) = blend.south { edges.push(ActiveEdge{ top: e.top,  bottom: e.bottom, salt: e.salt, ori: EdgeOri::Z(wz1f) }); }
 
     for lz in 0..CZ {
         for lx in 0..CX {
@@ -296,67 +336,65 @@ pub async fn generate_chunk_async_noise(
             let beach_top_ok = near_top && has_water && has_land && slope_blocks <= BEACH_MAX_SLOPE;
             let beach_sub_ok = near_sub;
 
-            // ---- world-space curved seam weight (max over active edges) ----
+            // ---- world-space curved seam weight (only nearest edge) ----
             let mut best_score = 0.0f32;
             let mut best_perp  = 1e9f32;
             let mut nei_top    = block_top;
             let mut nei_bottom = block_bottom;
 
-            // west
-            if let Some(em) = blend.west  {
-                let (sc, perp) = seam_weight_x(xf, zf, wx0f, r_f, em.salt, &seam_large, &seam_detail);
-                if sc > 0.0 && (sc > best_score || perp < best_perp) {
-                    best_score = sc; best_perp = perp; nei_top = em.top; nei_bottom = em.bottom;
-                }
-            }
-            // east
-            if let Some(em) = blend.east  {
-                let (sc, perp) = seam_weight_x(xf, zf, wx1f, r_f, em.salt, &seam_large, &seam_detail);
-                if sc > 0.0 && (sc > best_score || perp < best_perp) {
-                    best_score = sc; best_perp = perp; nei_top = em.top; nei_bottom = em.bottom;
-                }
-            }
-            // north
-            if let Some(em) = blend.north {
-                let (sc, perp) = seam_weight_z(xf, zf, wz0f, r_f, em.salt, &seam_large, &seam_detail);
-                if sc > 0.0 && (sc > best_score || perp < best_perp) {
-                    best_score = sc; best_perp = perp; nei_top = em.top; nei_bottom = em.bottom;
-                }
-            }
-            // south
-            if let Some(em) = blend.south {
-                let (sc, perp) = seam_weight_z(xf, zf, wz1f, r_f, em.salt, &seam_large, &seam_detail);
-                if sc > 0.0 && (sc > best_score || perp < best_perp) {
-                    best_score = sc; best_perp = perp; nei_top = em.top; nei_bottom = em.bottom;
+            // Distances to X/Z edges for corner relaxation
+            let mut near_x = 1e9f32;
+            let mut near_z = 1e9f32;
+
+            for e in edges.iter().copied() {
+                let (edge_pos, is_x) = match e.ori { EdgeOri::X(v) => (v, true), EdgeOri::Z(v) => (v, false) };
+                let (sc, perp) = seam_weight(xf, zf, edge_pos, is_x, r_f, e.salt, &seam_large, &seam_detail);
+
+                // track axis-near distances for corner relax
+                if is_x { near_x = near_x.min(perp); } else { near_z = near_z.min(perp); }
+
+                if sc > 0.0 {
+                    // tiny tie-breaker to avoid stalemate straight lines
+                    let cand = sc + 0.006 * tie_jitter.get_noise_2d(xf * 0.5, zf * 0.5);
+                    if cand > best_score || (cand == best_score && perp < best_perp) {
+                        best_score = cand;
+                        best_perp  = perp;
+                        nei_top    = e.top;
+                        nei_bottom = e.bottom;
+                    }
                 }
             }
 
-            // Slope slightly reduces takeover
+            // Corner relaxer: damp coverage where close to both X and Z edges
+            let corner_mix = {
+                let ax = smoothstep(0.0, r_f * 0.40, r_f - near_x.min(r_f));
+                let az = smoothstep(0.0, r_f * 0.40, r_f - near_z.min(r_f));
+                (ax * az).clamp(0.0, 1.0)
+            };
+
+            // soft border boost (no hard forcing)
+            let bx = (lx as f32).min(CX as f32 - 1.0 - lx as f32).max(0.0);
+            let bz = (lz as f32).min(CZ as f32 - 1.0 - lz as f32).max(0.0);
+            let b  = bx.min(bz);
+            let border_boost = 1.0 - (b / 2.0).clamp(0.0, 1.0); // ~2 blocks
+
+            // Slope reduces takeover a bit
             let slope_factor = 1.0 - smoothstep(1.0, 4.0, slope_blocks as f32);
 
-            // 1-block forced border to kill any seam-grid artifacts
-            const FORCED_BORDER: i32 = 1;
-            let at_forced_border =
-                (blend.west.is_some()  && (lx as i32) < FORCED_BORDER) ||
-                    (blend.east.is_some()  && (lx as i32) >= (CX as i32 - FORCED_BORDER)) ||
-                    (blend.north.is_some() && (lz as i32) < FORCED_BORDER) ||
-                    (blend.south.is_some() && (lz as i32) >= (CZ as i32 - FORCED_BORDER));
+            // Coverage with gentle curve + corner relax + border bonus
+            let mut coverage = ((best_score * 1.40).min(1.0) * slope_factor).powf(0.80);
+            coverage *= 1.0 - 0.45 * corner_mix;
+            coverage = (coverage + border_boost * 0.18).clamp(0.0, 1.0);
 
-            // More tempered coverage (no deep wedges)
-            let coverage = (best_score * 1.25).min(1.0) * slope_factor;
-
-            // Coherent mask for dithering inside the band
-            let mask = map01(mix_mask_n.get_noise_2d(xf * 0.52, zf * 0.52));
-
-            // Final material: only the *winning* nearest edge may replace the column
-            let (col_top, col_bottom) = if at_forced_border || (best_score > 0.0 && mask < coverage) {
+            // Coherent dithering inside the band (slightly larger blobs)
+            let mask = map01(mix_mask_n.get_noise_2d(xf * 0.45, zf * 0.45));
+            let (col_top, col_bottom) = if best_score > 0.0 && mask < coverage {
                 (nei_top, nei_bottom)
             } else {
                 (block_top, block_bottom)
             };
 
             // ---- column fill (MC-like layering) ----
-            // small per-column variation
             let r_seed: u32 = (cfg.seed as u32) ^ 0xABCD_1234 ^ (wx as u32).rotate_left(7) ^ (wz as u32).rotate_left(13);
             let mut dirt_under_top   = (2 + (r_seed & 1)) as i32;
             let mut sand_under_beach = (2 + ((r_seed >> 1) & 1)) as i32;
@@ -369,30 +407,13 @@ pub async fn generate_chunk_async_noise(
             for ly in 0..CY {
                 let wy = Y_MIN + ly as i32;
                 if wy > h_final { break; }
-
-                let id = if h_final >= SEA_LEVEL {
-                    if beach_top_ok {
-                        if wy == h_final { block_beach }
-                        else if wy >= h_final - sand_under_beach { block_beach }
-                        else if wy >= h_final - sand_under_beach - after_sand_dirt { block_bottom }
-                        else { block_stone }
-                    } else {
-                        if wy == h_final { col_top }
-                        else if wy >= h_final - dirt_under_top { col_bottom }
-                        else { block_stone }
-                    }
-                } else {
-                    if beach_sub_ok {
-                        if wy == h_final { block_seafloor }
-                        else if wy >= h_final - 2 { block_seafloor }
-                        else { block_bottom }
-                    } else {
-                        if wy == h_final { block_seafloor }
-                        else if wy >= h_final - 2 { block_seafloor }
-                        else { block_bottom }
-                    }
-                };
-
+                let id = column_block(
+                    wy, h_final,
+                    beach_top_ok, beach_sub_ok,
+                    dirt_under_top, sand_under_beach, after_sand_dirt,
+                    (block_top, block_bottom, block_stone, block_seafloor, block_beach),
+                    col_top, col_bottom,
+                );
                 if id != 0 { out.set(lx, ly, lz, id); }
             }
         }

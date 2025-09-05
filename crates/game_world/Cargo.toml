@@ -40,3 +40,6 @@ version = "2.6.1"
 version = "2.0.1"
 default-features = false
 features = ["alloc"]
+
+[dependencies.smallvec]
+version = "1.15.1"
