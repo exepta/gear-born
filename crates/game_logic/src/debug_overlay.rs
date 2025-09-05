@@ -8,7 +8,7 @@ use game_core::key_converter::convert;
 use game_core::player::selection::SelectionState;
 use game_core::player::{GameMode, GameModeState};
 use game_core::states::{AppState, InGameStates};
-use game_core::world::biome::BiomeRegistry;
+use game_core::world::biome::{BiomeRegistry, BiomeSize};
 use game_core::world::block::{block_name_from_registry, get_block_world, BlockRegistry, MiningState, VOXEL_SIZE};
 use game_core::world::chunk::ChunkMap;
 use game_core::world::chunk_dim::*;
@@ -128,8 +128,7 @@ fn snap_biome(
     mut region_alloc: ResMut<BiomeRegionAllocator>,
     mut snap: ResMut<DebugSnapshot>,
 ) {
-    // Determine block coordinates to sample the biome for:
-    // Prefer the selected block (crosshair hit). Fallback to camera position (floored).
+    // Pick block position: prefer selected block, otherwise camera block.
     let (bx, bz) = if let Some(sel) = sel.as_ref() {
         if let Some(h) = sel.hit {
             (h.block_pos.x, h.block_pos.z)
@@ -142,13 +141,26 @@ fn snap_biome(
         (pos.x.floor() as i32, pos.z.floor() as i32)
     };
 
-    // Convert to chunk coords and query the biome (chunk → biome).
     let (cc, _) = world_to_chunk_xz(bx, bz);
-    let biome_name = region_alloc
-        .biome_for_chunk(cc, &biome_reg)
-        .unwrap_or_else(|| "—".to_string());
 
-    snap.biome_text = format!("Biome: {}", biome_name);
+    // Ask allocator for detailed region info; if missing, fall back to just biome name.
+    if let Some(info) = region_alloc.region_info_for_chunk(cc) {
+        let size_str = match info.size_tag {
+            BiomeSize::Small     => "Small",
+            BiomeSize::Medium    => "Medium",
+            BiomeSize::Large     => "Large",
+            BiomeSize::VeryLarge => "VeryLarge",
+            BiomeSize::Gigantic  => "Gigantic",
+            BiomeSize::Unknown   => "Unknown",
+        };
+        snap.biome_text = format!("Biome: {} ({} / {} chunks)", info.biome_name, size_str, info.size_current);
+    } else {
+        // Ensure a biome is resolved at least; this also seeds a region if needed.
+        let name = region_alloc
+            .biome_for_chunk(cc, &biome_reg)
+            .unwrap_or_else(|| "—".to_string());
+        snap.biome_text = format!("Biome: {} (— / —)", name);
+    }
 }
 
 fn snap_selection(

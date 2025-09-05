@@ -14,6 +14,15 @@ pub const DIR4: [IVec2; 4] = [
 pub struct RegionId(pub u64);
 
 #[derive(Debug, Clone)]
+pub struct RegionInfo {
+    pub id: RegionId,
+    pub biome_name: String,
+    pub size_current: u32,
+    pub size_target: u32,
+    pub size_tag: BiomeSize,
+}
+
+#[derive(Debug, Clone)]
 pub struct BiomeRegion {
     pub id: RegionId,
     pub origin: IVec2,       // seed/origin chunk
@@ -172,6 +181,18 @@ impl BiomeRegionAllocator {
         }
         out
     }
+
+    pub fn region_info_for_chunk(&self, chunk: IVec2) -> Option<RegionInfo> {
+        let rid = *self.chunk_to_region.get(&chunk)?;
+        let r   = self.regions.get(&rid)?;
+        Some(RegionInfo {
+            id: r.id,
+            biome_name: r.biome_name.clone(),
+            size_current: r.size_current,
+            size_target: r.size_target,
+            size_tag: infer_size_tag_from_target(r.size_target),
+        })
+    }
 }
 
 pub fn pick_biome_for_size(
@@ -260,4 +281,16 @@ pub fn f_rand01(x: i32, z: i32, seed: i32, salt: u64) -> f32 {
     // Map high 24 bits to [0,1)
     let m = ((h >> 40) & 0xFF_FFFF) as u32;
     (m as f32) / 16_777_216.0
+}
+
+#[inline]
+fn infer_size_tag_from_target(size_target: u32) -> BiomeSize {
+    // We infer the original tag by matching inclusive ranges.
+    for &tag in &[BiomeSize::Small, BiomeSize::Medium, BiomeSize::Large, BiomeSize::VeryLarge, BiomeSize::Gigantic] {
+        let (min_c, max_c) = size_chunk_limits(tag);
+        if size_target >= min_c && size_target <= max_c {
+            return tag;
+        }
+    }
+    BiomeSize::Unknown
 }

@@ -1,3 +1,4 @@
+use crate::world::block::BlockId;
 use bevy::prelude::*;
 use serde::*;
 use std::collections::HashMap;
@@ -96,6 +97,25 @@ pub struct BiomeGeneration {
     pub rivers: bool,
     pub sea: bool,
     pub rift: bool,
+}
+
+#[derive(Clone, Copy, Default)]
+pub struct BiomeEdgeBlend {
+    /// Blend radius in blocks (per edge).
+    pub radius: u8,
+    /// Neighbor materials per edge: (top, bottom) block IDs if the neighbor is a different biome.
+    pub west:  Option<EdgeMat>,
+    pub east:  Option<EdgeMat>,
+    pub north: Option<EdgeMat>,
+    pub south: Option<EdgeMat>,
+}
+
+#[derive(Clone, Copy, Default)]
+pub struct EdgeMat {
+    pub top: BlockId,
+    pub bottom: BlockId,
+    /// Edge-specific salt so both sides of the border share the same seam curve
+    pub salt: u32,
 }
 
 /// Main biome data structure that mirrors your JSON.
