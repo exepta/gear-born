@@ -122,6 +122,7 @@ pub struct EdgeMat {
     pub bottom: BlockId,
     /// Edge-specific salt so both sides of the border share the same seam curve
     pub salt: u32,
+    pub height_offset: f32,
 }
 
 #[derive(Clone, Copy, Debug, Default)]

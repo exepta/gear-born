@@ -359,8 +359,14 @@ fn schedule_chunk_generation(
                         if border_winner(&biome_name, &nei_name) == nei_name {
                             let (top, bottom, _, _, _) =
                                 resolve_surface_ids_for_biome(&reg, &biome_reg, &nei_name, gen_cfg.seed, cw);
+                            let nb = biome_reg.get(&nei_name).unwrap();
                             let salt = salt_for_pair(&biome_name, &nei_name);
-                            blend.west = Some(EdgeMat { top, bottom, salt });
+                            blend.west = Some(EdgeMat {
+                                top,
+                                bottom,
+                                salt,
+                                height_offset: nb.settings.height_offset,
+                            });
                         }
                     }
                 }
@@ -373,8 +379,14 @@ fn schedule_chunk_generation(
                         if border_winner(&biome_name, &nei_name) == nei_name {
                             let (top, bottom, _, _, _) =
                                 resolve_surface_ids_for_biome(&reg, &biome_reg, &nei_name, gen_cfg.seed, ce);
+                            let nb = biome_reg.get(&nei_name).unwrap();
                             let salt = salt_for_pair(&biome_name, &nei_name);
-                            blend.east = Some(EdgeMat { top, bottom, salt });
+                            blend.east = Some(EdgeMat {
+                                top,
+                                bottom,
+                                salt,
+                                height_offset: nb.settings.height_offset,
+                            });
                         }
                     }
                 }
@@ -387,8 +399,14 @@ fn schedule_chunk_generation(
                         if border_winner(&biome_name, &nei_name) == nei_name {
                             let (top, bottom, _, _, _) =
                                 resolve_surface_ids_for_biome(&reg, &biome_reg, &nei_name, gen_cfg.seed, cn);
+                            let nb = biome_reg.get(&nei_name).unwrap();
                             let salt = salt_for_pair(&biome_name, &nei_name);
-                            blend.north = Some(EdgeMat { top, bottom, salt });
+                            blend.north = Some(EdgeMat {
+                                top,
+                                bottom,
+                                salt,
+                                height_offset: nb.settings.height_offset,
+                            });
                         }
                     }
                 }
@@ -401,8 +419,14 @@ fn schedule_chunk_generation(
                         if border_winner(&biome_name, &nei_name) == nei_name {
                             let (top, bottom, _, _, _) =
                                 resolve_surface_ids_for_biome(&reg, &biome_reg, &nei_name, gen_cfg.seed, cs);
+                            let nb = biome_reg.get(&nei_name).unwrap();
                             let salt = salt_for_pair(&biome_name, &nei_name);
-                            blend.south = Some(EdgeMat { top, bottom, salt });
+                            blend.south = Some(EdgeMat {
+                                top,
+                                bottom,
+                                salt,
+                                height_offset: nb.settings.height_offset,
+                            });
                         }
                     }
                 }

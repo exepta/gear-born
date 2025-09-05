@@ -27,7 +27,7 @@ pub async fn generate_chunk_async_noise(
     coord: IVec2,
     ids: (BlockId, BlockId, BlockId, BlockId, BlockId), // (top, bottom, stone, seafloor, beach)
     blend: BiomeEdgeBlend,                               // world-space border blending
-    b_params: BiomeTerrainParams,                         // <-- per-biome controls
+    b_params: BiomeTerrainParams,                        // <-- per-biome controls
     cfg: WorldGenConfig,
 ) -> ChunkData {
     use std::f32::consts::TAU;
@@ -45,7 +45,7 @@ pub async fn generate_chunk_async_noise(
     const COAST_RING_SAMPLES: usize = 12;
     const BEACH_MAX_SLOPE: i32 = 2;
 
-    // Per-biome river toggle
+    // Per-biome toggles
     let enable_rivers: bool = b_params.rivers;
     let enable_coast: bool  = b_params.coast;
 
@@ -163,6 +163,7 @@ pub async fn generate_chunk_async_noise(
             h = lerp(mid, h, 1.0 - plains_mask * cfg.plains_flatten);
         }
 
+        // nur Bergspitzen mit biome-offset anheben
         let mountain_mask = 1.0 - plains_mask;
         let peak = smoothstep(0.55, 0.95, h01);
         h += b_params.height_offset * mountain_mask * peak;
@@ -183,6 +184,7 @@ pub async fn generate_chunk_async_noise(
             let r = river_n.get_noise_2d(rx, rz).abs();
             let core = 1.0 - smoothstep(0.02, 0.10, r);
             if core > 0.0 {
+                // ~2 Blöcke tiefer als vorher
                 let target = SEA_LEVEL as f32 - 3.0;
                 let w = (core * 0.95).clamp(0.0, 0.95);
                 h = lerp(h, target, w);
@@ -287,13 +289,13 @@ pub async fn generate_chunk_async_noise(
     #[derive(Copy, Clone)]
     enum EdgeOri { X(f32), Z(f32) }
     #[derive(Copy, Clone)]
-    struct ActiveEdge { top: BlockId, bottom: BlockId, salt: u32, ori: EdgeOri }
+    struct ActiveEdge { top: BlockId, bottom: BlockId, salt: u32, ori: EdgeOri, h_off: f32 }
 
     let mut edges: smallvec::SmallVec<[ActiveEdge; 4]> = smallvec::SmallVec::new();
-    if let Some(e) = blend.west  { edges.push(ActiveEdge{ top: e.top,  bottom: e.bottom, salt: e.salt, ori: EdgeOri::X(wx0f) }); }
-    if let Some(e) = blend.east  { edges.push(ActiveEdge{ top: e.top,  bottom: e.bottom, salt: e.salt, ori: EdgeOri::X(wx1f) }); }
-    if let Some(e) = blend.north { edges.push(ActiveEdge{ top: e.top,  bottom: e.bottom, salt: e.salt, ori: EdgeOri::Z(wz0f) }); }
-    if let Some(e) = blend.south { edges.push(ActiveEdge{ top: e.top,  bottom: e.bottom, salt: e.salt, ori: EdgeOri::Z(wz1f) }); }
+    if let Some(e) = blend.west  { edges.push(ActiveEdge{ top: e.top, bottom: e.bottom, salt: e.salt, ori: EdgeOri::X(wx0f), h_off: e.height_offset }); }
+    if let Some(e) = blend.east  { edges.push(ActiveEdge{ top: e.top, bottom: e.bottom, salt: e.salt, ori: EdgeOri::X(wx1f), h_off: e.height_offset }); }
+    if let Some(e) = blend.north { edges.push(ActiveEdge{ top: e.top, bottom: e.bottom, salt: e.salt, ori: EdgeOri::Z(wz0f), h_off: e.height_offset }); }
+    if let Some(e) = blend.south { edges.push(ActiveEdge{ top: e.top, bottom: e.bottom, salt: e.salt, ori: EdgeOri::Z(wz1f), h_off: e.height_offset }); }
 
     for lz in 0..CZ {
         for lx in 0..CX {
@@ -307,6 +309,7 @@ pub async fn generate_chunk_async_noise(
             let mut h_final = h_here.round() as i32;
             h_final = h_final.clamp(SEA_FLOOR_MIN, MOUNTAIN_MAX);
 
+            // Nachbarschaft für slope
             let h_xp = height_at(xf + 1.0, zf);
             let h_xm = height_at(xf - 1.0, zf);
             let h_zp = height_at(xf, zf + 1.0);
@@ -315,7 +318,7 @@ pub async fn generate_chunk_async_noise(
             let slope_z = (h_here - h_zp).abs().max((h_here - h_zm).abs());
             let slope_blocks = slope_x.max(slope_z).round() as i32;
 
-            // coast ring
+            // coast ring (für Beach-Checks)
             let mut has_water = false;
             let mut has_land  = false;
             for i in 0..COAST_RING_SAMPLES {
@@ -326,16 +329,13 @@ pub async fn generate_chunk_async_noise(
                 if hh < SEA_LEVEL as f32 { has_water = true; } else { has_land = true; }
                 if has_water && has_land { break; }
             }
-            let near_top = h_final >= SEA_LEVEL && (h_final - SEA_LEVEL) <= BEACH_TOP_BAND;
-            let near_sub = h_final <  SEA_LEVEL && (SEA_LEVEL - h_final) <= BEACH_SUB_BAND;
-            let beach_top_ok = near_top && has_water && has_land && slope_blocks <= BEACH_MAX_SLOPE;
-            let beach_sub_ok = near_sub;
 
             // ---- world-space curved seam weight (only the nearest edge) ----
             let mut best_score = 0.0f32;
             let mut best_perp  = 1e9f32;
             let mut nei_top    = block_top;
             let mut nei_bottom = block_bottom;
+            let mut nei_h_off  = b_params.height_offset;
 
             // track distances to x/z edges (corner relax)
             let mut near_x = 1e9f32;
@@ -349,7 +349,11 @@ pub async fn generate_chunk_async_noise(
                 if sc > 0.0 {
                     let c_and = sc + 0.006 * tie_jitter.get_noise_2d(xf * 0.5, zf * 0.5);
                     if c_and > best_score || (c_and == best_score && perp < best_perp) {
-                        best_score = c_and; best_perp = perp; nei_top = e.top; nei_bottom = e.bottom;
+                        best_score = c_and;
+                        best_perp  = perp;
+                        nei_top    = e.top;
+                        nei_bottom = e.bottom;
+                        nei_h_off  = e.h_off;
                     }
                 }
             }
@@ -375,13 +379,32 @@ pub async fn generate_chunk_async_noise(
             coverage *= 1.0 - 0.45 * corner_mix;
             coverage = (coverage + border_boost * 0.18).clamp(0.0, 1.0);
 
-            // coherent dithering
+            // coherent dithering (welche Oberflächen wir nehmen)
             let mask = map01(mix_mask_n.get_noise_2d(xf * 0.45, zf * 0.45));
             let (col_top, col_bottom) = if best_score > 0.0 && mask < coverage {
                 (nei_top, nei_bottom)
             } else {
                 (block_top, block_bottom)
             };
+
+            // ===================== HEIGHT STITCH (neu) =====================
+            let my_mid  = SEA_LEVEL as f32 + cfg.base_height + b_params.height_offset;
+            let nei_mid = SEA_LEVEL as f32 + cfg.base_height + nei_h_off;
+            let delta_mid = nei_mid - my_mid;
+
+            if best_score > 0.0 {
+                let w = coverage; // 0..1
+                let h_blended = (h_here + delta_mid * w)
+                    .clamp(SEA_FLOOR_MIN as f32, MOUNTAIN_MAX as f32);
+                h_final = h_blended.round() as i32;
+            }
+            // ===============================================================
+
+            // Beach-Bänder **nach** dem Stitch bestimmen
+            let near_top = h_final >= SEA_LEVEL && (h_final - SEA_LEVEL) <= BEACH_TOP_BAND;
+            let near_sub = h_final <  SEA_LEVEL && (SEA_LEVEL - h_final) <= BEACH_SUB_BAND;
+            let beach_top_ok = near_top && has_water && has_land && slope_blocks <= BEACH_MAX_SLOPE;
+            let beach_sub_ok = near_sub;
 
             // ---- column fill ----
             let r_seed: u32 = (cfg.seed as u32) ^ 0xABCD_1234 ^ (wx as u32).rotate_left(7) ^ (wz as u32).rotate_left(13);
@@ -410,6 +433,7 @@ pub async fn generate_chunk_async_noise(
 
     out
 }
+
 
 
 pub async fn mesh_subchunk_async(

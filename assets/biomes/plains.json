@@ -13,7 +13,7 @@
   },
   "settings": {
     "height_offset": 2.0,
-    "mountain_freq": 0.8
+    "mountain_freq": 1.2
   },
   "generation": {
     "rivers": true,
