@@ -96,6 +96,7 @@ pub struct BiomeSettings {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BiomeGeneration {
     pub rivers: bool,
+    pub coast: bool,
     pub sea: bool,
     pub rift: bool,
 }
@@ -127,6 +128,7 @@ pub struct BiomeTerrainParams {
     pub mountain_freq: f32,
     /// Enables river carving for this biome.
     pub rivers: bool,
+    pub coast: bool
 }
 
 /// Main biome data structure that mirrors your JSON.

@@ -47,7 +47,7 @@ pub async fn generate_chunk_async_noise(
 
     // Per-biome river toggle
     let enable_rivers: bool = b_params.rivers;
-    const ENABLE_COAST: bool  = true;
+    let enable_coast: bool  = b_params.coast;
 
     let (block_top, block_bottom, block_stone, block_seafloor, block_beach) = ids;
     let mut out = ChunkData::new();
@@ -154,7 +154,7 @@ pub async fn generate_chunk_async_noise(
         let local_span = lerp(cfg.plains_span as f32, cfg.height_span as f32, 1.0 - plains_mask);
 
         // biome-sensitive middle height
-        let mid = SEA_LEVEL as f32 + cfg.base_height + b_params.height_offset;
+        let mid = SEA_LEVEL as f32 + cfg.base_height;
 
         let mut h = mid + (h01 - 0.5) * local_span;
         h += (roll - 0.5) * 3.0;
@@ -163,7 +163,11 @@ pub async fn generate_chunk_async_noise(
             h = lerp(mid, h, 1.0 - plains_mask * cfg.plains_flatten);
         }
 
-        if ENABLE_COAST {
+        let mountain_mask = 1.0 - plains_mask;
+        let peak = smoothstep(0.55, 0.95, h01);
+        h += b_params.height_offset * mountain_mask * peak;
+
+        if enable_coast {
             let dist = h - SEA_LEVEL as f32;
             let ramp = 1.0 - smoothstep(0.0, COAST_WIDTH, dist.abs());
             let compress = lerp(0.70, 1.0, 1.0 - ramp);

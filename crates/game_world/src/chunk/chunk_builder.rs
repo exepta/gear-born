@@ -419,6 +419,7 @@ fn schedule_chunk_generation(
 
                 // rivers per-biome toggle
                 rivers: b.generation.rivers,
+                coast: b.generation.coast
             };
 
             let task = pool.spawn(async move {
