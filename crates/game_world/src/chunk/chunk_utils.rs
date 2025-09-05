@@ -32,25 +32,41 @@ pub async fn generate_chunk_async_noise(
 ) -> ChunkData {
     use std::f32::consts::TAU;
 
-    // ---- MC-like constants ----
+    /* -------------------- Constants -------------------- */
+
+    // World height clamps
     const SEA_FLOOR_MIN: i32 = -5;
     const MOUNTAIN_MAX: i32 = 192;
 
+    // Beaches / coast
     const BEACH_TOP_BAND: i32 = 1;
     const BEACH_SUB_BAND: i32 = 2;
-
-    // Coast shaping (slightly gentler to avoid flooding)
     const COAST_WIDTH: f32 = 6.0;
     const COAST_RING_R: f32 = 6.0;
     const COAST_RING_SAMPLES: usize = 12;
     const BEACH_MAX_SLOPE: i32 = 2;
 
-    // ---- River rarity controls (tweak these) ----
-    const RIVER_FREQ: f32       = 0.0009; // ↓ fewer rivers / further apart (was 0.0016)
-    const RIVER_MASK_FREQ: f32  = 0.00075; // size of regions that allow rivers
-    const RIVER_RARITY: f32     = 0.62;    // 0..1, higher = rarer rivers (more areas with none)
-    const RIVER_CORE_MIN: f32   = 0.035;   // inner width threshold (was 0.02)
-    const RIVER_CORE_MAX: f32   = 0.12;    // outer width threshold (was 0.10)
+    // ---- River controls ----
+    // Frequency of the "river field" (lower => further apart rivers)
+    const RIVER_FREQ: f32       = 0.0012;
+    // Large-scale regions where rivers are allowed (rarity mask)
+    const RIVER_MASK_FREQ: f32  = 0.00075;
+    const RIVER_RARITY: f32     = 0.62; // higher => rarer rivers
+    // Target width (in blocks). We'll shape the core by an estimated distance field.
+    const RIVER_WIDTH_MIN: f32  = 16.0;
+    const RIVER_WIDTH_MAX: f32  = 24.0;
+    const RIVER_DEPTH: f32        = 3.0;
+    const RIVER_BANK_SOFTNESS: f32 = 1.35;
+    const RIVER_BANK_EXP: f32      = 1.6;
+    // Meandering: multi-scale domain warp
+    const RIVER_WARP_L_FREQ: f32 = 0.003;  // large, slow bends
+    const RIVER_WARP_L_AMP:  f32 = 65.0;
+    const RIVER_WARP_M_FREQ: f32 = 0.010;  // medium wiggles
+    const RIVER_WARP_M_AMP:  f32 = 22.0;
+    const RIVER_WARP_S_FREQ: f32 = 0.015;  // fine detail (legacy)
+    const RIVER_WARP_S_AMP:  f32 = 14.0;
+    // Distance estimation: gradient by finite differences (in world units)
+    const RIVER_GRAD_EPS: f32 = 3.0;
 
     // Per-biome toggles
     let enable_rivers: bool = b_params.rivers;
@@ -61,7 +77,7 @@ pub async fn generate_chunk_async_noise(
 
     /* -------------------- Noises -------------------- */
 
-    // Scale the main height frequency by biome.mountain_freq
+    // Scale main height frequency by biome.mountain_freq
     let base_freq = (cfg.height_freq * b_params.mountain_freq.max(0.01)).max(0.0001);
     let roll_freq = (cfg.height_freq * 2.1 * b_params.mountain_freq.max(0.01)).max(0.0001);
 
@@ -97,16 +113,27 @@ pub async fn generate_chunk_async_noise(
     coast_n.set_noise_type(Some(NoiseType::OpenSimplex2));
     coast_n.set_frequency(Some(0.010));
 
-    // Rivers (geometry sampling shared; application blended later)
+    // Rivers: field, warps, width variation, rarity mask
     let mut river_n = FastNoiseLite::with_seed(cfg.seed ^ 0x1357_9BDF);
     river_n.set_noise_type(Some(NoiseType::OpenSimplex2));
-    river_n.set_frequency(Some(RIVER_FREQ)); // was 0.0016
+    river_n.set_frequency(Some(RIVER_FREQ));
 
-    let mut river_warp_n = FastNoiseLite::with_seed(cfg.seed ^ 0x2468_ACF1);
-    river_warp_n.set_noise_type(Some(NoiseType::OpenSimplex2));
-    river_warp_n.set_frequency(Some(0.015));
+    let mut river_warp_l = FastNoiseLite::with_seed(cfg.seed ^ 0xDEAD_BEEFu32 as i32);
+    river_warp_l.set_noise_type(Some(NoiseType::OpenSimplex2));
+    river_warp_l.set_frequency(Some(RIVER_WARP_L_FREQ));
 
-    // Large-scale mask to turn whole river networks on/off (rarity)
+    let mut river_warp_m = FastNoiseLite::with_seed(cfg.seed ^ 0xACAC_ACACu32 as i32);
+    river_warp_m.set_noise_type(Some(NoiseType::OpenSimplex2));
+    river_warp_m.set_frequency(Some(RIVER_WARP_M_FREQ));
+
+    let mut river_warp_s = FastNoiseLite::with_seed(cfg.seed ^ 0x2468_ACF1);
+    river_warp_s.set_noise_type(Some(NoiseType::OpenSimplex2));
+    river_warp_s.set_frequency(Some(RIVER_WARP_S_FREQ));
+
+    let mut river_width_n = FastNoiseLite::with_seed(cfg.seed ^ 0x4433_2211);
+    river_width_n.set_noise_type(Some(NoiseType::OpenSimplex2));
+    river_width_n.set_frequency(Some(0.0011)); // slow width changes
+
     let mut river_mask_n = FastNoiseLite::with_seed(cfg.seed ^ 0x9C37_AA11u32 as i32);
     river_mask_n.set_noise_type(Some(NoiseType::OpenSimplex2));
     river_mask_n.set_frequency(Some(RIVER_MASK_FREQ));
@@ -148,8 +175,9 @@ pub async fn generate_chunk_async_noise(
     }
     #[inline] fn lerp(a: f32, b: f32, t: f32) -> f32 { a + (b - a) * t }
 
-    // Base height WITHOUT river lowering, plus a "river core" strength (0..1).
+    // Base terrain WITHOUT river lowering; returns also a "river core" 0..1 by distance.
     let height_no_river_and_core = |xf: f32, zf: f32| -> (f32 /*h_base*/, f32 /*river_core*/) {
+        // ----- base terrain -----
         let p_raw = map01(plains_n.get_noise_2d(xf, zf));
         let plains_mask = smoothstep(
             (cfg.plains_threshold - cfg.plains_blend).clamp(0.0, 1.0),
@@ -164,8 +192,6 @@ pub async fn generate_chunk_async_noise(
         let roll = map01(roll_n.get_noise_2d(xf + dx * 0.35, zf + dz * 0.35));
 
         let local_span = lerp(cfg.plains_span as f32, cfg.height_span as f32, 1.0 - plains_mask);
-
-        // biome-sensitive middle height
         let mid = SEA_LEVEL as f32 + cfg.base_height;
 
         let mut h = mid + (h01 - 0.5) * local_span;
@@ -175,11 +201,12 @@ pub async fn generate_chunk_async_noise(
             h = lerp(mid, h, 1.0 - plains_mask * cfg.plains_flatten);
         }
 
-        // peak-only lift (mountain biomes raise peaks rather than moving the whole column)
+        // peak-only lift for mountain biomes
         let mountain_mask = 1.0 - plains_mask;
         let peak = smoothstep(0.55, 0.95, h01);
         h += b_params.height_offset * mountain_mask * peak;
 
+        // coast shaping
         if enable_coast {
             let dist = h - SEA_LEVEL as f32;
             let ramp = 1.0 - smoothstep(0.0, COAST_WIDTH, dist.abs());
@@ -190,34 +217,68 @@ pub async fn generate_chunk_async_noise(
             h += dunes * 0.15 * (1.0 - smoothstep(0.0, COAST_WIDTH * 0.7, dist.abs()));
         }
 
-        // --- River core with rarity mask ---
-        let rx = xf + river_warp_n.get_noise_2d(xf * 0.015, zf * 0.015) * 24.0;
-        let rz = zf + river_warp_n.get_noise_2d(xf * 0.015 + 1000.0, zf * 0.015 - 1000.0) * 24.0;
-        let r  = river_n.get_noise_2d(rx, rz).abs();
-        let core_raw = 1.0 - smoothstep(RIVER_CORE_MIN, RIVER_CORE_MAX, r);
+        // ----- meandering river field (distance-based core) -----
+        // multi-scale domain warp for snakier paths
+        let mut rx = xf
+            + river_warp_l.get_noise_2d(xf * 0.6, zf * 0.6) * RIVER_WARP_L_AMP
+            + river_warp_m.get_noise_2d(xf * 1.2 + 1000.0, zf * 1.2 - 1000.0) * RIVER_WARP_M_AMP;
+        let mut rz = zf
+            + river_warp_l.get_noise_2d(xf * 0.6 + 123.0, zf * 0.6 - 123.0) * RIVER_WARP_L_AMP
+            + river_warp_m.get_noise_2d(xf * 1.2, zf * 1.2) * RIVER_WARP_M_AMP;
 
-        // Large-scale mask gate: 1 = allow rivers here, 0 = no rivers in this region.
+        // small-scale extra wiggle, evaluated in already-warped space
+        rx += river_warp_s.get_noise_2d(rx * 1.0, rz * 1.0) * RIVER_WARP_S_AMP;
+        rz += river_warp_s.get_noise_2d(rx * 1.0 + 1000.0, rz * 1.0 - 1000.0) * RIVER_WARP_S_AMP;
+
+        // river "ridge" value and gradient (finite differences)
+        let n = river_n.get_noise_2d(rx, rz);
+        let r = n.abs();
+
+        let nx1 = river_n.get_noise_2d(rx + RIVER_GRAD_EPS, rz);
+        let nx0 = river_n.get_noise_2d(rx - RIVER_GRAD_EPS, rz);
+        let nz1 = river_n.get_noise_2d(rx, rz + RIVER_GRAD_EPS);
+        let nz0 = river_n.get_noise_2d(rx, rz - RIVER_GRAD_EPS);
+        let gx = (nx1 - nx0) / (2.0 * RIVER_GRAD_EPS);
+        let gz = (nz1 - nz0) / (2.0 * RIVER_GRAD_EPS);
+        let grad = (gx * gx + gz * gz).sqrt().max(1e-5);
+
+        // approximate physical distance (in world blocks) to the centerline
+        let dist_to_axis = r / grad;
+
+        // width variation in blocks (follow the warped river space so it changes along the path)
+        let w_noise = map01(river_width_n.get_noise_2d(rx * 0.004, rz * 0.004));
+        let width_blocks = lerp(RIVER_WIDTH_MIN, RIVER_WIDTH_MAX, w_noise);
+        let half = width_blocks * 0.5;
+
+        let t = (dist_to_axis / (half * RIVER_BANK_SOFTNESS)).clamp(0.0, 1.0);
+
+        let mut bank_profile = 1.0 - (t * t * (3.0 - 2.0 * t));
+
+        // exponent softens the banks even more
+        bank_profile = bank_profile.powf(RIVER_BANK_EXP);
+
+        // Large-scale mask: turn whole river networks on/off (rarity)
         let m = map01(river_mask_n.get_noise_2d(xf * 0.6, zf * 0.6));
         let mask_gate = 1.0 - smoothstep(RIVER_RARITY, (RIVER_RARITY + 0.12).min(0.99), m);
 
-        let core = (core_raw * mask_gate).max(0.0);
-
-        (h, core)
+        // this function returns (height_without_lowering, river_weight)
+        // river_weight is our soft bank weight (0..1), not a hard core anymore
+        (h, (bank_profile * mask_gate).max(0.0))
     };
 
     // Height WITH river lowering (no seam blending).
     let height_at = |xf: f32, zf: f32| -> f32 {
         let (mut h, core) = height_no_river_and_core(xf, zf);
         if enable_rivers && core > 0.0 {
-            // ~2 blocks deeper river bed
-            let target = SEA_LEVEL as f32 - 3.0;
+            let target = SEA_LEVEL as f32 - RIVER_DEPTH;
             let w = (core * 0.95).clamp(0.0, 0.95);
             h = lerp(h, target, w);
         }
         h
     };
 
-    // ---------------- seam_weight, column_block stay unchanged ----------------
+    /* -------------------- seam_weight / column_block -------------------- */
+
     #[inline]
     fn seam_weight(
         world_x: f32,
@@ -239,7 +300,6 @@ pub async fn generate_chunk_async_noise(
         let perp = (p_perp - edge_pos).abs();
 
         let r_var = r * (0.80 + 0.30 * ((detail.get_noise_2d(world_x * 0.05 + ox * 2.0, world_z * 0.05 + oz * 2.0) * 0.5) + 0.5));
-
         let base_amp  = r_var * 0.18;
         let base_freq = 0.035;
         let off_b = (p_along * base_freq + base_phase).sin() * base_amp;
@@ -248,7 +308,7 @@ pub async fn generate_chunk_async_noise(
         let off_s = detail.get_noise_2d(world_z * 0.12 - oz, world_x * 0.12 + ox) * (r_var * 0.15);
         let off   = ((off_l + off_s + off_b) * dir).clamp(-0.60 * r_var, 0.60 * r_var);
 
-        let s    = ((p_perp - edge_pos) - off).abs();
+        let s = ((p_perp - edge_pos) - off).abs();
         let base = if s >= r_var { 0.0 } else {
             let u = 1.0 - (s / r_var);
             u * u * (3.0 - 2.0 * u)
@@ -299,6 +359,7 @@ pub async fn generate_chunk_async_noise(
 
     /* -------------------- Main loop -------------------- */
 
+    // blend radius only affects the edge belt
     let r_f = (blend.radius.max(1) as f32).min(12.0);
 
     let (wx0, wz0) = (coord.x * CX as i32, coord.y * CZ as i32);
@@ -307,17 +368,9 @@ pub async fn generate_chunk_async_noise(
     let wx1f = (wx0 + CX as i32) as f32;
     let wz1f = (wz0 + CZ as i32) as f32;
 
+    #[derive(Copy, Clone)] enum EdgeOri { X(f32), Z(f32) }
     #[derive(Copy, Clone)]
-    enum EdgeOri { X(f32), Z(f32) }
-    #[derive(Copy, Clone)]
-    struct ActiveEdge {
-        top: BlockId,
-        bottom: BlockId,
-        salt: u32,
-        ori: EdgeOri,
-        h_off: f32,
-        has_rivers: bool,
-    }
+    struct ActiveEdge { top: BlockId, bottom: BlockId, salt: u32, ori: EdgeOri, h_off: f32, has_rivers: bool }
 
     let mut edges: smallvec::SmallVec<[ActiveEdge; 4]> = smallvec::SmallVec::new();
     if let Some(e) = blend.west  { edges.push(ActiveEdge{ top: e.top, bottom: e.bottom, salt: e.salt, ori: EdgeOri::X(wx0f), h_off: e.height_offset, has_rivers: e.rivers }); }
@@ -332,11 +385,11 @@ pub async fn generate_chunk_async_noise(
             let xf = wx as f32;
             let zf = wz as f32;
 
-            // Heights with and without river
+            // heights (with and without river)
             let h_here = height_at(xf, zf);
-            let (h_no_river, _) = height_no_river_and_core(xf, zf);
+            let (h_no_river, core_here) = height_no_river_and_core(xf, zf);
 
-            // Neighborhood slope for beaches etc.
+            // slope for beaches, etc.
             let h_xp = height_at(xf + 1.0, zf);
             let h_xm = height_at(xf - 1.0, zf);
             let h_zp = height_at(xf, zf + 1.0);
@@ -345,19 +398,25 @@ pub async fn generate_chunk_async_noise(
             let slope_z = (h_here - h_zp).abs().max((h_here - h_zm).abs());
             let slope_blocks = slope_x.max(slope_z).round() as i32;
 
-            // Coast ring probe
-            let mut has_water = false;
-            let mut has_land  = false;
+            // small ring probe for coast/biome beaches
+            let probe_r = COAST_RING_R.max(RIVER_WIDTH_MAX * 0.75);
+            let mut ring_has_water = false;
+            let mut ring_has_land  = false;
             for i in 0..COAST_RING_SAMPLES {
                 let a = (i as f32) * (TAU / COAST_RING_SAMPLES as f32);
-                let sx = xf + a.cos() * COAST_RING_R;
-                let sz = zf + a.sin() * COAST_RING_R;
+                let sx = xf + a.cos() * probe_r;
+                let sz = zf + a.sin() * probe_r;
                 let hh = height_at(sx, sz);
-                if hh < SEA_LEVEL as f32 { has_water = true; } else { has_land = true; }
-                if has_water && has_land { break; }
+                if hh < SEA_LEVEL as f32 { ring_has_water = true; } else { ring_has_land = true; }
+                if ring_has_water && ring_has_land { break; }
             }
+            let river_near = enable_rivers && core_here > 0.20;
+            let has_water = ring_has_water || river_near;
+            let has_land  = ring_has_land  || !river_near;
 
-            // Nearest curved seam info
+
+
+            // choose nearest world-space curved seam
             let mut best_score = 0.0f32;
             let mut best_perp  = 1e9f32;
             let mut nei_top    = block_top;
@@ -386,23 +445,28 @@ pub async fn generate_chunk_async_noise(
                 }
             }
 
+            // corner relaxer
             let corner_mix = {
                 let ax = smoothstep(0.0, r_f * 0.40, r_f - near_x.min(r_f));
                 let az = smoothstep(0.0, r_f * 0.40, r_f - near_z.min(r_f));
                 (ax * az).clamp(0.0, 1.0)
             };
 
+            // soft border boost
             let bx = (lx as f32).min(CX as f32 - 1.0 - lx as f32).max(0.0);
             let bz = (lz as f32).min(CZ as f32 - 1.0 - lz as f32).max(0.0);
             let b  = bx.min(bz);
             let border_boost = 1.0 - (b / 2.0).clamp(0.0, 1.0);
 
+            // slope factor
             let slope_factor = 1.0 - smoothstep(1.0, 4.0, slope_blocks as f32);
 
+            // coverage for surface dithering
             let mut coverage = ((best_score * 1.40).min(1.0) * slope_factor).powf(0.80);
             coverage *= 1.0 - 0.45 * corner_mix;
             coverage = (coverage + border_boost * 0.18).clamp(0.0, 1.0);
 
+            // choose column surface set
             let mask = map01(mix_mask_n.get_noise_2d(xf * 0.45, zf * 0.45));
             let (col_top, col_bottom) = if best_score > 0.0 && mask < coverage {
                 (nei_top, nei_bottom)
@@ -410,21 +474,18 @@ pub async fn generate_chunk_async_noise(
                 (block_top, block_bottom)
             };
 
-            // ----------- River taper across seam -----------
+            // ---- RIVER TAPER across biome seam (river enable blends across edges) ----
             let river_delta_here = h_here - h_no_river; // <= 0 if river lowered the height
             let edge_w = if best_score > 0.0 {
                 let t = ((r_f - best_perp) / r_f).clamp(0.0, 1.0);
                 t * t * (3.0 - 2.0 * t)
             } else { 0.0 };
-
             let self_r = if enable_rivers { 1.0 } else { 0.0 };
             let nei_r  = if nei_has_rivers { 1.0 } else { 0.0 };
             let river_factor = if edge_w > 0.0 { lerp(self_r, nei_r, edge_w) } else { self_r };
-
             let mut h_comp = h_no_river + river_delta_here * river_factor;
-            // -----------------------------------------------
 
-            // --------- Height stitch (peak-lift only) -------
+            // ---- HEIGHT STITCH (peak-lift only to avoid walls) ----
             let p_raw_st = map01(plains_n.get_noise_2d(xf, zf));
             let plains_mask_st = smoothstep(
                 (cfg.plains_threshold - cfg.plains_blend).clamp(0.0, 1.0),
@@ -438,7 +499,6 @@ pub async fn generate_chunk_async_noise(
 
             let mountain_mask_st = 1.0 - plains_mask_st;
             let peak_st = smoothstep(0.55, 0.95, h01_st);
-
             let delta_peak = (nei_h_off - b_params.height_offset) * mountain_mask_st * peak_st;
 
             if edge_w > 0.0 {
@@ -446,18 +506,18 @@ pub async fn generate_chunk_async_noise(
                     .clamp(SEA_FLOOR_MIN as f32, MOUNTAIN_MAX as f32);
             }
 
-            // Final height
+            // final height
             let mut h_final = if edge_w == 0.0 { h_here } else { h_comp };
             h_final = h_final.clamp(SEA_FLOOR_MIN as f32, MOUNTAIN_MAX as f32);
             let h_final = h_final.round() as i32;
 
-            // Beaches
+            // beaches
             let near_top = h_final >= SEA_LEVEL && (h_final - SEA_LEVEL) <= BEACH_TOP_BAND;
             let near_sub = h_final <  SEA_LEVEL && (SEA_LEVEL - h_final) <= BEACH_SUB_BAND;
             let beach_top_ok = near_top && has_water && has_land && slope_blocks <= BEACH_MAX_SLOPE;
             let beach_sub_ok = near_sub;
 
-            // Column fill
+            // column fill
             let r_seed: u32 = (cfg.seed as u32) ^ 0xABCD_1234 ^ (wx as u32).rotate_left(7) ^ (wz as u32).rotate_left(13);
             let mut dirt_under_top   = (2 + (r_seed & 1)) as i32;
             let mut sand_under_beach = (2 + ((r_seed >> 1) & 1)) as i32;
