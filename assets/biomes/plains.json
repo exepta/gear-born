@@ -16,7 +16,7 @@
     "mountain_freq": 1.2
   },
   "generation": {
-    "rivers": false,
+    "rivers": true,
     "sea": false,
     "rift": false
   }

@@ -9,7 +9,7 @@ use bevy_rapier3d::prelude::*;
 use game_core::configuration::{GameConfig, WorldGenConfig};
 use game_core::events::chunk_events::{ChunkUnloadEvent, SubChunkNeedRemeshEvent};
 use game_core::states::{AppState, InGameStates, LoadingStates};
-use game_core::world::biome::{BiomeEdgeBlend, BiomeRegistry, EdgeMat};
+use game_core::world::biome::{BiomeEdgeBlend, BiomeRegistry, BiomeTerrainParams, EdgeMat};
 use game_core::world::block::{BlockId, BlockRegistry, VOXEL_SIZE};
 use game_core::world::chunk::*;
 use game_core::world::chunk_dim::*;
@@ -411,12 +411,18 @@ fn schedule_chunk_generation(
             // Spawn async gen; clone registry so the future is 'static
             let cfg = cfg_clone.clone();
             let root = ws_root.clone();
-            let ids_copy = ids;
-            let blend_copy = blend;
-            let reg_owned = (*reg).clone();
+
+            let b = biome_reg.get(&biome_name).unwrap();
+            let params = BiomeTerrainParams {
+                height_offset: b.settings.height_offset,
+                mountain_freq: b.settings.mountain_freq,
+
+                // rivers per-biome toggle
+                rivers: b.generation.rivers,
+            };
 
             let task = pool.spawn(async move {
-                let data = load_or_gen_chunk_async(root, c, ids_copy, blend_copy, &reg_owned, cfg).await;
+                let data = load_or_gen_chunk_async(root, c, ids, blend, params, cfg).await;
                 (c, data)
             });
             pending.0.insert(c, task);
