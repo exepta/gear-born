@@ -48,23 +48,24 @@ pub async fn generate_chunk_async_noise(
 
     // ---- River controls ----
     // Frequency of the "river field" (lower => further apart rivers)
-    const RIVER_FREQ: f32       = 0.0012;
-    // Large-scale regions where rivers are allowed (rarity mask)
-    const RIVER_MASK_FREQ: f32  = 0.00075;
-    const RIVER_RARITY: f32     = 0.62; // higher => rarer rivers
-    // Target width (in blocks). We'll shape the core by an estimated distance field.
-    const RIVER_WIDTH_MIN: f32  = 16.0;
-    const RIVER_WIDTH_MAX: f32  = 24.0;
-    const RIVER_DEPTH: f32        = 3.0;
-    const RIVER_BANK_SOFTNESS: f32 = 1.35;
-    const RIVER_BANK_EXP: f32      = 1.6;
-    // Meandering: multi-scale domain warp
-    const RIVER_WARP_L_FREQ: f32 = 0.003;  // large, slow bends
-    const RIVER_WARP_L_AMP:  f32 = 65.0;
-    const RIVER_WARP_M_FREQ: f32 = 0.010;  // medium wiggles
-    const RIVER_WARP_M_AMP:  f32 = 22.0;
-    const RIVER_WARP_S_FREQ: f32 = 0.015;  // fine detail (legacy)
-    const RIVER_WARP_S_AMP:  f32 = 14.0;
+    // ---- River controls (wider, slightly deeper, calmer) ----
+    const RIVER_FREQ: f32       = 0.0012;     // unchanged spacing
+    const RIVER_MASK_FREQ: f32  = 0.00075;    // unchanged
+    const RIVER_RARITY: f32     = 0.54;       // was 0.62 → weniger Lücken
+
+    const RIVER_WIDTH_MIN: f32  = 24.0;       // was 16.0
+    const RIVER_WIDTH_MAX: f32  = 36.0;       // was 24.0
+    const RIVER_DEPTH: f32        = 4.5;      // was 3.0 (etwas tiefer)
+    const RIVER_BANK_SOFTNESS: f32 = 1.10;    // was 1.35 (steilere Ufer)
+    const RIVER_BANK_EXP: f32      = 1.50;    // was 1.6  (etwas vollere Ufer)
+
+    const RIVER_WARP_L_FREQ: f32 = 0.003;     // stabilize meanders
+    const RIVER_WARP_L_AMP:  f32 = 60.0;      // was 65.0
+    const RIVER_WARP_M_FREQ: f32 = 0.010;
+    const RIVER_WARP_M_AMP:  f32 = 15.0;      // was 22.0
+    const RIVER_WARP_S_FREQ: f32 = 0.012;     // was 0.015
+    const RIVER_WARP_S_AMP:  f32 = 6.0;       // was 14.0
+
     // Distance estimation: gradient by finite differences (in world units)
     const RIVER_GRAD_EPS: f32 = 3.0;
 
@@ -250,11 +251,13 @@ pub async fn generate_chunk_async_noise(
         let width_blocks = lerp(RIVER_WIDTH_MIN, RIVER_WIDTH_MAX, w_noise);
         let half = width_blocks * 0.5;
 
-        let t = (dist_to_axis / (half * RIVER_BANK_SOFTNESS)).clamp(0.0, 1.0);
+        let core = (half * 0.30).max(2.0);           // inner flat half-width
+        let d_eff = (dist_to_axis - core).max(0.0);  // distance outside the flat core
+        let denom = (half - core).max(1.0);
+        let t = (d_eff / (denom * RIVER_BANK_SOFTNESS)).clamp(0.0, 1.0);
 
+        // Smoothstep side walls
         let mut bank_profile = 1.0 - (t * t * (3.0 - 2.0 * t));
-
-        // exponent softens the banks even more
         bank_profile = bank_profile.powf(RIVER_BANK_EXP);
 
         // Large-scale mask: turn whole river networks on/off (rarity)
