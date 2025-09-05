@@ -3,7 +3,7 @@
   "name": "Mountains",
   "climate": "normal",
   "rarity": 0.05,
-  "sizes": [ "small", "medium" ],
+  "sizes": [ "medium", "large" ],
   "surface": {
     "top": [ "grass_block" ],
     "bottom": [ "stone_block" ],
