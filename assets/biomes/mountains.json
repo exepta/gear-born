@@ -17,8 +17,9 @@
   },
   "generation": {
     "rivers": false,
+    "river_fill_threshold": 0.0,
     "coast": false,
-    "sea": false,
+    "lakes": false,
     "rift": false
   }
 }

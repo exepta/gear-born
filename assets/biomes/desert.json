@@ -13,12 +13,13 @@
   },
   "settings": {
     "height_offset": 2.0,
-    "mountain_freq": 1.2
+    "mountain_freq": 0.5
   },
   "generation": {
-    "rivers": false,
+    "rivers": true,
+    "river_fill_threshold": 0.40,
     "coast": true,
-    "sea": false,
+    "lakes": false,
     "rift": false
   }
 }

@@ -6,7 +6,7 @@ use game_core::configuration::WorldGenConfig;
 use game_core::states::{AppState, LoadingStates};
 use game_core::world::biome::{BiomeEdgeBlend, BiomeTerrainParams};
 use game_core::world::block::{BlockId, Face};
-use game_core::world::chunk::{ChunkData, ChunkMap, ChunkMeshIndex};
+use game_core::world::chunk::{ChunkData, ChunkMap, ChunkMeshIndex, SEA_LEVEL};
 use game_core::world::chunk_dim::*;
 use game_core::world::save::*;
 use lz4_flex::{compress_prepend_size, decompress_size_prepended};
@@ -33,15 +33,15 @@ pub async fn generate_chunk_async_noise(
     use std::f32::consts::TAU;
 
     // ---- MC-like constants ----
-    const SEA_LEVEL: i32 = 63;
-    const SEA_FLOOR_MIN: i32 = 5;
+
+    const SEA_FLOOR_MIN: i32 = -5;
     const MOUNTAIN_MAX: i32 = 192;
 
     const BEACH_TOP_BAND: i32 = 1;
     const BEACH_SUB_BAND: i32 = 2;
 
-    const COAST_WIDTH: f32 = 10.0;
-    const COAST_RING_R: f32 = 8.0;
+    const COAST_WIDTH: f32 = 8.0;
+    const COAST_RING_R: f32 = 6.0;
     const COAST_RING_SAMPLES: usize = 12;
     const BEACH_MAX_SLOPE: i32 = 2;
 
@@ -183,7 +183,9 @@ pub async fn generate_chunk_async_noise(
             let r = river_n.get_noise_2d(rx, rz).abs();
             let core = 1.0 - smoothstep(0.02, 0.10, r);
             if core > 0.0 {
-                h = lerp(h, SEA_LEVEL as f32 - 1.0, (core * 0.85).clamp(0.0, 0.85));
+                let target = SEA_LEVEL as f32 - 3.0;
+                let w = (core * 0.95).clamp(0.0, 0.95);
+                h = lerp(h, target, w);
             }
         }
 

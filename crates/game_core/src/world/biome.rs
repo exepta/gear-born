@@ -93,13 +93,17 @@ pub struct BiomeSettings {
 }
 
 /// Generation toggles for a biome.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct BiomeGeneration {
     pub rivers: bool,
+    pub river_fill_threshold: f32,
     pub coast: bool,
-    pub sea: bool,
+    #[serde(default = "default_true")]
+    pub lakes: bool,
     pub rift: bool,
 }
+
+fn default_true() -> bool { true }
 
 #[derive(Clone, Copy, Default)]
 pub struct BiomeEdgeBlend {
@@ -128,7 +132,9 @@ pub struct BiomeTerrainParams {
     pub mountain_freq: f32,
     /// Enables river carving for this biome.
     pub rivers: bool,
-    pub coast: bool
+    pub river_fill_threshold: f32,
+    pub coast: bool,
+    pub allow_lakes: bool,
 }
 
 /// Main biome data structure that mirrors your JSON.
