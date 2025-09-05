@@ -141,7 +141,7 @@ impl Biome {
 
 /// Bevy resource that stores all registered biomes.
 /// No plugin here; just the resource and some convenience methods.
-#[derive(Resource, Default)]
+#[derive(Resource, Default, Clone)]
 pub struct BiomeRegistry {
     by_name: HashMap<String, Biome>,
 }

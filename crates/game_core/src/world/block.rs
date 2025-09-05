@@ -72,7 +72,7 @@ impl Default for SelectedBlock {
 
 /* ---------------- registry ---------------- */
 
-#[derive(Resource)]
+#[derive(Resource, Clone)]
 pub struct BlockRegistry {
     pub defs: Vec<BlockDef>,
     pub name_to_id: HashMap<String, BlockId>,

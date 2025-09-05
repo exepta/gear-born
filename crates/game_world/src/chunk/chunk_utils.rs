@@ -1,14 +1,17 @@
 use crate::chunk::chunk_struct::*;
 use bevy::prelude::*;
 use bincode::{config, decode_from_slice, encode_to_vec};
+use fastnoise_lite::{FastNoiseLite, FractalType, NoiseType};
 use game_core::configuration::WorldGenConfig;
 use game_core::states::{AppState, LoadingStates};
-use game_core::world::block::{BlockId, Face};
+use game_core::world::biome::BiomeEdgeBlend;
+use game_core::world::block::{BlockId, BlockRegistry, Face};
 use game_core::world::chunk::{ChunkData, ChunkMap, ChunkMeshIndex};
 use game_core::world::chunk_dim::*;
 use game_core::world::save::*;
 use lz4_flex::{compress_prepend_size, decompress_size_prepended};
 use std::collections::HashMap;
+use std::f32::consts::TAU;
 use std::path::PathBuf;
 
 pub const MAX_INFLIGHT_MESH: usize = 32;
@@ -24,33 +27,30 @@ pub(crate) const DIR4: [IVec2; 4] = [
 pub async fn generate_chunk_async_noise(
     coord: IVec2,
     ids: (BlockId, BlockId, BlockId, BlockId, BlockId), // (top, bottom, stone, seafloor, beach)
+    blend: BiomeEdgeBlend,                               // world-space border blending
     cfg: WorldGenConfig,
+    _reg: &BlockRegistry,
 ) -> ChunkData {
-    use fastnoise_lite::{FastNoiseLite, FractalType, NoiseType};
-
-    // --- Global constants (MC-like) ---
+    // ---- MC-like constants ----
     const SEA_LEVEL: i32 = 63;
     const SEA_FLOOR_MIN: i32 = 5;
     const MOUNTAIN_MAX: i32 = 192;
 
-    // Beach band thickness near sea level
-    const BEACH_TOP_BAND: i32 = 1; // ≤ 1 block above sea level
-    const BEACH_SUB_BAND: i32 = 2; // ≤ 2 blocks below sea level
+    const BEACH_TOP_BAND: i32 = 1;
+    const BEACH_SUB_BAND: i32 = 2;
 
-    // Coast shaping window (smaller => beaches don't reach far inland)
     const COAST_WIDTH: f32 = 10.0;
+    const COAST_RING_R: f32 = 8.0;
+    const COAST_RING_SAMPLES: usize = 12;
+    const BEACH_MAX_SLOPE: i32 = 2;
 
-    // Neighbor sample step for coastline detection
-    const NEI_STEP: f32 = 2.0;
-
-    // optional features
     const ENABLE_RIVERS: bool = false;
-    const ENABLE_COAST: bool = true;
+    const ENABLE_COAST: bool  = true;
 
     let (block_top, block_bottom, block_stone, block_seafloor, block_beach) = ids;
     let mut out = ChunkData::new();
 
-    // --- Noises (driven by cfg) ---
+    // ---- Noises (height & masks) ----
     let mut base_n = FastNoiseLite::with_seed(cfg.seed);
     base_n.set_noise_type(Some(NoiseType::OpenSimplex2));
     base_n.set_frequency(Some(cfg.height_freq.max(0.0001)));
@@ -83,7 +83,7 @@ pub async fn generate_chunk_async_noise(
     coast_n.set_noise_type(Some(NoiseType::OpenSimplex2));
     coast_n.set_frequency(Some(0.010));
 
-    // Rivers (prepared but disabled)
+    // Rivers (kept even if disabled → compiles)
     let mut river_n = FastNoiseLite::with_seed(cfg.seed ^ 0x1357_9BDF);
     river_n.set_noise_type(Some(NoiseType::OpenSimplex2));
     river_n.set_frequency(Some(0.0016));
@@ -91,7 +91,25 @@ pub async fn generate_chunk_async_noise(
     river_warp_n.set_noise_type(Some(NoiseType::OpenSimplex2));
     river_warp_n.set_frequency(Some(0.015));
 
-    // --- Helpers ---
+    // Coherent mask inside the seam band (avoids salt-and-pepper)
+    let mut mixmask_n = FastNoiseLite::with_seed(cfg.seed ^ 0xB1D3_B10Du32 as i32);
+    mixmask_n.set_noise_type(Some(NoiseType::OpenSimplex2));
+    mixmask_n.set_frequency(Some(0.08));
+    mixmask_n.set_fractal_type(Some(FractalType::FBm));
+    mixmask_n.set_fractal_octaves(Some(2));
+    mixmask_n.set_fractal_gain(Some(0.5));
+    mixmask_n.set_fractal_lacunarity(Some(2.0));
+
+    // Seam field (2D) → produces rounded bulges, shared across chunks.
+    let mut seam_n = FastNoiseLite::with_seed(cfg.seed ^ 0x7A61_5EAF);
+    seam_n.set_noise_type(Some(NoiseType::OpenSimplex2));
+    seam_n.set_frequency(Some(0.035));
+    seam_n.set_fractal_type(Some(FractalType::FBm));
+    seam_n.set_fractal_octaves(Some(3));
+    seam_n.set_fractal_gain(Some(0.5));
+    seam_n.set_fractal_lacunarity(Some(2.0));
+
+    // ---- helpers ----
     #[inline] fn map01(x: f32) -> f32 { (x * 0.5) + 0.5 }
     #[inline]
     fn smoothstep(a: f32, b: f32, x: f32) -> f32 {
@@ -100,27 +118,8 @@ pub async fn generate_chunk_async_noise(
     }
     #[inline] fn lerp(a: f32, b: f32, t: f32) -> f32 { a + (b - a) * t }
 
-    #[inline]
-    fn col_rand_u32(x: i32, z: i32, seed: u32) -> u32 {
-        // Simple integer hash for layer depth variance
-        let mut v = (x as u32).wrapping_mul(0x9E37_79B9)
-            ^ (z as u32).wrapping_mul(0xC2B2_AE3D)
-            ^ seed.rotate_left(7);
-        v ^= v >> 15;
-        v = v.wrapping_mul(0x85EB_CA6B);
-        v ^= v >> 13;
-        v = v.wrapping_mul(0xC2B2_AE35);
-        v ^ (v >> 16)
-    }
-    #[inline]
-    fn col_rand_range(x: i32, z: i32, seed: u32, lo: u32, hi: u32) -> u32 {
-        let r = col_rand_u32(x, z, seed);
-        lo + (r % (hi - lo + 1))
-    }
-
-    // Reusable height function for neighbor checks (mirrors the pipeline)
+    // Height function; unchanged in principle (MC-like)
     let height_at = |xf: f32, zf: f32| -> f32 {
-        // Plains mask (0..1)
         let p_raw = map01(plains_n.get_noise_2d(xf, zf));
         let plains_mask = smoothstep(
             (cfg.plains_threshold - cfg.plains_blend).clamp(0.0, 1.0),
@@ -128,43 +127,84 @@ pub async fn generate_chunk_async_noise(
             p_raw,
         );
 
-        // Domain warp
         let warp_amp = lerp(cfg.warp_amp_plains, cfg.warp_amp, 1.0 - plains_mask);
         let dx = warp_n.get_noise_2d(xf, zf) * warp_amp;
         let dz = warp_n.get_noise_2d(xf + 1000.0, zf - 1000.0) * warp_amp;
 
-        // Base + rolling
         let h01 = map01(base_n.get_noise_2d(xf + dx, zf + dz));
         let roll = map01(roll_n.get_noise_2d(xf + dx * 0.35, zf + dz * 0.35));
 
         let local_span = lerp(cfg.plains_span as f32, cfg.height_span as f32, 1.0 - plains_mask);
-        let mid = SEA_LEVEL as f32 + cfg.base_height; // <- base_height verschiebt den Mittelwert
+        let mid = SEA_LEVEL as f32 + cfg.base_height;
         let mut h = mid + (h01 - 0.5) * local_span;
         h += (roll - 0.5) * 3.0;
 
-        // Flatten inside plains (gently)
         if cfg.plains_flatten > 0.0 {
             h = lerp(mid, h, 1.0 - plains_mask * cfg.plains_flatten);
         }
 
-        // Coast shaping with limited band
         if ENABLE_COAST {
             let dist = h - SEA_LEVEL as f32;
             let ramp = 1.0 - smoothstep(0.0, COAST_WIDTH, dist.abs());
-            let compress = lerp(0.70, 1.0, 1.0 - ramp); // gentle compression
+            let compress = lerp(0.70, 1.0, 1.0 - ramp);
             h = SEA_LEVEL as f32 + dist * compress;
 
-            // light dunes only very close to sea level
             let dunes = coast_n.get_noise_2d(xf * 1.7, zf * 1.7);
             h += dunes * 0.35 * (1.0 - smoothstep(0.0, COAST_WIDTH * 0.7, dist.abs()));
         }
 
-        // Rivers disabled
+        if ENABLE_RIVERS {
+            let rx = xf + river_warp_n.get_noise_2d(xf * 0.015, zf * 0.015) * 24.0;
+            let rz = zf + river_warp_n.get_noise_2d(xf * 0.015 + 1000.0, zf * 0.015 - 1000.0) * 24.0;
+            let r = river_n.get_noise_2d(rx, rz).abs();
+            let core = 1.0 - smoothstep(0.02, 0.10, r);
+            if core > 0.0 {
+                h = lerp(h, SEA_LEVEL as f32 - 1.0, (core * 0.85).clamp(0.0, 0.85));
+            }
+        }
 
         h
     };
 
+    // ---- seam math (world-space, curved) ----
+    #[inline]
+    fn seam_weight_x(world_x: f32, world_z: f32, edge_x: f32, r: f32, salt: u32, seam: &FastNoiseLite) -> f32 {
+        if r <= 0.5 { return 0.0; }
+        // pair-specific offset so both sides share the same seam curve
+        let ox = ((salt & 0xFFFF) as f32) * 0.00131;
+        let oz = ((salt >> 16) as f32) * 0.00173;
+        let sf = 0.09;
+        // curve: world 2D field -> offset of the center line away from the geometric edge
+        let off = seam.get_noise_2d(world_x * sf + ox, world_z * sf + oz) * (r * 0.85);
+        let s = ((world_x - edge_x) - off).abs();
+        if s >= r { 0.0 } else {
+            let u = 1.0 - (s / r);
+            (u * u) * (3.0 - 2.0 * u) // smooth bell
+        }
+    }
+
+    #[inline]
+    fn seam_weight_z(world_x: f32, world_z: f32, edge_z: f32, r: f32, salt: u32, seam: &FastNoiseLite) -> f32 {
+        if r <= 0.5 { return 0.0; }
+        let ox = ((salt & 0xFFFF) as f32) * 0.00131;
+        let oz = ((salt >> 16) as f32) * 0.00173;
+        let sf = 0.09;
+        let off = seam.get_noise_2d(world_x * sf + ox, world_z * sf + oz) * (r * 0.85);
+        let s = ((world_z - edge_z) - off).abs();
+        if s >= r { 0.0 } else {
+            let u = 1.0 - (s / r);
+            (u * u) * (3.0 - 2.0 * u)
+        }
+    }
+
+    let r_f = blend.radius.max(1) as f32;
+
     let (wx0, wz0) = (coord.x * CX as i32, coord.y * CZ as i32);
+    let wx0f = wx0 as f32;
+    let wz0f = wz0 as f32;
+    let wx1f = (wx0 + CX as i32) as f32;
+    let wz1f = (wz0 + CZ as i32) as f32;
+
     for lz in 0..CZ {
         for lx in 0..CX {
             let wx = wx0 + lx as i32;
@@ -172,76 +212,100 @@ pub async fn generate_chunk_async_noise(
             let xf = wx as f32;
             let zf = wz as f32;
 
-            // Current column height and neighbors for coastline detection
+            // ---- height/slope/coast ----
             let h_here = height_at(xf, zf);
-            let h_xp   = height_at(xf + NEI_STEP, zf);
-            let h_xm   = height_at(xf - NEI_STEP, zf);
-            let h_zp   = height_at(xf, zf + NEI_STEP);
-            let h_zm   = height_at(xf, zf - NEI_STEP);
-
             let mut h_final = h_here.round() as i32;
             h_final = h_final.clamp(SEA_FLOOR_MIN, MOUNTAIN_MAX);
 
-            // Simple slope metric (in blocks)
+            let h_xp = height_at(xf + 1.0, zf);
+            let h_xm = height_at(xf - 1.0, zf);
+            let h_zp = height_at(xf, zf + 1.0);
+            let h_zm = height_at(xf, zf - 1.0);
             let slope_x = (h_here - h_xp).abs().max((h_here - h_xm).abs());
             let slope_z = (h_here - h_zp).abs().max((h_here - h_zm).abs());
             let slope_blocks = slope_x.max(slope_z).round() as i32;
 
-            // Water in immediate neighborhood?
-            let neighbor_under_sea =
-                h_xp < SEA_LEVEL as f32 || h_xm < SEA_LEVEL as f32 ||
-                    h_zp < SEA_LEVEL as f32 || h_zm < SEA_LEVEL as f32;
+            // coast ring
+            let mut has_water = false;
+            let mut has_land  = false;
+            for i in 0..COAST_RING_SAMPLES {
+                let a = (i as f32) * (TAU / COAST_RING_SAMPLES as f32);
+                let sx = xf + a.cos() * COAST_RING_R;
+                let sz = zf + a.sin() * COAST_RING_R;
+                let hh = height_at(sx, sz);
+                if hh < SEA_LEVEL as f32 { has_water = true; } else { has_land = true; }
+                if has_water && has_land { break; }
+            }
+            let near_top = h_final >= SEA_LEVEL && (h_final - SEA_LEVEL) <= BEACH_TOP_BAND;
+            let near_sub = h_final <  SEA_LEVEL && (SEA_LEVEL - h_final) <= BEACH_SUB_BAND;
+            let beach_top_ok = near_top && has_water && has_land && slope_blocks <= BEACH_MAX_SLOPE;
+            let beach_sub_ok = near_sub;
 
-            // Land-beach condition
-            let beach_top_ok =
-                h_final >= SEA_LEVEL &&
-                    (h_final - SEA_LEVEL) <= BEACH_TOP_BAND &&
-                    neighbor_under_sea &&
-                    slope_blocks <= 2;
+            // ---- world-space curved seam weight (max over active edges) ----
+            let mut best_w = 0.0f32;
+            let mut nei_top = block_top;
+            let mut nei_bottom = block_bottom;
 
-            // Shallow underwater beach condition
-            let beach_sub_ok =
-                h_final < SEA_LEVEL &&
-                    (SEA_LEVEL - h_final) <= BEACH_SUB_BAND;
+            if let Some(em) = blend.west  {
+                let w = seam_weight_x(xf, zf, wx0f, r_f, em.salt, &seam_n);
+                if w > best_w { best_w = w; nei_top = em.top; nei_bottom = em.bottom; }
+            }
+            if let Some(em) = blend.east  {
+                let w = seam_weight_x(xf, zf, wx1f, r_f, em.salt, &seam_n);
+                if w > best_w { best_w = w; nei_top = em.top; nei_bottom = em.bottom; }
+            }
+            if let Some(em) = blend.north {
+                let w = seam_weight_z(xf, zf, wz0f, r_f, em.salt, &seam_n);
+                if w > best_w { best_w = w; nei_top = em.top; nei_bottom = em.bottom; }
+            }
+            if let Some(em) = blend.south {
+                let w = seam_weight_z(xf, zf, wz1f, r_f, em.salt, &seam_n);
+                if w > best_w { best_w = w; nei_top = em.top; nei_bottom = em.bottom; }
+            }
 
-            // Layer randomness
-            let r_seed: u32 = (cfg.seed as u32) ^ 0xABCD_1234;
-            let mut dirt_under_top   = col_rand_range(wx, wz, r_seed ^ 0x11, 2, 3) as i32;
-            let mut sand_under_beach = col_rand_range(wx, wz, r_seed ^ 0x22, 2, 3) as i32;
-            let     after_sand_dirt  = col_rand_range(wx, wz, r_seed ^ 0x33, 1, 2) as i32;
+            // softer on steep slopes; coverage decides if neighbor material wins
+            let slope_factor = 1.0 - smoothstep(1.0, 4.0, slope_blocks as f32);
+            let coverage = (best_w * slope_factor).powf(1.2) * 0.72;
+            let mask = map01(mixmask_n.get_noise_2d(xf * 0.85, zf * 0.85));
+            let (col_top, col_bottom) = if best_w > 0.0 && mask < coverage {
+                (nei_top, nei_bottom)
+            } else { (block_top, block_bottom) };
 
-            let soil_depth = 2.6 + (2 - slope_blocks).max(0) as f32 * 0.2;
+            // ---- column fill (MC-like layering) ----
+            // small per-column variation
+            let r_seed: u32 = (cfg.seed as u32) ^ 0xABCD_1234 ^ (wx as u32).rotate_left(7) ^ (wz as u32).rotate_left(13);
+            let mut dirt_under_top   = (2 + (r_seed & 1)) as i32;
+            let mut sand_under_beach = (2 + ((r_seed >> 1) & 1)) as i32;
+            let     after_sand_dirt  = (1 + ((r_seed >> 2) & 1)) as i32;
+
+            let soil_depth = 2.6 + (BEACH_MAX_SLOPE - slope_blocks).max(0) as f32 * 0.2;
             dirt_under_top   = dirt_under_top  .min((soil_depth.floor() as i32).max(0));
             sand_under_beach = sand_under_beach.min((soil_depth.ceil()  as i32).max(0));
 
-            // Fill column up to height
             for ly in 0..CY {
                 let wy = Y_MIN + ly as i32;
                 if wy > h_final { break; }
 
                 let id = if h_final >= SEA_LEVEL {
-                    // LAND
                     if beach_top_ok {
                         if wy == h_final { block_beach }
                         else if wy >= h_final - sand_under_beach { block_beach }
                         else if wy >= h_final - sand_under_beach - after_sand_dirt { block_bottom }
                         else { block_stone }
                     } else {
-                        if wy == h_final { block_top }
-                        else if wy >= h_final - dirt_under_top { block_bottom }
+                        if wy == h_final { col_top }
+                        else if wy >= h_final - dirt_under_top { col_bottom }
                         else { block_stone }
                     }
                 } else {
-                    // UNDER SEA LEVEL — no stone underwater:
-                    // top: seafloor, a few below: seafloor, deeper: dirt (clay-ish base)
                     if beach_sub_ok {
                         if wy == h_final { block_seafloor }
                         else if wy >= h_final - 2 { block_seafloor }
-                        else { block_bottom } // <- use dirt instead of stone in deeper water
+                        else { block_bottom }
                     } else {
                         if wy == h_final { block_seafloor }
                         else if wy >= h_final - 2 { block_seafloor }
-                        else { block_bottom } // <- no stone underwater
+                        else { block_bottom }
                     }
                 };
 
@@ -252,6 +316,7 @@ pub async fn generate_chunk_async_noise(
 
     out
 }
+
 
 pub async fn mesh_subchunk_async(
     chunk: &ChunkData,
@@ -404,6 +469,8 @@ pub async fn load_or_gen_chunk_async(
     ws_root: PathBuf,
     coord: IVec2,
     ids: (BlockId, BlockId, BlockId, BlockId, BlockId),
+    blend: BiomeEdgeBlend,
+    reg: &BlockRegistry,
     cfg: WorldGenConfig,
 ) -> ChunkData {
     let (r_coord, _) = chunk_to_region_slot(coord);
@@ -422,7 +489,7 @@ pub async fn load_or_gen_chunk_async(
             }
         }
     }
-    generate_chunk_async_noise(coord, ids, cfg).await
+    generate_chunk_async_noise(coord, ids, blend, cfg, reg).await
 }
 
 pub fn snapshot_borders(chunk_map: &ChunkMap, coord: IVec2, y0: usize, y1: usize) -> BorderSnapshot {
