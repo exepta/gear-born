@@ -1,0 +1,21 @@
+{
+  "localized_name": "ocean",
+  "name": "Ocean",
+  "stand_alone": true,
+  "climate": ["wet"],
+  "rarity": 0.34,
+  "sizes": [ "Ocean" ],
+  "surface": {
+    "top": ["sand_block"],
+    "bottom": ["sand_block"],
+    "sea_floor": ["sand_block"],
+    "upper_zero": ["sand_block"],
+    "under_zero": ["stone_block"]
+  },
+  "settings": {
+    "height_offset": -56.0
+  },
+  "generation": {
+    "rivers": false
+  }
+}

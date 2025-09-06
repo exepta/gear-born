@@ -4,7 +4,7 @@
   "stand_alone": true,
   "climate": ["dry", "hot"],
   "rarity": 0.1,
-  "sizes": [ "medium", "large", "huge" ],
+  "sizes": [ "Medium", "Large", "Huge" ],
   "surface": {
     "top": ["sand_block"],
     "bottom": ["sand_block"],
