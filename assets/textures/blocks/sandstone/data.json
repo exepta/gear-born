@@ -1,0 +1,12 @@
+{
+  "image": "sandstone.png",
+  "tile_size": 512,
+  "columns": 1,
+  "rows": 1,
+  "tiles": {
+    "sandstone": [
+      0,
+      0
+    ]
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "image": "gravel.png",
+  "tile_size": 512,
+  "columns": 1,
+  "rows": 1,
+  "tiles": {
+    "gravel": [
+      0,
+      0
+    ]
+  }
+}
