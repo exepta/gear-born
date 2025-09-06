@@ -4,7 +4,7 @@ use bincode::{config, decode_from_slice, encode_to_vec};
 use game_core::configuration::WorldGenConfig;
 use game_core::states::{AppState, LoadingStates};
 use game_core::world::block::{BlockId, Face};
-use game_core::world::chunk::{ChunkData, ChunkMap, ChunkMeshIndex};
+use game_core::world::chunk::{ChunkData, ChunkMap, ChunkMeshIndex, SEA_LEVEL};
 use game_core::world::chunk_dim::*;
 use game_core::world::save::*;
 use lz4_flex::{compress_prepend_size, decompress_size_prepended};
@@ -27,8 +27,7 @@ pub async fn generate_chunk_async_noise(
     cfg: WorldGenConfig,
 ) -> ChunkData {
     use fastnoise_lite::{FastNoiseLite, FractalType, NoiseType};
-
-    const SEA_LEVEL:      i32 = 62;
+    
     const COAST_MAX:      i32 = 58;
     const SEA_FLOOR_MIN:  i32 = 5;
     const MOUNTAIN_MAX:   i32 = 170;

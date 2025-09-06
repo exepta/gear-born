@@ -12,7 +12,7 @@ use std::path::Path;
 
 /* ---------------- constants ---------------- */
 
-pub const VOXEL_SIZE: f32 = 1.5;
+pub const VOXEL_SIZE: f32 = 1.0;
 const ATLAS_PAD_PX: f32 = 0.5;
 
 pub const BASE_BREAK_TIME: f32 = 0.55;

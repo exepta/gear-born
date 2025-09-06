@@ -2,7 +2,7 @@
   "localized_name": "desert",
   "name": "Desert",
   "stand_alone": true,
-  "climate": "",
+  "climate": ["dry", "hot"],
   "rarity": 0.1,
   "sizes": [ "medium", "large", "huge" ],
   "surface": {

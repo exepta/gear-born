@@ -3,6 +3,7 @@ use bevy::prelude::*;
 use game_core::player::PlayerCamera;
 use game_core::states::{AppState, InGameStates};
 use game_core::world::block::{fluid_at_world, VOXEL_SIZE};
+use game_core::world::chunk::SEA_LEVEL;
 use game_core::world::fluid::FluidMap;
 
 pub struct UnderwaterFxPlugin;
@@ -77,9 +78,8 @@ fn update_underwater_fx(
         let up = Vec3::Y;
 
         let t = view_dir.dot(up).clamp(0.0, 1.0);
-
-        let sea_level = 62.0;
-        let depth = (sea_level - eye.y).max(0.0);
+        
+        let depth = (SEA_LEVEL as f32 - eye.y).max(0.0);
         let depth_factor = (depth / 6.0).clamp(0.0, 1.0);
 
         let base = 0.45;

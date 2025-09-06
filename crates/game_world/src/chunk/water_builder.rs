@@ -9,7 +9,7 @@ use game_core::events::player_block_events::BlockBreakByPlayerEvent;
 use game_core::shader::water_material::{WaterMatHandle, WaterMaterial};
 use game_core::states::{AppState, InGameStates, LoadingStates};
 use game_core::world::block::{id_any, BlockRegistry, VOXEL_SIZE};
-use game_core::world::chunk::{ChunkMap, BIG, MAX_UPDATE_FRAMES};
+use game_core::world::chunk::{ChunkMap, BIG, MAX_UPDATE_FRAMES, SEA_LEVEL};
 use game_core::world::chunk_dim::*;
 use game_core::world::fluid::*;
 use game_core::world::save::{RegionCache, WorldSave};
@@ -197,7 +197,7 @@ fn enqueue_flow_on_block_removed(
 
         queue.0.push_back(FlowJob {
             seeds: vec![Seed{ c, x: e.chunk_x as i32, y: e.chunk_y as i32, z: e.chunk_z as i32 }],
-            sea_level: sea_level.unwrap_or(62),
+            sea_level: sea_level.unwrap_or(SEA_LEVEL),
             cap: WATER_FLOW_CAP,
         });
     }
@@ -248,7 +248,7 @@ fn collect_flow_jobs(
             res.filled.retain(|s| chunks.chunks.contains_key(&s.c));
 
             for s in res.filled {
-                let fc = fluids.0.entry(s.c).or_insert_with(|| FluidChunk::new(62));
+                let fc = fluids.0.entry(s.c).or_insert_with(|| FluidChunk::new(SEA_LEVEL));
 
                 if !fc.get(s.x as usize, s.y as usize, s.z as usize) {
                     fc.set(s.x as usize, s.y as usize, s.z as usize, true);
@@ -262,7 +262,7 @@ fn collect_flow_jobs(
 
             let mut push_job = |seeds: &mut Vec<Seed>| {
                 if seeds.is_empty() { return; }
-                let sea = fluids.0.get(&seeds[0].c).map(|f| f.sea_level).unwrap_or(62);
+                let sea = fluids.0.get(&seeds[0].c).map(|f| f.sea_level).unwrap_or(SEA_LEVEL);
                 queue.0.push_back(FlowJob { seeds: std::mem::take(seeds), sea_level: sea, cap: WATER_FLOW_CAP });
             };
 
@@ -338,7 +338,6 @@ fn schedule_water_generation_jobs(
     if budget == 0 { return; }
 
     let pool = AsyncComputeTaskPool::get();
-    let sea_level = 62i32;
     let seed = gen_cfg.seed as u32;
 
     while budget > 0 {
@@ -357,7 +356,7 @@ fn schedule_water_generation_jobs(
                 }
                 return (coord, wc);
             }
-            let wc = generate_water_for_chunk(coord, &chunk_copy, sea_level, seed, false);
+            let wc = generate_water_for_chunk(coord, &chunk_copy, SEA_LEVEL, seed, false);
             (coord, wc)
         });
 
