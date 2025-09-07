@@ -1,0 +1,23 @@
+{
+  "localized_name": "plains",
+  "name": "Plains",
+  "stand_alone": true,
+  "climate": ["normal"],
+  "rarity": 0.25,
+  "sizes": [ "Medium", "Large" ],
+  "surface": {
+    "top": ["grass_block"],
+    "bottom": ["dirt_block"],
+    "sea_floor": ["sand_block"],
+    "upper_zero": ["stone_block"],
+    "under_zero": ["stone_block"]
+  },
+  "settings": {
+    "height_offset": 8.0,
+    "land_amp": 20.0,
+    "land_freq": 0.0091
+  },
+  "generation": {
+    "rivers": true
+  }
+}
