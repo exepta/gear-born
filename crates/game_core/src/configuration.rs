@@ -289,7 +289,7 @@ pub struct WorldGenConfig {
 impl Default for WorldGenConfig {
     fn default() -> Self {
         Self {
-            seed: 2261732,
+            seed: 1337,
             enable_caves: false,
 
             base_height: 8,

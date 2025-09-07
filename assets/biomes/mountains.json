@@ -3,7 +3,7 @@
   "name": "Mountains",
   "stand_alone": false,
   "climate": ["normal"],
-  "rarity": 0.075,
+  "rarity": 0.1,
   "sizes": [ "Small", "Medium" ],
   "surface": {
     "top": ["grass_block"],
@@ -13,9 +13,9 @@
     "under_zero": ["stone_block"]
   },
   "settings": {
-    "height_offset": 64.0,
-    "mount_amp": 44.0,
-    "mount_freq": 0.025
+    "height_offset": 68.0,
+    "mount_amp": 46.0,
+    "mount_freq": 0.03
   },
   "generation": {
     "rivers": false

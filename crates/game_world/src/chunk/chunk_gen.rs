@@ -82,7 +82,7 @@ pub(crate) async fn generate_chunk_async_biome(
 ) -> ChunkData {
     let fallback_label = choose_biome_label_smoothed(biomes, coord, cfg_seed);
 
-    // noises
+    // Per-chunk noises
     let seafloor_n = make_seafloor_noise(cfg_seed, OCEAN_FREQ);
     let plains_n   = make_plains_noise(cfg_seed,   PLAINS_FREQ);
     let coast_n    = make_coast_noise(cfg_seed ^ SALT_COAST,  COAST_NOISE_FREQ);
@@ -92,6 +92,105 @@ pub(crate) async fn generate_chunk_async_biome(
     let pick_seed: u32 = (cfg_seed as u32) ^ 0x0CE4_11CE;
     let mut chunk = ChunkData::new();
 
+    // Small helper: compute total land height (base and optional mountains) for one land site
+    // and tell which biome should provide surface materials for this column if that site dominates.
+    #[inline]
+    fn site_total_height<'a>(
+        plains_n: &FastNoiseLite,
+        sub_edge_n: &FastNoiseLite,
+        biomes: &'a BiomeRegistry,
+        // site definition
+        site_biome: &'a Biome,
+        site_pos: Vec2,
+        site_r: f32,
+        // world position
+        wxf: f32,
+        wzf: f32,
+        p_chunks: Vec2,
+        // mixing with other sites
+        w_site: f32,
+        w_sum: f32,
+        // world seed
+        cfg_seed: i32,
+    ) -> (f32, &'a Biome, i32) {
+        // --- base plains height from this site's own settings
+        let base_off = site_biome.settings.height_offset;
+        let base_amp = site_biome.settings.land_amp.unwrap_or(PLAINS_AMP);
+        let mut h = sample_plains_height(plains_n, wxf, wzf, SEA_LEVEL, base_off, base_amp);
+
+        // default materials/soil
+        let mut mat_biome = site_biome;
+        let mut soil_cap_local = 3;
+
+        // --- optional mountains from this site (if it has a matching sub-biome active here)
+        // convert the per-site "distance score" for this column
+        let s_site = p_chunks.distance(site_pos) / site_r.max(1.0);
+
+        if site_biome.stand_alone && s_site.is_finite() && s_site < SUB_COAST_LIMIT {
+            if let Some((sub_b, s_sub)) =
+                pick_sub_biome_in_host(biomes, site_biome, site_pos, site_r, p_chunks, cfg_seed)
+            {
+                // core weight with a little edge noise
+                let edge_jit = (map01(sub_edge_n.get_noise_2d(wxf, wzf)) - 0.5) * 2.0 * SUB_EDGE_NOISE_AMP;
+                let mut core = sub_core_factor(s_sub + edge_jit);
+
+                // sub-biome adjacency guard
+                let adj = adjacency_support_factor(biomes, p_chunks, cfg_seed, site_biome, &sub_b.name);
+                core *= adj;
+
+                // fade mountains as this site loses influence against others
+                let site_influence = (w_site / w_sum).clamp(0.0, 1.0);
+                core *= site_influence;
+
+                if core > 0.0 && (sub_b.settings.mount_amp.is_some() || sub_b.settings.mount_freq.is_some()) {
+                    let amp  = sub_b.settings.mount_amp.unwrap_or(32.0);
+                    let freq = sub_b.settings.mount_freq.unwrap_or(0.015);
+                    let scale = (freq / MNT_BASE_FREQ).max(0.01);
+
+                    let ux = wxf * scale;
+                    let uz = wzf * scale;
+
+                    // mountain delta from plain noise
+                    let delta_c = sample_plains_mountain_delta(plains_n, ux, uz, amp);
+
+                    // 8-neighborhood sampling for smoothing & slope limiting
+                    let step_w = scale.max(0.001);
+                    let d_e  = sample_plains_mountain_delta(plains_n, ux + step_w, uz,           amp);
+                    let d_w  = sample_plains_mountain_delta(plains_n, ux - step_w, uz,           amp);
+                    let d_n  = sample_plains_mountain_delta(plains_n, ux,           uz + step_w, amp);
+                    let d_s  = sample_plains_mountain_delta(plains_n, ux,           uz - step_w, amp);
+                    let d_ne = sample_plains_mountain_delta(plains_n, ux + step_w,  uz + step_w, amp);
+                    let d_nw = sample_plains_mountain_delta(plains_n, ux - step_w,  uz + step_w, amp);
+                    let d_se = sample_plains_mountain_delta(plains_n, ux + step_w,  uz - step_w, amp);
+                    let d_sw = sample_plains_mountain_delta(plains_n, ux - step_w,  uz - step_w, amp);
+
+                    let neigh_avg8 = (d_e + d_w + d_n + d_s + d_ne + d_nw + d_se + d_sw) * 0.125;
+                    let neigh_max8 = d_e.max(d_w).max(d_n.max(d_s)).max(d_ne.max(d_nw).max(d_se.max(d_sw)));
+                    let delta_smooth = (delta_c * 2.0 + neigh_avg8) / 3.0;
+
+                    let slope_allow = MNT_WORLD_SLOPE * (0.5 + 0.5 * core);
+                    let delta_clamped = delta_smooth
+                        .min(neigh_avg8 + slope_allow)
+                        .min(neigh_max8 + slope_allow * 0.65);
+
+                    let edge_fade = smoothstep(MNT_DETAIL_EDGE_FADE_START, MNT_DETAIL_EDGE_FADE_END, core);
+                    let delta = delta_clamped * edge_fade;
+
+                    let dome = (amp * MNT_DOME_GAIN) * core.powf(MNT_DOME_EXP);
+                    h += dome + core * delta;
+
+                    // surface materials taken from the sub-biome when the site dominates locally
+                    if site_influence > 0.5 { mat_biome = sub_b; }
+
+                    // allow caller to use thicker soil on steeper spots
+                    soil_cap_local = slope_to_soil_cap(core, delta_c, [d_e, d_w, d_n, d_s, d_ne, d_nw, d_se, d_sw]);
+                }
+            }
+        }
+
+        (h, mat_biome, soil_cap_local)
+    }
+
     for lx in 0..CX {
         for lz in 0..CZ {
             let wx  = coord.x * CX as i32 + lx as i32;
@@ -99,105 +198,88 @@ pub(crate) async fn generate_chunk_async_biome(
             let wxf = wx as f32;
             let wzf = wz as f32;
 
+            // Column position in "chunk units" with sub-chunk precision
             let px = coord.x as f32 + (lx as f32 + 0.5) / (CX as f32);
             let pz = coord.y as f32 + (lz as f32 + 0.5) / (CZ as f32);
             let p_chunks = Vec2::new(px, pz);
 
+            // Nearest land and ocean sites (host = best land)
             let (best_land, best_ocean) = best_land_and_ocean_sites(biomes, p_chunks, cfg_seed);
 
-            let (land_host, host_pos, host_r, s_land) = if let Some((b, pos, r, s)) = best_land {
+            // Host land biome (fallback if none was found)
+            let (land0, pos0, r0, s0) = if let Some((b, pos, r, s)) = best_land {
                 (b, pos, r, s)
             } else {
                 (fallback_label, Vec2::ZERO, 1.0, f32::INFINITY)
             };
 
-            let mut land_biome_for_materials = land_host;
-            let plains_amp = land_host.settings.land_amp.unwrap_or(PLAINS_AMP);
-            let plains_off = land_host.settings.height_offset;
-            let mut h_land = sample_plains_height(&plains_n, wxf, wzf, SEA_LEVEL, plains_off, plains_amp);
+            // Second-best distinct land site (neighbor)
+            let (land1_opt, pos1, r1, s1) = if let Some((b2, p2, rr2, ss2)) =
+                best_second_land_site(biomes, p_chunks, cfg_seed, pos0)
+            {
+                (Some(b2), p2, rr2, ss2)
+            } else {
+                (None, Vec2::ZERO, 1.0, f32::INFINITY)
+            };
 
-            if land_host.stand_alone && s_land.is_finite() && s_land < SUB_COAST_LIMIT {
-                if let Some((sub_biome, s_sub)) = pick_sub_biome_in_host(biomes, land_host, host_pos, host_r, p_chunks, cfg_seed) {
-                    let edge_jit = (map01(sub_edge_n.get_noise_2d(wxf, wzf)) - 0.5) * 2.0 * SUB_EDGE_NOISE_AMP;
-                    let mut core = sub_core_factor(s_sub + edge_jit);
+            // Inverse-square weights (robust 0-division guard)
+            let w0 = land_weight_from_score(s0);
+            let w1 = land_weight_from_score(s1);
+            let w_sum = (w0 + w1).max(1e-6);
 
-                    let adj = adjacency_support_factor(biomes, p_chunks, cfg_seed, land_host, &sub_biome.name);
-                    core *= adj;
+            // --- total height for site 0 (host)
+            let (h0_total, mats0, soil0) =
+                site_total_height(&plains_n, &sub_edge_n, biomes, land0, pos0, r0, wxf, wzf, p_chunks, w0, w_sum, cfg_seed);
 
-                    if core > 0.0 && (sub_biome.settings.mount_amp.is_some() || sub_biome.settings.mount_freq.is_some()) {
-                        let amp  = sub_biome.settings.mount_amp.unwrap_or(32.0);
-                        let freq = sub_biome.settings.mount_freq.unwrap_or(0.015);
-                        let scale = (freq / MNT_BASE_FREQ).max(0.01);
+            // --- total height for site 1 (neighbor) – if none, reuse site 0 so blend is identity
+            let (h1_total, mats1, soil1) = if let Some(land1) = land1_opt {
+                site_total_height(&plains_n, &sub_edge_n, biomes, land1, pos1, r1, wxf, wzf, p_chunks, w1, w_sum, cfg_seed)
+            } else {
+                (h0_total, land0, soil0)
+            };
 
-                        let ux = wxf * scale;
-                        let uz = wzf * scale;
+            // Final land height = distance-weighted blend of both *total* heights.
+            // This is the key change that removes the cliff: the mountain contribution
+            // from the host is blended out continuously as the neighbor site takes over.
+            let h_land = (h0_total * w0 + h1_total * w1) / w_sum;
 
-                        let delta_c = sample_plains_mountain_delta(&plains_n, ux, uz, amp);
+            // Choose materials from whichever land site dominates locally
+            let land_biome_for_materials = if w0 >= w1 { mats0 } else { mats1 };
 
-                        let step_w = scale.max(0.001);
-
-                        let d_e  = sample_plains_mountain_delta(&plains_n, ux + step_w, uz,           amp);
-                        let d_w  = sample_plains_mountain_delta(&plains_n, ux - step_w, uz,           amp);
-                        let d_n  = sample_plains_mountain_delta(&plains_n, ux,           uz + step_w, amp);
-                        let d_s  = sample_plains_mountain_delta(&plains_n, ux,           uz - step_w, amp);
-                        let d_ne = sample_plains_mountain_delta(&plains_n, ux + step_w,  uz + step_w, amp);
-                        let d_nw = sample_plains_mountain_delta(&plains_n, ux - step_w,  uz + step_w, amp);
-                        let d_se = sample_plains_mountain_delta(&plains_n, ux + step_w,  uz - step_w, amp);
-                        let d_sw = sample_plains_mountain_delta(&plains_n, ux - step_w,  uz - step_w, amp);
-
-                        let neigh_avg8 = (d_e + d_w + d_n + d_s + d_ne + d_nw + d_se + d_sw) * 0.125;
-                        let neigh_max8 = d_e.max(d_w).max(d_n.max(d_s)).max(d_ne.max(d_nw).max(d_se.max(d_sw)));
-
-                        let delta_smooth = (delta_c * 2.0 + neigh_avg8) / 3.0;
-
-                        let slope_allow = MNT_WORLD_SLOPE * (0.5 + 0.5 * core);
-                        let delta_clamped = delta_smooth
-                            .min(neigh_avg8 + slope_allow)
-                            .min(neigh_max8 + slope_allow * 0.65);
-
-                        let edge_fade = smoothstep(MNT_DETAIL_EDGE_FADE_START, MNT_DETAIL_EDGE_FADE_END, core);
-                        let delta = delta_clamped * edge_fade;
-
-                        let dome = (amp * MNT_DOME_GAIN) * core.powf(MNT_DOME_EXP);
-                        h_land += dome + core * delta;
-                        land_biome_for_materials = sub_biome;
-                    }
-                }
-            }
-
-            // Ocean biome/materials
+            // Ocean biome/materials (fallback to any ocean or current land materials)
             let ocean_biome = if let Some((b, _p, _r, _s)) = best_ocean {
                 b
             } else {
                 any_ocean_biome(biomes).unwrap_or(land_biome_for_materials)
             };
 
-            // Ocean height
+            // Ocean height from ocean biome settings
             let h_ocean = {
                 let amp = ocean_biome.settings.seafloor_amp.unwrap_or(OCEAN_AMP);
                 let off = ocean_biome.settings.height_offset;
                 sample_ocean_height(&seafloor_n, wxf, wzf, SEA_LEVEL, off, amp)
             };
 
-            // Coast mask
+            // Coast mask: only fade to ocean if outside *all* land regions
+            let s_for_coast = s0.min(s1);
             let coast_offset = (map01(coast_n.get_noise_2d(wxf, wzf)) - 0.5) * 2.0 * COAST_NOISE_AMP_SCORE;
             let t_ocean = smoothstep(
                 1.0 - COAST_INSET_SCORE + coast_offset,
                 1.0 + COAST_BAND_SCORE  + coast_offset,
-                s_land
+                s_for_coast
             );
             let t_land = 1.0 - t_ocean;
 
-            // Final height
+            // Final height with optional sea floor clamp near open ocean
             let mut h_f = lerp(h_land, h_ocean, t_ocean)
                 .clamp((Y_MIN + 1) as f32, (SEA_LEVEL + 170) as f32);
             if t_ocean > 0.55 { h_f = h_f.min((SEA_LEVEL - 1) as f32); }
             let h_final = h_f.round() as i32;
 
-            // Dominant materials
+            // Dominant materials from land vs. ocean
             let dom_biome = if t_land >= 0.5 { land_biome_for_materials } else { ocean_biome };
 
-            // Resolve block ids
+            // Resolve block ids for surface/strata
             let top_name        = pick(&dom_biome.surface.top,        wx, wz, pick_seed ^ 0x11);
             let bottom_name     = pick(&dom_biome.surface.bottom,     wx, wz, pick_seed ^ 0x22);
             let sea_floor_name  = pick(&ocean_biome.surface.sea_floor,wx, wz, pick_seed ^ 0x33);
@@ -208,11 +290,14 @@ pub(crate) async fn generate_chunk_async_biome(
             let id_sea_floor  = reg.id_or_air(sea_floor_name);
             let id_upper_zero = reg.id_or_air(upper_zero_name);
 
+            // Beach cap width with detail noise
             let bw_noise = map01(coast_d.get_noise_2d(wxf, wzf));
             let beach_cap = BEACH_MIN + ((BEACH_MAX - BEACH_MIN) as f32 * bw_noise).round() as i32;
 
-            let soil_cap = 3;
+            // Adaptive soil from the dominating land site
+            let soil_cap = if w0 >= w1 { soil0 } else { soil1 };
 
+            // Write column blocks
             for ly in 0..CY {
                 let wy = Y_MIN + ly as i32;
                 if wy > h_final { break; }
@@ -220,8 +305,10 @@ pub(crate) async fn generate_chunk_async_biome(
                 let underwater = h_final < SEA_LEVEL;
 
                 let id: BlockId = if underwater {
+                    // Sand-only underwater
                     id_sea_floor
                 } else {
+                    // Sand cap around coasts for beaches
                     let near_coast = t_ocean > 0.10 && t_ocean < 0.90 && (h_final - SEA_LEVEL).abs() <= 5;
                     if wy == h_final {
                         if near_coast { id_sea_floor } else { id_top }
@@ -239,6 +326,7 @@ pub(crate) async fn generate_chunk_async_biome(
 
     chunk
 }
+
 
 /* ============================= Noises ======================================= */
 
@@ -287,6 +375,7 @@ fn sample_ocean_height(
     height_offset: f32,
     seafloor_amp: f32,
 ) -> f32 {
+    // Slightly slower noise to make a sea floor undulate more gently
     let s = 0.9;
     let hn = map01(n.get_noise_2d(wxf * s, wzf * s));
     let undulation = (hn - 0.5) * seafloor_amp;
@@ -303,36 +392,47 @@ fn sample_plains_height(
     height_offset: f32,
     land_amp: f32,
 ) -> f32 {
+    // Land uses FBm around the biome's base offset
     let hn = map01(n.get_noise_2d(wxf, wzf));
     let undulation = (hn - 0.5) * land_amp;
     let base = sea_level as f32 + height_offset;
     clamp_world_y(base + undulation)
 }
 
-/* ============= Mountains =================== */
+/* ============= Mountains (plains-based delta composer) =================== */
 
 #[inline]
 fn sample_plains_mountain_delta(n: &FastNoiseLite, ux: f32, uz: f32, amp_json: f32) -> f32 {
+    // Two bands at different scales mixed towards broader shapes
     let b = map01(n.get_noise_2d(ux * 0.60, uz * 0.60));
     let d = map01(n.get_noise_2d(ux * 1.20, uz * 1.20));
     let s = 0.85 * b + 0.15 * d;
 
+    // Emphasize peaks while keeping foothills shallow
     let peak = smoothstep(0.48, 0.86, s).powf(1.05);
 
+    // Slight amplitude modulation to avoid uniformity
     let a_mod = 0.90 + 0.20 * map01(n.get_noise_2d(ux * 0.25, uz * 0.25));
 
     amp_json * a_mod * peak
 }
 
+/* ============================= Sub-biome ==================================== */
 
-/* ============================= Sub-biome ============================= */
-
-// 0..1 (center→edge)
+// Convert a distance-normalized score (center→edge) into a smooth core weight (0..1)
 #[inline]
 fn sub_core_factor(s_norm: f32) -> f32 {
     let s = s_norm.clamp(0.0, 1.4);
     let t = ((s - SUB_CORE_END) / (SUB_CORE_START - SUB_CORE_END)).clamp(0.0, 1.0);
     t * t * (3.0 - 2.0 * t)
+}
+
+/* ----- Helper: inverse-square weight from site score (robust) ----- */
+#[inline]
+fn land_weight_from_score(s: f32) -> f32 {
+    // Lower scores mean "closer to center" -> higher weight
+    let sc = s.max(0.001);
+    1.0 / (sc * sc)
 }
 
 #[inline]
@@ -344,6 +444,7 @@ fn supports_sub(host: &Biome, sub_name: &str) -> bool {
     false
 }
 
+// Pick the most suitable sub-biome of `host` near `p` (dynamic, no fixed names)
 fn pick_sub_biome_in_host<'a>(
     biomes: &'a BiomeRegistry,
     host: &'a Biome,
@@ -359,6 +460,7 @@ fn pick_sub_biome_in_host<'a>(
 
     for (si, sub_raw) in subs.iter().enumerate() {
         let sub = match get_biome_case_insensitive(biomes, sub_raw) { Some(b) => b, None => continue };
+        // Determine a subarea from its size list (default Small)
         let (area_min, area_max) = {
             if sub.sizes.is_empty() {
                 size_to_area_bounds(&BiomeSize::Small)
@@ -368,26 +470,31 @@ fn pick_sub_biome_in_host<'a>(
             }
         };
 
+        // The number of subsites scales softly with rarity
         let rr = sub.rarity.clamp(SUB_PRESENT_MIN, SUB_PRESENT_MAX);
         let n_sites = (1.0 + rr * 5.0).round() as i32;
 
         for k in 0..n_sites.max(1) {
             let s_seed = (world_seed as u32) ^ SALT_SUB_SITES ^ hash32_str(&host.name) ^ hash32_str(&sub.name) ^ (k as u32);
+            // Draw area in [min.max]
             let t_r = rand01(host_pos.x as i32 + k, host_pos.y as i32 - k, s_seed ^ 0xA1);
             let area_site = area_min + t_r * (area_max - area_min);
             let mut r_site = (area_site / std::f32::consts::PI).sqrt();
             r_site = r_site.min(host_r * 0.75).max(4.0);
 
+            // Bias placement toward mid/outer ring to reduce overlap with a host center
             let u = rand01(host_pos.x as i32 - 13 * k, host_pos.y as i32 + 19 * k, s_seed ^ 0xB7);
             let d_edge_bias = u.powf(0.25);
             let max_d = (host_r - r_site).max(1.0);
             let min_d = (0.55 * host_r).min(max_d);
             let d = min_d + (max_d - min_d) * d_edge_bias;
 
+            // Random angle with slight rotation per site index
             let ang = (rand01(host_pos.x as i32 + 23 * k, host_pos.y as i32 - 29 * k, s_seed ^ 0xC7) * std::f32::consts::TAU)
                 + 0.17 * (k as f32);
             let sub_pos = host_pos + Vec2::new(ang.cos(), ang.sin()) * d;
 
+            // Score = normalized distance to the sub site
             let s = p.distance(sub_pos) / r_site.max(1.0);
             if best.map_or(true, |(_, sb)| s < sb) {
                 best = Some((sub, s));
@@ -398,7 +505,7 @@ fn pick_sub_biome_in_host<'a>(
     best
 }
 
-/* ------- (Adjacency-Guard) -------- */
+/* ------- Adjacency guard: allow sub-biome only next to supporting hosts ------- */
 
 fn adjacency_support_factor(
     biomes: &BiomeRegistry,
@@ -428,6 +535,7 @@ fn adjacency_support_factor(
             let score = d / site_radius.max(1.0);
             let neighbor_supports = supports_sub(site_biome, sub_name);
 
+            // Keep the closest different land site, defaulting to true on None.
             if best.map_or(true, |(s, _)| score < s) {
                 best = Some((score, neighbor_supports));
             }
@@ -522,6 +630,43 @@ fn best_land_and_ocean_sites<'a>(
     (best_land, best_ocean)
 }
 
+/* -- nearest "another" land site for land/land blending -- */
+fn best_second_land_site<'a>(
+    biomes: &'a BiomeRegistry,
+    p_chunks: Vec2,
+    world_seed: i32,
+    host_site_pos: Vec2,
+) -> Option<(&'a Biome, Vec2, f32, f32)> {
+    let gx = (p_chunks.x.floor() as i32).div_euclid(BASE_CELL_CHUNKS);
+    let gz = (p_chunks.y.floor() as i32).div_euclid(BASE_CELL_CHUNKS);
+
+    let mut best: Option<(&'a Biome, Vec2, f32, f32)> = None;
+
+    for dz in -SEARCH_RADIUS_CELLS..=SEARCH_RADIUS_CELLS {
+        for dx in -SEARCH_RADIUS_CELLS..=SEARCH_RADIUS_CELLS {
+            let cx = gx + dx;
+            let cz = gz + dz;
+
+            let (site_pos, site_biome, site_radius) =
+                site_properties_for_cell(biomes, cx, cz, world_seed);
+
+            // only land
+            if is_ocean_biome(site_biome) { continue; }
+            // skip ONLY the exact same site (same center as host)
+            if (site_pos - host_site_pos).length_squared() < 1e-6 { continue; }
+
+            let d = p_chunks.distance(site_pos);
+            let score = d / site_radius.max(1.0);
+
+            if best.map_or(true, |(_, _, _, s)| score < s) {
+                best = Some((site_biome, site_pos, site_radius, score));
+            }
+        }
+    }
+
+    best
+}
+
 fn site_properties_for_cell(
     biomes: &BiomeRegistry,
     cell_x: i32,
@@ -538,8 +683,10 @@ fn site_properties_for_cell(
 
     let r = rand01(cell_x, cell_z, (world_seed as u32) ^ SALT_PICK_BIOME) as f64;
 
+    // Sites may only come from standalone land biomes and oceans
     let biome = rarity_pick_site(biomes, r).expect("No biomes registered");
 
+    // Draw area uniformly from [min, max]
     let (area_min, area_max) = size_to_area_bounds(
         if biome.sizes.is_empty() { &BiomeSize::Medium } else {
             &biome.sizes[(rand_u32(cell_x, cell_z, (world_seed as u32) ^ SALT_PICK_SIZE) as usize) % biome.sizes.len()]
@@ -549,6 +696,7 @@ fn site_properties_for_cell(
     let t = rand01(cell_x, cell_z, (world_seed as u32).wrapping_add(0xFACE_FEED));
     let target_area_chunks = area_min + t * (area_max - area_min);
 
+    // area -> radius with small jitter, enforce a minimum radius
     let mut radius_chunks = (target_area_chunks / std::f32::consts::PI).sqrt();
     let jitter = 0.95 + 0.10 * rand01(cell_x, cell_z, (world_seed as u32).wrapping_add(0xDEAD_BEEF));
     radius_chunks *= jitter;
@@ -591,6 +739,29 @@ fn rarity_pick_site(biomes: &BiomeRegistry, r01: f64) -> Option<&Biome> {
     }
     let last = biomes.ordered_names.last().unwrap();
     biomes.by_name.get(last)
+}
+
+#[inline]
+fn slope_to_soil_cap(core: f32, delta_c: f32, n8: [f32; 8]) -> i32 {
+    if core <= 0.0 { return 3; } // plains/default
+
+    // max absolute difference to center (proxy for a slope)
+    let mut max_diff = 0.0f32;
+    let mut sum = 0.0f32;
+    for v in n8 {
+        let d = (v - delta_c).abs();
+        if d > max_diff { max_diff = d; }
+        sum += v;
+    }
+    let mean = sum * 0.125;
+    let mean_diff = (mean - delta_c).abs();
+
+    // roughness combines sharp contrast and average tilt; scaled by core
+    let rough = (max_diff * 0.85 + mean_diff * 0.40) * core;
+
+    // Convert to extra soil thickness in blocks
+    let extra = (rough * 2.6).round() as i32; // tune factor to taste
+    (3 + extra).clamp(3, 12)
 }
 
 fn size_to_area_bounds(size: &BiomeSize) -> (f32, f32) {
@@ -650,7 +821,7 @@ fn any_ocean_biome(biomes: &BiomeRegistry) -> Option<&Biome> {
     None
 }
 
-// Case-insensitive Lookup
+// Case-insensitive lookup for dynamic sub-biome references
 #[inline]
 fn get_biome_case_insensitive<'a>(biomes: &'a BiomeRegistry, name: &str) -> Option<&'a Biome> {
     if let Some(b) = biomes.by_name.get(name) { return Some(b); }
@@ -660,7 +831,7 @@ fn get_biome_case_insensitive<'a>(biomes: &'a BiomeRegistry, name: &str) -> Opti
     None
 }
 
-// FNV-1a 32-bit
+// FNV-1a 32-bit string hash (used only for deterministic seeding)
 #[inline]
 fn hash32_str(s: &str) -> u32 {
     let mut h: u32 = 0x811C9DC5;
