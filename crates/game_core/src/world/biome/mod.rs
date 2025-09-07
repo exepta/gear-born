@@ -17,7 +17,11 @@ pub struct Biome {
     #[serde(default = "default_sizes")]
     pub sizes: Vec<BiomeSize>,
     #[serde(default)]
-    pub surface: BiomeSurface
+    pub surface: BiomeSurface,
+    #[serde(default)]
+    pub settings: BiomeSettings,
+    #[serde(default)]
+    pub generation: BiomeGeneration
 }
 
 #[derive(Debug, Deserialize, PartialEq, Clone)]
@@ -34,13 +38,13 @@ pub enum BiomeSize {
 impl BiomeSize {
     pub fn from_str(s: &str) -> Self {
         match s {
-            "tiny" => Self::Tiny,
-            "small" => Self::Small,
-            "medium" => Self::Medium,
-            "large" => Self::Large,
-            "huge" => Self::Huge,
-            "giant" => Self::Giant,
-            "ocean" => Self::Ocean,
+            "tiny" => Self::Tiny, // Max 20 chunks
+            "small" => Self::Small, // Max 56 chunks
+            "medium" => Self::Medium, // Max 98 chunks
+            "large" => Self::Large, // Max 196 chunks
+            "huge" => Self::Huge, // Max 392 chunks
+            "giant" => Self::Giant, // Max 560 chunks
+            "ocean" => Self::Ocean, // Min 600 chunks
             _ => Self::Medium,
         }
     }
@@ -68,13 +72,13 @@ impl Default for BiomeSurface {
 }
 
 
-#[derive(Debug, Deserialize, PartialEq, Clone)]
+#[derive(Debug, Deserialize, PartialEq, Clone, Default)]
 pub struct BiomeSettings {
     #[serde(default)]
     pub height_offset: f32,
 }
 
-#[derive(Debug, Deserialize, PartialEq, Clone)]
+#[derive(Debug, Deserialize, PartialEq, Clone, Default)]
 pub struct BiomeGeneration {
     #[serde(default)]
     pub rivers: bool,
