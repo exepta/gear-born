@@ -3,19 +3,19 @@
   "name": "Mountains",
   "stand_alone": false,
   "climate": ["normal"],
-  "rarity": 0.095,
+  "rarity": 0.075,
   "sizes": [ "Small", "Medium" ],
   "surface": {
     "top": ["grass_block"],
-    "bottom": ["dirt_block"],
+    "bottom": ["stone_block"],
     "sea_floor": ["sand_block"],
     "upper_zero": ["stone_block"],
     "under_zero": ["stone_block"]
   },
   "settings": {
-    "height_offset": 56.0,
-    "land_amp": 22.0,
-    "land_freq": 0.0099
+    "height_offset": 64.0,
+    "mount_amp": 44.0,
+    "mount_freq": 0.025
   },
   "generation": {
     "rivers": false

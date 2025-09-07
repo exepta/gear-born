@@ -4,8 +4,8 @@
   "stand_alone": true,
   "subs": ["mountains"],
   "climate": ["normal"],
-  "rarity": 0.25,
-  "sizes": [ "Medium", "Large" ],
+  "rarity": 0.15,
+  "sizes": [ "Large", "Huge" ],
   "surface": {
     "top": ["grass_block"],
     "bottom": ["dirt_block"],
