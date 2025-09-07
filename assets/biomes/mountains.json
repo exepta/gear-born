@@ -1,11 +1,10 @@
 {
-  "localized_name": "plains",
-  "name": "Plains",
-  "stand_alone": true,
-  "subs": ["mountains"],
+  "localized_name": "mountains",
+  "name": "Mountains",
+  "stand_alone": false,
   "climate": ["normal"],
-  "rarity": 0.25,
-  "sizes": [ "Medium", "Large" ],
+  "rarity": 0.095,
+  "sizes": [ "Small", "Medium" ],
   "surface": {
     "top": ["grass_block"],
     "bottom": ["dirt_block"],
@@ -14,11 +13,11 @@
     "under_zero": ["stone_block"]
   },
   "settings": {
-    "height_offset": 8.0,
-    "land_amp": 18.0,
-    "land_freq": 0.0091
+    "height_offset": 56.0,
+    "land_amp": 22.0,
+    "land_freq": 0.0099
   },
   "generation": {
-    "rivers": true
+    "rivers": false
   }
 }
