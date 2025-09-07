@@ -2,7 +2,7 @@ use bevy::diagnostic::{DiagnosticsStore, EntityCountDiagnosticsPlugin, FrameTime
 use bevy::prelude::*;
 use bevy::render::renderer::RenderAdapterInfo;
 use bevy::render::view::RenderLayers;
-use game_core::configuration::GameConfig;
+use game_core::configuration::{GameConfig, WorldGenConfig};
 use game_core::debug::*;
 use game_core::key_converter::convert;
 use game_core::player::selection::SelectionState;
@@ -14,6 +14,10 @@ use game_core::world::chunk_dim::*;
 use game_core::{BlockCatalogPreviewCam, BuildInfo};
 use std::ops::Neg;
 use sysinfo::{CpuRefreshKind, MemoryRefreshKind, Pid, ProcessesToUpdate, RefreshKind, System};
+
+use game_core::world::biome::biome_func::choose_biome_label_smoothed;
+// ---- NEU: Biome-Imports ----
+use game_core::world::biome::registry::BiomeRegistry;
 
 #[derive(Resource, Default)]
 struct DebugSnapshot {
@@ -44,6 +48,8 @@ struct DebugSnapshot {
     // Hotkeys (for Ui)
     key_debug: String,
     key_grid: String,
+
+    biome_name: String,
 }
 
 pub struct DebugOverlayPlugin;
@@ -95,7 +101,9 @@ fn snap_perf(diag: Res<DiagnosticsStore>, stats: Res<SysStats>, mut snap: ResMut
 
 fn snap_camera_and_world(
     q_cam: Query<&GlobalTransform, (With<Camera3d>, Without<BlockCatalogPreviewCam>)>,
-    game_cfg: Res<GameConfig>,
+    config: Res<WorldGenConfig>,
+    game_config: Res<GameConfig>,
+    biomes: Res<BiomeRegistry>,
     mut snap: ResMut<DebugSnapshot>,
 ) {
     let pos = q_cam.single().map(|t| t.translation()).unwrap_or(Vec3::ZERO) / VOXEL_SIZE;
@@ -106,13 +114,22 @@ fn snap_camera_and_world(
         .map(|gt| facing_dir_from_cam(gt))
         .unwrap_or(("—", 0.0));
 
+    let world_seed: i32 = config.seed;
+    let biome = choose_biome_label_smoothed(&biomes, IVec2::new(cc.x, cc.y), world_seed);
+    let biome_name = if biome.name.is_empty() {
+        biome.localized_name.clone()
+    } else {
+        biome.name.clone()
+    };
+
     snap.pos_bs = pos;
     snap.chunk_cc = IVec2::new(cc.x, cc.y);
     snap.facing_text = facing_text;
     snap.yaw_deg = yaw_deg;
-    snap.chunk_range = game_cfg.graphics.chunk_range;
-    snap.key_debug = game_cfg.input.debug_overlay.clone();
-    snap.key_grid  = game_cfg.input.chunk_grid.clone();
+    snap.chunk_range = game_config.graphics.chunk_range;
+    snap.key_debug = game_config.input.debug_overlay.clone();
+    snap.key_grid  = game_config.input.chunk_grid.clone();
+    snap.biome_name = biome_name;
 }
 
 fn snap_selection(
@@ -186,7 +203,6 @@ fn setup_chunk_grid_gizmos(mut store: ResMut<GizmoConfigStore>) {
     cfg.0.render_layers = RenderLayers::layer(1);
 }
 
-
 fn setup_sys_info(mut stats: ResMut<SysStats>) {
     let mut s = System::new_with_specifics(
         RefreshKind::default()
@@ -223,6 +239,7 @@ fn render_debug_text(
          Location: ({:.2}, {:.2}, {:.2})\n\
          Facing: {} ({:.1}°)\n\
          Chunk: ({}, {})  (size: {}x{}, range: {})\n\
+         Biome: {}\n\
          {}\n\
          {}\n\
          Game Mode: {}\n\
@@ -235,6 +252,7 @@ fn render_debug_text(
         snap.pos_bs.x, snap.pos_bs.y, snap.pos_bs.z,
         snap.facing_text, snap.yaw_deg,
         snap.chunk_cc.x, snap.chunk_cc.y, CX, CZ, snap.chunk_range,
+        snap.biome_name,
         snap.block_line,
         snap.hit_str,
         snap.mode_text,
