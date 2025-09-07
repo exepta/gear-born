@@ -1,10 +1,11 @@
-use crate::chunk::chunk_gen::generate_chunk_async_noise;
+use crate::chunk::chunk_gen::generate_chunk_async_biome;
 use crate::chunk::chunk_struct::*;
 use bevy::prelude::*;
 use bincode::{config, decode_from_slice, encode_to_vec};
 use game_core::configuration::WorldGenConfig;
 use game_core::states::{AppState, LoadingStates};
-use game_core::world::block::{BlockId, Face};
+use game_core::world::biome::registry::BiomeRegistry;
+use game_core::world::block::{BlockId, BlockRegistry, Face};
 use game_core::world::chunk::{ChunkData, ChunkMap, ChunkMeshIndex};
 use game_core::world::chunk_dim::*;
 use game_core::world::save::*;
@@ -172,13 +173,16 @@ pub fn save_chunk_sync(
 pub async fn load_or_gen_chunk_async(
     ws_root: PathBuf,
     coord: IVec2,
-    ids: (BlockId, BlockId, BlockId, BlockId),
-    cfg: WorldGenConfig,
+    reg: &BlockRegistry,        // ⟵ NEW: pass the registry
+    biomes: &BiomeRegistry,     // ⟵ NEW: pass the biome registry
+    cfg: WorldGenConfig,        // we only need cfg.seed right now
 ) -> ChunkData {
+    // Try to load from a region file first
     let (r_coord, _) = chunk_to_region_slot(coord);
     let path = ws_root.join("region").join(format!("r.{}.{}.region", r_coord.x, r_coord.y));
     if let Ok(mut rf) = RegionFile::open(&path) {
         if let Ok(Some(buf)) = rf.read_chunk(coord) {
+            // Detect legacy container-wrapped blobs
             let data = if slot_is_container(&buf) {
                 container_find(&buf, TAG_BLK1).map(|b| b.to_vec())
             } else {
@@ -191,7 +195,10 @@ pub async fn load_or_gen_chunk_async(
             }
         }
     }
-    generate_chunk_async_noise(coord, ids, cfg).await
+
+    // Fallback: generate fresh chunk via biome-based generator
+    // Note: new generator expects (coord, &BlockRegistry, seed, &BiomeRegistry)
+    generate_chunk_async_biome(coord, reg, cfg.seed, biomes).await
 }
 
 pub fn snapshot_borders(chunk_map: &ChunkMap, coord: IVec2, y0: usize, y1: usize) -> BorderSnapshot {

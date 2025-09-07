@@ -76,6 +76,10 @@ impl Default for BiomeSurface {
 pub struct BiomeSettings {
     #[serde(default)]
     pub height_offset: f32,
+    #[serde(default)]
+    pub seafloor_amp: Option<f32>,
+    #[serde(default)]
+    pub seafloor_freq: Option<f32>,
 }
 
 #[derive(Debug, Deserialize, PartialEq, Clone, Default)]

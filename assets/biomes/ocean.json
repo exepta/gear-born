@@ -13,7 +13,9 @@
     "under_zero": ["stone_block"]
   },
   "settings": {
-    "height_offset": -56.0
+    "height_offset": -38.0,
+    "seafloor_amp": 36.0,
+    "seafloor_freq": 0.0045
   },
   "generation": {
     "rivers": false
