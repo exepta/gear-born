@@ -15,7 +15,7 @@ use game_core::{BlockCatalogPreviewCam, BuildInfo};
 use std::ops::Neg;
 use sysinfo::{CpuRefreshKind, MemoryRefreshKind, Pid, ProcessesToUpdate, RefreshKind, System};
 
-use game_core::world::biome::biome_func::choose_biome_label_smoothed;
+use game_core::world::biome::biome_func::dominant_biome_at_p_chunks;
 // ---- NEU: Biome-Imports ----
 use game_core::world::biome::registry::BiomeRegistry;
 
@@ -115,7 +115,9 @@ fn snap_camera_and_world(
         .unwrap_or(("—", 0.0));
 
     let world_seed: i32 = config.seed;
-    let biome = choose_biome_label_smoothed(&biomes, IVec2::new(cc.x, cc.y), world_seed);
+    let p_chunks = Vec2::new(pos.x / CX as f32, pos.z / CZ as f32);
+    let biome = dominant_biome_at_p_chunks(&biomes, world_seed, p_chunks);
+
     let biome_name = if biome.name.is_empty() {
         biome.localized_name.clone()
     } else {

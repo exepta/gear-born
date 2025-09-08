@@ -1,9 +1,9 @@
-use crate::chunk::chunk_utils::{col_rand_u32, map01};
+use crate::chunk::chunk_utils::map01;
 use bevy::prelude::*;
 use fastnoise_lite::*;
 use game_core::world::biome::biome_func::*;
 use game_core::world::biome::registry::BiomeRegistry;
-use game_core::world::biome::{Biome, BiomeSize};
+use game_core::world::biome::Biome;
 use game_core::world::block::{BlockId, BlockRegistry};
 use game_core::world::chunk::{ChunkData, SEA_LEVEL};
 use game_core::world::chunk_dim::{CX, CY, CZ, Y_MIN};
@@ -141,23 +141,14 @@ pub(crate) async fn generate_chunk_async_biome(
             let p_chunks = Vec2::new(px, pz);
 
             // Nearest land and ocean sites (host = best land)
-            let (best_land, best_ocean) = best_land_and_ocean_sites(biomes, p_chunks, cfg_seed);
+            let (_, best_ocean) = best_land_and_ocean_sites(biomes, p_chunks, cfg_seed);
 
             // Host land biome (fallback if none was found)
-            let (land0, pos0, r0, s0) = if let Some((b, pos, r, s)) = best_land {
-                (b, pos, r, s)
-            } else {
-                (fallback_label, Vec2::ZERO, 1.0, f32::INFINITY)
-            };
 
             // Second-best distinct land site (neighbor)
-            let (land1_opt, pos1, r1, s1) = if let Some((b2, p2, rr2, ss2)) =
-                best_second_land_site(biomes, p_chunks, cfg_seed, pos0)
-            {
-                (Some(b2), p2, rr2, ss2)
-            } else {
-                (None, Vec2::ZERO, 1.0, f32::INFINITY)
-            };
+            let (land0, pos0, r0, s0, land1_opt, pos1, r1, s1) =
+                best_two_land_sites(biomes, p_chunks, cfg_seed, fallback_label);
+
 
             // Inverse-square weights (robust 0-division guard)
             let w0 = land_weight_from_score(s0);
@@ -352,180 +343,4 @@ fn sample_plains_mountain_delta(n: &FastNoiseLite, ux: f32, uz: f32, amp_json: f
     let a_mod = 0.90 + 0.20 * map01(n.get_noise_2d(ux * 0.25, uz * 0.25));
 
     amp_json * a_mod * peak
-}
-
-/* ============================= Sub-biome ==================================== */
-
-// Convert a distance-normalized score (center→edge) into a smooth core weight (0..1)
-#[inline]
-fn sub_core_factor(s_norm: f32) -> f32 {
-    let s = s_norm.clamp(0.0, 1.4);
-    let t = ((s - SUB_CORE_END) / (SUB_CORE_START - SUB_CORE_END)).clamp(0.0, 1.0);
-    t * t * (3.0 - 2.0 * t)
-}
-
-/* ----- Helper: inverse-square weight from site score (robust) ----- */
-#[inline]
-fn land_weight_from_score(s: f32) -> f32 {
-    // Lower scores mean "closer to center" -> higher weight
-    let sc = s.max(0.001);
-    1.0 / (sc * sc)
-}
-
-#[inline]
-fn supports_sub(host: &Biome, sub_name: &str) -> bool {
-    if !host.stand_alone { return false; }
-    if let Some(list) = &host.subs {
-        for s in list { if s.eq_ignore_ascii_case(sub_name) { return true; } }
-    }
-    false
-}
-
-// Pick the most suitable sub-biome of `host` near `p` (dynamic, no fixed names)
-fn pick_sub_biome_in_host<'a>(
-    biomes: &'a BiomeRegistry,
-    host: &'a Biome,
-    host_pos: Vec2,
-    host_r: f32,
-    p: Vec2,
-    world_seed: i32,
-) -> Option<(&'a Biome, f32)> {
-    let subs = host.subs.as_ref()?;
-    if subs.is_empty() { return None; }
-
-    let mut best: Option<(&Biome, f32)> = None;
-
-    for (si, sub_raw) in subs.iter().enumerate() {
-        let sub = match get_biome_case_insensitive(biomes, sub_raw) { Some(b) => b, None => continue };
-        // Determine a subarea from its size list (default Small)
-        let (area_min, area_max) = {
-            if sub.sizes.is_empty() {
-                size_to_area_bounds(&BiomeSize::Small)
-            } else {
-                let idx = (rand_u32(si as i32, world_seed, SALT_PICK_SIZE) as usize) % sub.sizes.len();
-                size_to_area_bounds(&sub.sizes[idx])
-            }
-        };
-
-        // The number of subsites scales softly with rarity
-        let rr = sub.rarity.clamp(SUB_PRESENT_MIN, SUB_PRESENT_MAX);
-        let n_sites = (1.0 + rr * 5.0).round() as i32;
-
-        for k in 0..n_sites.max(1) {
-            let s_seed = (world_seed as u32) ^ SALT_SUB_SITES ^ hash32_str(&host.name) ^ hash32_str(&sub.name) ^ (k as u32);
-            // Draw area in [min.max]
-            let t_r = rand01(host_pos.x as i32 + k, host_pos.y as i32 - k, s_seed ^ 0xA1);
-            let area_site = area_min + t_r * (area_max - area_min);
-            let mut r_site = (area_site / std::f32::consts::PI).sqrt();
-            r_site = r_site.min(host_r * 0.75).max(4.0);
-
-            // Bias placement toward mid/outer ring to reduce overlap with a host center
-            let u = rand01(host_pos.x as i32 - 13 * k, host_pos.y as i32 + 19 * k, s_seed ^ 0xB7);
-            let d_edge_bias = u.powf(0.25);
-            let max_d = (host_r - r_site).max(1.0);
-            let min_d = (0.55 * host_r).min(max_d);
-            let d = min_d + (max_d - min_d) * d_edge_bias;
-
-            // Random angle with slight rotation per site index
-            let ang = (rand01(host_pos.x as i32 + 23 * k, host_pos.y as i32 - 29 * k, s_seed ^ 0xC7) * std::f32::consts::TAU)
-                + 0.17 * (k as f32);
-            let sub_pos = host_pos + Vec2::new(ang.cos(), ang.sin()) * d;
-
-            // Score = normalized distance to the sub site
-            let s = p.distance(sub_pos) / r_site.max(1.0);
-            if best.map_or(true, |(_, sb)| s < sb) {
-                best = Some((sub, s));
-            }
-        }
-    }
-
-    best
-}
-
-/* ------- Adjacency guard: allow sub-biome only next to supporting hosts ------- */
-
-fn adjacency_support_factor(
-    biomes: &BiomeRegistry,
-    p_chunks: Vec2,
-    world_seed: i32,
-    host_biome: &Biome,
-    sub_name: &str,
-) -> f32 {
-    let gx = (p_chunks.x.floor() as i32).div_euclid(BASE_CELL_CHUNKS);
-    let gz = (p_chunks.y.floor() as i32).div_euclid(BASE_CELL_CHUNKS);
-
-    let mut best: Option<(f32, bool)> = None;
-
-    for dz in -SEARCH_RADIUS_CELLS..=SEARCH_RADIUS_CELLS {
-        for dx in -SEARCH_RADIUS_CELLS..=SEARCH_RADIUS_CELLS {
-            let cx = gx + dx;
-            let cz = gz + dz;
-
-            let (site_pos, site_biome, site_radius) =
-                site_properties_for_cell(biomes, cx, cz, world_seed);
-
-            if is_ocean_biome(site_biome) { continue; }
-            if std::ptr::eq(site_biome, host_biome) { continue; }
-            if site_biome.name.eq_ignore_ascii_case(&host_biome.name) { continue; }
-
-            let d = p_chunks.distance(site_pos);
-            let score = d / site_radius.max(1.0);
-            let neighbor_supports = supports_sub(site_biome, sub_name);
-
-            // Keep the closest different land site, defaulting to true on None.
-            if best.map_or(true, |(s, _)| score < s) {
-                best = Some((score, neighbor_supports));
-            }
-        }
-    }
-
-    if let Some((s, ok)) = best {
-        if ok { 1.0 } else { smoothstep(FOREIGN_GUARD_START, FOREIGN_GUARD_END, s) }
-    } else {
-        1.0
-    }
-}
-
-/* ============================= Internal ======================================= */
-
-#[inline]
-fn pick(list: &[String], wx: i32, wz: i32, seed: u32) -> &str {
-    if list.is_empty() { return "stone_block"; }
-    let r = col_rand_u32(wx, wz, seed);
-    let idx = (r as usize) % list.len();
-    &list[idx]
-}
-
-#[inline] fn lerp(a: f32, b: f32, t: f32) -> f32 { a + (b - a) * t }
-
-#[inline]
-fn smoothstep(e0: f32, e1: f32, x: f32) -> f32 {
-    let t = ((x - e0) / (e1 - e0)).clamp(0.0, 1.0);
-    t * t * (3.0 - 2.0 * t)
-}
-
-#[inline]
-fn clamp_world_y(y: f32) -> f32 {
-    ((Y_MIN + 1) as f32).max(y)
-}
-
-// Case-insensitive lookup for dynamic sub-biome references
-#[inline]
-fn get_biome_case_insensitive<'a>(biomes: &'a BiomeRegistry, name: &str) -> Option<&'a Biome> {
-    if let Some(b) = biomes.by_name.get(name) { return Some(b); }
-    for b in biomes.by_name.values() {
-        if b.name.eq_ignore_ascii_case(name) { return Some(b); }
-    }
-    None
-}
-
-// FNV-1a 32-bit string hash (used only for deterministic seeding)
-#[inline]
-fn hash32_str(s: &str) -> u32 {
-    let mut h: u32 = 0x811C9DC5;
-    for &b in s.as_bytes() {
-        h ^= b as u32;
-        h = h.wrapping_mul(0x01000193);
-    }
-    h
 }

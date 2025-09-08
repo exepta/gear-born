@@ -13,9 +13,9 @@
     "under_zero": ["stone_block"]
   },
   "settings": {
-    "height_offset": 10.0,
-    "land_amp": 17.0,
-    "land_freq": 0.0095
+    "height_offset": 7.0,
+    "land_amp": 5.0,
+    "land_freq": 0.0015
   },
   "generation": {
     "rivers": true
