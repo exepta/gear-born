@@ -2,7 +2,7 @@ pub mod biome_func;
 pub mod registry;
 
 use bevy::prelude::*;
-use serde::Deserialize;
+use serde::*;
 
 #[derive(Debug, Deserialize, PartialEq, Clone)]
 pub struct Biome {
@@ -93,10 +93,33 @@ pub struct BiomeSettings {
 pub struct BiomeGeneration {
     #[serde(default)]
     pub rivers: bool,
+    #[serde(default = "default_river_min_gen")]
+    pub river_min_gen: u8,
+    #[serde(default = "default_river_max_gen")]
+    pub river_max_gen: u8,
+    #[serde(default = "default_river_size_between", deserialize_with = "deserialize_size_between")]
+    pub river_size_between: (i32, i32)
 }
 
 fn default_true() -> bool { true }
 
 fn default_rarity() -> f32 { 0.1 }
+
+fn default_river_min_gen() -> u8 { 1 }
+
+fn default_river_max_gen() -> u8 { 2 }
+
+fn default_river_size_between() -> (i32, i32) { (6, 16) }
+
+fn deserialize_size_between<'de, D>(de: D) -> Result<(i32, i32), D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let s = String::deserialize(de)?;
+    let mut it = s.split(':');
+    let a = it.next().unwrap_or("8").trim().parse::<i32>().unwrap_or(8);
+    let b = it.next().unwrap_or("20").trim().parse::<i32>().unwrap_or(20);
+    Ok(if a <= b { (a, b) } else { (b, a) })
+}
 
 fn default_sizes() -> Vec<BiomeSize> { vec![BiomeSize::Medium] }

@@ -18,6 +18,8 @@
     "land_freq": 0.0015
   },
   "generation": {
-    "rivers": true
+    "rivers": true,
+    "river_min_gen": 0,
+    "river_max_gen": 1
   }
 }

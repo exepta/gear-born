@@ -7,7 +7,7 @@ use crate::world::chunk_dim::*;
 pub const BIG: usize = 160;
 pub const MAX_UPDATE_FRAMES: usize = 20;
 
-pub const SEA_LEVEL: i32 = 58;
+pub const SEA_LEVEL: i32 = 60;
 
 #[inline]
 pub fn idx(x: usize, y: usize, z: usize) -> usize { (y * CZ + z) * CX + x }
