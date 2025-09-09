@@ -4,6 +4,7 @@ mod chunk_struct;
 mod water_builder;
 mod water_utils;
 mod chunk_gen;
+mod river_utils;
 
 use crate::chunk::chunk_builder::ChunkBuilder;
 use crate::chunk::water_builder::WaterBuilder;

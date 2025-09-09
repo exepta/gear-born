@@ -19,7 +19,7 @@
   },
   "generation": {
     "rivers": true,
-    "river_min_gen": 0,
-    "river_max_gen": 1
+    "river_chance": 0.05,
+    "river_size_between": "24:24"
   }
 }

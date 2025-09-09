@@ -26,6 +26,7 @@ pub struct Biome {
 
 #[derive(Debug, Deserialize, PartialEq, Clone)]
 pub enum BiomeSize {
+    VeryTiny,
     Tiny,
     Small,
     Medium,
@@ -38,6 +39,7 @@ pub enum BiomeSize {
 impl BiomeSize {
     pub fn from_str(s: &str) -> Self {
         match s {
+            "very_tiny" => Self::VeryTiny, // Max 4 chunks
             "tiny" => Self::Tiny, // Max 20 chunks
             "small" => Self::Small, // Max 56 chunks
             "medium" => Self::Medium, // Max 98 chunks
@@ -93,10 +95,8 @@ pub struct BiomeSettings {
 pub struct BiomeGeneration {
     #[serde(default)]
     pub rivers: bool,
-    #[serde(default = "default_river_min_gen")]
-    pub river_min_gen: u8,
-    #[serde(default = "default_river_max_gen")]
-    pub river_max_gen: u8,
+    #[serde(default = "default_river_chance")]
+    pub river_chance: f32,
     #[serde(default = "default_river_size_between", deserialize_with = "deserialize_size_between")]
     pub river_size_between: (i32, i32)
 }
@@ -105,9 +105,7 @@ fn default_true() -> bool { true }
 
 fn default_rarity() -> f32 { 0.1 }
 
-fn default_river_min_gen() -> u8 { 1 }
-
-fn default_river_max_gen() -> u8 { 2 }
+fn default_river_chance() -> f32 { 0.1 }
 
 fn default_river_size_between() -> (i32, i32) { (6, 16) }
 

@@ -4,4 +4,4 @@ fullscreen = false
 vsync = true
 graphic_backend = "auto"
 
-chunk_range = 8
+chunk_range = 5

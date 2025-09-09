@@ -483,6 +483,7 @@ pub fn adjacency_support_factor(
 
 pub fn size_to_area_bounds(size: &BiomeSize) -> (f32, f32) {
     match size {
+        BiomeSize::VeryTiny => (SIZE_MIN_FRAC * 4.0, 4.0),
         BiomeSize::Tiny   => (SIZE_MIN_FRAC * 20.0,  20.0),
         BiomeSize::Small  => (SIZE_MIN_FRAC * 56.0,  56.0),
         BiomeSize::Medium => (SIZE_MIN_FRAC * 96.0,  96.0),
