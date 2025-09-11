@@ -1,0 +1,13 @@
+{
+  "name": "gravel_block",
+  "texture_dir": "textures/blocks/gravel",
+  "texture": {
+    "all": "gravel"
+  },
+  "stats": {
+    "hardness": 1.3,
+    "blast_resistance": 1.5,
+    "opaque": true,
+    "emissive": 0.0
+  }
+}

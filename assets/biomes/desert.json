@@ -1,0 +1,25 @@
+{
+  "localized_name": "desert",
+  "name": "Desert",
+  "stand_alone": true,
+  "climate": ["dry", "hot"],
+  "rarity": 0.075,
+  "sizes": [ "Large", "Huge" ],
+  "surface": {
+    "top": ["sand_block"],
+    "bottom": ["sand_block"],
+    "sea_floor": ["sand_block"],
+    "upper_zero": ["sand_stone_block"],
+    "under_zero": ["stone_block"]
+  },
+  "settings": {
+    "height_offset": 7.0,
+    "land_amp": 5.0,
+    "land_freq": 0.0015
+  },
+  "generation": {
+    "rivers": true,
+    "river_chance": 0.05,
+    "river_size_between": "24:24"
+  }
+}

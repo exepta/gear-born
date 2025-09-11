@@ -1,0 +1,13 @@
+{
+  "name": "sand_stone_block",
+  "texture_dir": "textures/blocks/sandstone",
+  "texture": {
+    "all": "sandstone"
+  },
+  "stats": {
+    "hardness": 4.0,
+    "blast_resistance": 2.0,
+    "opaque": true,
+    "emissive": 0.0
+  }
+}

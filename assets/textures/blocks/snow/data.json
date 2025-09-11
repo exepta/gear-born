@@ -1,0 +1,12 @@
+{
+  "image": "snow.png",
+  "tile_size": 512,
+  "columns": 1,
+  "rows": 1,
+  "tiles": {
+    "snow": [
+      0,
+      0
+    ]
+  }
+}

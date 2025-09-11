@@ -1,0 +1,23 @@
+{
+  "localized_name": "mountains",
+  "name": "Mountains",
+  "stand_alone": false,
+  "climate": ["normal"],
+  "rarity": 0.1,
+  "sizes": [ "Small", "Medium" ],
+  "surface": {
+    "top": ["grass_block"],
+    "bottom": ["stone_block"],
+    "sea_floor": ["sand_block"],
+    "upper_zero": ["stone_block"],
+    "under_zero": ["stone_block"]
+  },
+  "settings": {
+    "height_offset": 68.0,
+    "mount_amp": 46.0,
+    "mount_freq": 0.03
+  },
+  "generation": {
+    "rivers": false
+  }
+}

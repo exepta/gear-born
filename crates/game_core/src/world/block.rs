@@ -12,7 +12,7 @@ use std::path::Path;
 
 /* ---------------- constants ---------------- */
 
-pub const VOXEL_SIZE: f32 = 1.5;
+pub const VOXEL_SIZE: f32 = 1.0;
 const ATLAS_PAD_PX: f32 = 0.5;
 
 pub const BASE_BREAK_TIME: f32 = 0.55;
@@ -72,7 +72,7 @@ impl Default for SelectedBlock {
 
 /* ---------------- registry ---------------- */
 
-#[derive(Resource)]
+#[derive(Resource, Clone)]
 pub struct BlockRegistry {
     pub defs: Vec<BlockDef>,
     pub name_to_id: HashMap<String, BlockId>,

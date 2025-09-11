@@ -1,0 +1,26 @@
+{
+  "localized_name": "plains",
+  "name": "Plains",
+  "stand_alone": true,
+  "subs": ["mountains"],
+  "climate": ["normal"],
+  "rarity": 0.15,
+  "sizes": [ "Large", "Huge" ],
+  "surface": {
+    "top": ["grass_block"],
+    "bottom": ["dirt_block"],
+    "sea_floor": ["sand_block"],
+    "upper_zero": ["stone_block"],
+    "under_zero": ["stone_block"]
+  },
+  "settings": {
+    "height_offset": 8.0,
+    "land_amp": 18.0,
+    "land_freq": 0.0091
+  },
+  "generation": {
+    "rivers": true,
+    "river_chance": 0.5,
+    "river_size_between": "24:24"
+  }
+}

@@ -9,12 +9,14 @@ use bevy_rapier3d::prelude::*;
 use game_core::configuration::{GameConfig, WorldGenConfig};
 use game_core::events::chunk_events::{ChunkUnloadEvent, SubChunkNeedRemeshEvent};
 use game_core::states::{AppState, InGameStates, LoadingStates};
-use game_core::world::block::{id_any, BlockRegistry, VOXEL_SIZE};
+use game_core::world::biome::registry::BiomeRegistry;
+use game_core::world::block::{BlockRegistry, VOXEL_SIZE};
 use game_core::world::chunk::*;
 use game_core::world::chunk_dim::*;
 use game_core::world::save::{RegionCache, WorldSave};
 use game_core::BlockCatalogPreviewCam;
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 
 const MAX_COLLIDERS_PER_FRAME: usize = 12;
 
@@ -192,6 +194,7 @@ fn schedule_chunk_generation(
     mut pending: ResMut<PendingGen>,
     chunk_map: Res<ChunkMap>,
     reg: Res<BlockRegistry>,
+    biomes: Res<BiomeRegistry>,
     gen_cfg: Res<WorldGenConfig>,
     game_config: Res<GameConfig>,
     ws: Res<WorldSave>,
@@ -202,7 +205,7 @@ fn schedule_chunk_generation(
     let center_c = if let Ok(t) = q_cam.single() {
         let (c, _) = world_to_chunk_xz(
             (t.translation().x / VOXEL_SIZE).floor() as i32,
-            (t.translation().z / VOXEL_SIZE).floor() as i32
+            (t.translation().z / VOXEL_SIZE).floor() as i32,
         );
         c
     } else if let Some(lc) = load_center {
@@ -212,8 +215,8 @@ fn schedule_chunk_generation(
     };
 
     let waiting = is_waiting(&app_state);
-    let max_inflight = if waiting { BIG } else { MAX_INFLIGHT_GEN };
-    let per_frame_submit = if waiting { BIG } else { 8 };
+    let max_inflight      = if waiting { BIG } else { MAX_INFLIGHT_GEN };
+    let per_frame_submit  = if waiting { BIG } else { 8 };
 
     if pending.0.len() >= max_inflight { return; }
 
@@ -222,29 +225,41 @@ fn schedule_chunk_generation(
         .saturating_sub(pending.0.len())
         .min(per_frame_submit);
 
-    let ids = (
-        id_any(&reg, &["grass_block","grass"]),
-        id_any(&reg, &["dirt_block","dirt"]),
-        id_any(&reg, &["stone_block","stone"]),
-        id_any(&reg, &["sand_block","sand"]),
-    );
+    // --- NEW: Arc-wrap registries once per system tick (cheap per task) ---
+    let reg_arc    = Arc::new(reg.clone());
+    let biomes_arc = Arc::new(biomes.clone());
+
     let cfg_clone = gen_cfg.clone();
-    let ws_root = ws.root.clone();
-    let pool = AsyncComputeTaskPool::get();
+    let ws_root   = ws.root.clone();
+    let pool      = AsyncComputeTaskPool::get();
 
     for dz in -load_radius..=load_radius {
         for dx in -load_radius..=load_radius {
             if budget == 0 { return; }
-            let c = IVec2::new(center_c.x + dx, center_c.y + dz);
-            if chunk_map.chunks.contains_key(&c) || pending.0.contains_key(&c) { continue; }
 
-            let ids_copy = ids;
-            let cfg = cfg_clone.clone();
-            let root = ws_root.clone();
+            let c = IVec2::new(center_c.x + dx, center_c.y + dz);
+            if chunk_map.chunks.contains_key(&c) || pending.0.contains_key(&c) {
+                continue;
+            }
+
+            // clone the inexpensive Arcs for this task
+            let reg_for_task    = Arc::clone(&reg_arc);
+            let biomes_for_task = Arc::clone(&biomes_arc);
+            let cfg             = cfg_clone.clone();
+            let root            = ws_root.clone();
+
             let task = pool.spawn(async move {
-                let data = load_or_gen_chunk_async(root, c, ids_copy, cfg).await;
+                // NOTE: new load_or_gen signature: (root, coord, &BlockRegistry, &BiomeRegistry, cfg)
+                let data = load_or_gen_chunk_async(
+                    root,
+                    c,
+                    &*reg_for_task,        // deref Arc -> &BlockRegistry
+                    &*biomes_for_task,     // deref Arc -> &BiomeRegistry
+                    cfg,
+                ).await;
                 (c, data)
             });
+
             pending.0.insert(c, task);
             budget -= 1;
         }

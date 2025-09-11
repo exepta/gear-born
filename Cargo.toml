@@ -1,6 +1,6 @@
 [package]
 name = "gear-born"
-version = "0.1.2"
+version = "0.1.3"
 edition = "2024"
 authors = ["Daniel Ramke <genshin.exepta@outlook.com>"]
 
@@ -70,7 +70,7 @@ features = [
 ]
 
 [dependencies.tracing-subscriber]
-version = "0.3.19"
+version = "0.3.20"
 
 [dependencies.chrono]
 version = "0.4.41"

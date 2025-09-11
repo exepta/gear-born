@@ -243,92 +243,13 @@ impl Default for AudioConfig {
 
 #[derive(Resource, Clone)]
 pub struct WorldGenConfig {
-    pub seed: i32,
-    pub enable_caves: bool,
-
-    pub base_height: i32,
-    pub height_span: i32,
-    pub height_freq: f32,
-    pub warp_freq: f32,
-    pub warp_amp: f32,
-
-    pub caves_freq: f32,
-    pub caves_thresh: f32,
-
-    pub cave_min_y: i32,
-    pub cave_max_y: i32,
-
-    pub caves_tunnel_abs_pow: f32,
-
-    pub caverns_freq: f32,
-    pub caverns_thresh: f32,
-    pub caverns_weight: f32,
-
-    pub surface_shell: i32,
-    pub entrance_depth: i32,
-    pub entrance_bonus: f32,
-    pub entrance_chance_freq: f32,
-    pub entrance_chance_thresh: f32,
-
-    pub entrance_open_depth: i32,
-    pub entrance_open_radius: i32,
-
-    pub caves_region_freq: f32,
-    pub caves_region_thresh: f32,
-
-    pub cave_y_scale: f32,
-
-    pub plains_freq: f32,
-    pub plains_threshold: f32,
-    pub plains_blend: f32,
-    pub plains_span: i32,
-    pub plains_flatten: f32,
-    pub warp_amp_plains: f32,
+    pub seed: i32
 }
 
 impl Default for WorldGenConfig {
     fn default() -> Self {
         Self {
-            seed: 2261732,
-            enable_caves: false,
-
-            base_height: 8,
-            height_span: 48,
-            height_freq: 0.007,
-
-            warp_freq: 0.02,
-            warp_amp: 25.0,
-
-            caves_freq: 0.022,
-            caves_thresh: 0.50,
-            caves_tunnel_abs_pow: 0.85,
-
-            cave_min_y: -120,
-            cave_max_y: 56,
-
-            caverns_freq: 0.009,
-            caverns_thresh: 0.66,
-            caverns_weight: 0.35,
-
-            surface_shell: 4,
-            entrance_depth: 14,
-            entrance_bonus: 0.25,
-            entrance_chance_freq: 0.018,
-            entrance_chance_thresh: 0.72,
-            entrance_open_depth: 3,
-            entrance_open_radius: 1,
-
-            caves_region_freq: 0.004,
-            caves_region_thresh: 0.58,
-
-            cave_y_scale: 0.75,
-
-            plains_freq: 0.003,
-            plains_threshold: 0.55,
-            plains_blend: 0.15,
-            plains_span: 8,
-            plains_flatten: 0.6,
-            warp_amp_plains: 6.0,
+            seed: 1337
         }
     }
 }
