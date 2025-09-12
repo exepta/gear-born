@@ -1,0 +1,13 @@
+{
+  "name": "border_block",
+  "texture_dir": "textures/blocks/border",
+  "texture": {
+    "all": "border"
+  },
+  "stats": {
+    "hardness": -1.0,
+    "blast_resistance": -1.0,
+    "opaque": true,
+    "emissive": 0.0
+  }
+}

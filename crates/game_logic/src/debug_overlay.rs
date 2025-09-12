@@ -285,6 +285,7 @@ fn render_debug_text(
     let txt = format!(
         "{app} {app_ver}  (Bevy {bevy_ver})\n\
      FPS: {:>5.1}\n\
+     \n\
      Graphic: {}\n\
      Used CPU: {}\n\
      V-RAM: {}\n\
@@ -296,6 +297,7 @@ fn render_debug_text(
      {}\n\
      {}\n\
      Game Mode: {}\n\
+     \n\
      {}: Toggle Debug Overlay   {}: Toggle Chunk Grid",
         snap.fps,
         snap.backend_name,
