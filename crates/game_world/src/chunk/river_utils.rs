@@ -1,9 +1,9 @@
+use bevy::prelude::*;
 // river_utils.rs
 use fastnoise_lite::*;
-use bevy::prelude::*;
 
 /// All calculations are deterministic per world seed.
-/// The river "network" is continuous noise-based and then gated per biome
+/// The river "network" is continuously noise-based and then gated per biome
 /// (enabled/disabled + chance), with neighbor continuation support.
 ///
 /// Design notes:
