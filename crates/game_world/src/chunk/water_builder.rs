@@ -74,7 +74,6 @@ impl Plugin for WaterBuilder {
             .init_resource::<WaterFlowQueue>()
             .init_resource::<PendingWaterFlow>()
             .init_resource::<WaterFlowIds>()
-            .add_event::<ChunkUnloadEvent>()
             .add_systems(
                 OnEnter(AppState::Loading(LoadingStates::WaterGen)),
                 water_gen_build_worklist

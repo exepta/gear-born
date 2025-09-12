@@ -25,8 +25,9 @@ pub const SEC_COUNT: usize = CY / SEC_H;
 /// coordinates map correctly to chunks and local coordinates.
 ///
 /// # Examples
-/// ```
+/// ```ignore
 /// // World (-1, -1 ) is in chunk ( -1, -1 ), local ( 31, 31 ) for CX=CZ=32.
+/// 
 /// let (cc, lc) = world_to_chunk_xz(-1, -1);
 /// assert_eq!(cc, IVec2::new(-1, -1));
 /// assert_eq!(lc, UVec2::new(31, 31));

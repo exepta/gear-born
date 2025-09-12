@@ -9,15 +9,12 @@ mod river_utils;
 use crate::chunk::chunk_builder::ChunkBuilder;
 use crate::chunk::water_builder::WaterBuilder;
 use bevy::prelude::*;
-use game_core::events::chunk_events::*;
 use game_core::world::chunk::ChunkMap;
 
 pub struct ChunkHandlerService;
 
 impl Plugin for ChunkHandlerService {
     fn build(&self, app: &mut App) {
-        app.add_event::<ChunkGeneratedEvent>();
-        app.add_event::<SubChunkNeedRemeshEvent>();
         app.init_resource::<ChunkMap>();
         app.add_plugins((ChunkBuilder, WaterBuilder));
     }
