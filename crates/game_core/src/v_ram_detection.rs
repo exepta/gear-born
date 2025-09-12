@@ -136,32 +136,34 @@ pub fn query_vram_bytes_nvml_for_pid(_pid: u32) -> Option<u64> { None }
 pub fn query_vram_bytes_dxgi_adapter_current_usage() -> Option<u64> {
     use windows::core::Interface;
     use windows::Win32::Graphics::Dxgi::{
-        CreateDXGIFactory2, DXGI_MEMORY_SEGMENT_GROUP_LOCAL, DXGI_QUERY_VIDEO_MEMORY_INFO,
-        IDXGIAdapter3, IDXGIFactory4,
+        CreateDXGIFactory2, DXGI_CREATE_FACTORY_FLAGS, DXGI_MEMORY_SEGMENT_GROUP_LOCAL,
+        DXGI_QUERY_VIDEO_MEMORY_INFO, IDXGIAdapter3, IDXGIFactory4,
     };
 
     unsafe {
-        let factory: IDXGIFactory4 = CreateDXGIFactory2(0).ok()?;
-        let mut index: u32 = 0;
+        let factory: IDXGIFactory4 =
+            CreateDXGIFactory2::<IDXGIFactory4>(DXGI_CREATE_FACTORY_FLAGS(0)).ok()?;
 
+        let mut index: u32 = 0;
         loop {
-            // Enumerate adapters until exhausted
             let adapter = match factory.EnumAdapters1(index) {
                 Ok(a) => a,
-                Err(_) => break, // no more adapters
+                Err(_) => break,
             };
             index += 1;
 
-            // Need IDXGIAdapter3 for QueryVideoMemoryInfo
             if let Ok(adapter3) = adapter.cast::<IDXGIAdapter3>() {
                 let mut info = DXGI_QUERY_VIDEO_MEMORY_INFO::default();
-                // Node = 0 (single-node adapters typical), Local = VRAM
-                if adapter3.QueryVideoMemoryInfo(0, DXGI_MEMORY_SEGMENT_GROUP_LOCAL, &mut info).is_ok() {
+                if adapter3
+                    .QueryVideoMemoryInfo(0, DXGI_MEMORY_SEGMENT_GROUP_LOCAL, &mut info)
+                    .is_ok()
+                {
                     return Some(info.CurrentUsage as u64);
                 }
             }
         }
     }
+
     None
 }
 
