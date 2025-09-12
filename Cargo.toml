@@ -16,6 +16,11 @@ members = [
     "crates/game_world",
 ]
 
+[features]
+vram_nvml = []   # NVIDIA per-process via NVML (Windows/Linux)
+vram_dxgi = []   # Windows adapter-wide via DXGI (AMD & NVIDIA)
+vram_metal = []  # macOS device-wide via Metal
+
 [profile.release]
 panic = "unwind"
 opt-level = "s"
@@ -32,6 +37,7 @@ debug = true
 
 [dependencies.game_core]
 path = "crates/game_core"
+features = ["vram_dxgi", "vram_nvml", "vram_metal"]
 
 [dependencies.game_logic]
 path = "crates/game_logic"
@@ -81,4 +87,3 @@ version = "0.15.7"
 
 [dev-dependencies.serial_test]
 version = "3.2.0"
-

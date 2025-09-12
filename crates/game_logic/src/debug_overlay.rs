@@ -14,7 +14,7 @@ use game_core::world::chunk_dim::*;
 use game_core::{BlockCatalogPreviewCam, BuildInfo};
 use std::ops::Neg;
 use sysinfo::{CpuRefreshKind, MemoryRefreshKind, Pid, ProcessesToUpdate, RefreshKind, System};
-
+use game_core::v_ram_detection::{detect_v_ram_best_effort, fmt_bytes};
 use game_core::world::biome::biome_func::dominant_biome_at_p_chunks;
 // ---- NEU: Biome-Imports ----
 use game_core::world::biome::registry::BiomeRegistry;
@@ -25,6 +25,7 @@ struct DebugSnapshot {
     fps: f32,
     cpu_percent: f32,
     app_mem_bytes: u64,
+    v_ram_label: String,
 
     // Cam / World
     pos_bs: Vec3,
@@ -83,7 +84,7 @@ impl Plugin for DebugOverlayPlugin {
             .add_systems(
                 Update,
                 (
-                    (snap_perf, snap_camera_and_world, snap_selection, snap_build_and_mode).chain(),
+                    (snap_perf, snap_camera_and_world, snap_selection, snap_build_and_mode, snap_v_ram).chain(),
                     render_debug_text,
                 )
                     .run_if(in_state(AppState::InGame(InGameStates::Game)))
@@ -224,6 +225,20 @@ fn setup_sys_info(mut stats: ResMut<SysStats>) {
     stats.sys = s;
 }
 
+fn snap_v_ram(mut snap: ResMut<DebugSnapshot>) {
+    if let Some(info) = detect_v_ram_best_effort() {
+        // Example: "512 MB (DXGI / adapter-wide)" or "1.8 GB (NVML / per-process)"
+        snap.v_ram_label = format!(
+            "{} ({})",
+            fmt_bytes(info.bytes),
+            info.source
+        );
+    } else {
+        // No backend available (features disabled or unsupported)
+        snap.v_ram_label = "n/a".to_string();
+    }
+}
+
 fn render_debug_text(
     state: Res<DebugOverlayState>,
     mut q_text: Query<&mut Text>,
@@ -235,19 +250,21 @@ fn render_debug_text(
     let mem_str = fmt_mem_from_bytes(snap.app_mem_bytes);
     let txt = format!(
         "{app} {app_ver}  (Bevy {bevy_ver})\n\
-         FPS: {:>5.1}\n\
-         Graphic: {}\n\
-         CPU: {:>4.1}%  RAM(proc): {}  Backend: {}\n\
-         Location: ({:.2}, {:.2}, {:.2})\n\
-         Facing: {} ({:.1}°)\n\
-         Chunk: ({}, {})  (size: {}x{}, range: {})\n\
-         Biome: {}\n\
-         {}\n\
-         {}\n\
-         Game Mode: {}\n\
-         {}: Toggle Debug Overlay   {}: Toggle Chunk Grid",
+     FPS: {:>5.1}\n\
+     Graphic: {}\n\
+     V-RAM: {}\n\
+     CPU: {:>4.1}%  RAM: {}  Backend: {}\n\
+     Location: ({:.2}, {:.2}, {:.2})\n\
+     Facing: {} ({:.1}°)\n\
+     Chunk: ({}, {})  (size: {}x{}, range: {})\n\
+     Biome: {}\n\
+     {}\n\
+     {}\n\
+     Game Mode: {}\n\
+     {}: Toggle Debug Overlay   {}: Toggle Chunk Grid",
         snap.fps,
         snap.backend_name,
+        snap.v_ram_label,
         snap.cpu_percent,
         mem_str,
         snap.backend_str,

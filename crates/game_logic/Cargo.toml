@@ -10,6 +10,7 @@ path = "src/lib.rs"
 
 [dependencies.game_core]
 path = "../game_core"
+features = ["vram_dxgi", "vram_nvml", "vram_metal"]
 
 [dependencies.game_world]
 path = "../game_world"
