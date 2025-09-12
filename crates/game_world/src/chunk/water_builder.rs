@@ -74,7 +74,6 @@ impl Plugin for WaterBuilder {
             .init_resource::<WaterFlowQueue>()
             .init_resource::<PendingWaterFlow>()
             .init_resource::<WaterFlowIds>()
-            .add_event::<ChunkUnloadEvent>()
             .add_systems(
                 OnEnter(AppState::Loading(LoadingStates::WaterGen)),
                 water_gen_build_worklist
@@ -117,27 +116,61 @@ impl Plugin for WaterBuilder {
 
 async fn flow_task_run(solid_snap: SolidSnapshot, water_snap: WaterSnap, mut job: FlowJob) -> FlowResult {
     use std::collections::{HashSet, VecDeque};
+
     let mut res = FlowResult::default();
     let mut q: VecDeque<Seed> = VecDeque::new();
-    let mut seen: HashSet<(IVec2,i32,i32,i32)> = HashSet::new();
+    let mut seen: HashSet<(IVec2, i32, i32, i32)> = HashSet::new();
 
+    // Seed initialization
     for s in job.seeds.drain(..) {
-        if seen.insert((s.c,s.x,s.y,s.z)) { q.push_back(s); }
+        if seen.insert((s.c, s.x, s.y, s.z)) { q.push_back(s); }
     }
 
-    let mut filled_count = 0usize;
+    let mut filled_count: usize = 0;
 
     while let Some(cur) = q.pop_front() {
+        // Skip if solid or out of snapshot (spill if outside)
         let solid = match snap_is_solid(&solid_snap, cur.c, cur.x, cur.y, cur.z) {
             Some(b) => b,
             None => { res.spill.push(cur); continue; }
         };
         if solid { continue; }
 
+        // Skip if already has water
         if let Some(true) = snap_has_water(&water_snap, cur.c, cur.x, cur.y, cur.z) {
             continue;
         }
 
+        // --- Support check to avoid creating a floating layer above water ---
+        // English: We require either water directly below, OR (if below is solid)
+        // side water at the same Y. This allows lateral spread over solid ledges,
+        // but prevents starting a new layer above an existing water surface.
+        let has_water_below = matches!(
+            snap_has_water(&water_snap, cur.c, cur.x, cur.y - 1, cur.z),
+            Some(true)
+        );
+        let below_is_solid = snap_is_solid(&solid_snap, cur.c, cur.x, cur.y - 1, cur.z)
+            .unwrap_or(true);
+
+        let has_side_water_same_y = {
+            let mut any = false;
+            for (dx, dz) in [(1, 0), (-1, 0), (0, 1), (0, -1)] {
+                let (nc, nx, nz) = neighbor_lookup_chunked(cur.c, cur.x + dx, cur.z + dz);
+                if matches!(snap_has_water(&water_snap, nc, nx, cur.y, nz), Some(true)) {
+                    any = true;
+                    break;
+                }
+            }
+            any
+        };
+
+        if !(has_water_below || (below_is_solid && has_side_water_same_y)) {
+            // No valid support -> do not fill this cell
+            continue;
+        }
+        // --- end support check ---
+
+        // Accept fill
         res.filled.push(cur);
         filled_count += 1;
         if filled_count >= job.cap {
@@ -145,25 +178,27 @@ async fn flow_task_run(solid_snap: SolidSnapshot, water_snap: WaterSnap, mut job
             break;
         }
 
-        let mut push = |c: IVec2, x:i32,y:i32,z:i32| {
+        // Enqueue neighbors (down first for gravity-like behavior)
+        let mut push = |c: IVec2, x: i32, y: i32, z: i32| {
             if y < 0 || y >= CY as i32 { return; }
             if let Some(true) = snap_has_water(&water_snap, c, x, y, z) { return; }
-            let k = (c,x,y,z);
+            let k = (c, x, y, z);
             if seen.insert(k) {
-                if in_snapshot(&solid_snap, c) { q.push_back(Seed{ c, x, y, z }); }
-                else { res.spill.push(Seed{ c, x, y, z }); }
+                if in_snapshot(&solid_snap, c) { q.push_back(Seed { c, x, y, z }); }
+                else { res.spill.push(Seed { c, x, y, z }); }
             }
         };
 
         push(cur.c, cur.x, cur.y - 1, cur.z);
-        let (c1,x1,z1) = neighbor_lookup_chunked(cur.c, cur.x+1, cur.z); push(c1, x1, cur.y, z1);
-        let (c2,x2,z2) = neighbor_lookup_chunked(cur.c, cur.x-1, cur.z); push(c2, x2, cur.y, z2);
-        let (c3,x3,z3) = neighbor_lookup_chunked(cur.c, cur.x, cur.z+1); push(c3, x3, cur.y, z3);
-        let (c4,x4,z4) = neighbor_lookup_chunked(cur.c, cur.x, cur.z-1); push(c4, x4, cur.y, z4);
+        let (c1, x1, z1) = neighbor_lookup_chunked(cur.c, cur.x + 1, cur.z); push(c1, x1, cur.y, z1);
+        let (c2, x2, z2) = neighbor_lookup_chunked(cur.c, cur.x - 1, cur.z); push(c2, x2, cur.y, z2);
+        let (c3, x3, z3) = neighbor_lookup_chunked(cur.c, cur.x, cur.z + 1); push(c3, x3, cur.y, z3);
+        let (c4, x4, z4) = neighbor_lookup_chunked(cur.c, cur.x, cur.z - 1); push(c4, x4, cur.y, z4);
     }
 
     res
 }
+
 fn enqueue_flow_on_block_removed(
     mut ev: EventReader<BlockBreakByPlayerEvent>,
     fluids: Res<FluidMap>,
@@ -172,6 +207,8 @@ fn enqueue_flow_on_block_removed(
 ) {
     for e in ev.read() {
         let c = e.chunk_coord;
+
+        // Skip if cell isn't actually air now
         if let Some(ch) = chunks.chunks.get(&c) {
             if ch.get(e.chunk_x as usize, e.chunk_y as usize, e.chunk_z as usize) != 0 { continue; }
         } else { continue; }
@@ -179,16 +216,26 @@ fn enqueue_flow_on_block_removed(
         let mut sea_level = None;
         let mut has_water = false;
 
+        // Choose seed position; start at broken block
+        let seed_x = e.chunk_x as i32;
+        let mut seed_y = e.chunk_y as i32;
+        let seed_z = e.chunk_z as i32;
+
         for (dx,dy,dz) in [(1,0,0),(-1,0,0),(0,0,1),(0,0,-1),(0,-1,0),(0,1,0)] {
-            let lx = e.chunk_x as i32 + dx;
-            let ly = e.chunk_y as i32 + dy;
-            let lz = e.chunk_z as i32 + dz;
+            let lx = seed_x + dx;
+            let ly = seed_y + dy;
+            let lz = seed_z + dz;
             if ly < 0 || ly >= CY as i32 { continue; }
             let (nc, nx, nz) = neighbor_lookup_chunked(c, lx, lz);
             if let Some(fc) = fluids.0.get(&nc) {
                 if fc.get(nx as usize, ly as usize, nz as usize) {
                     sea_level.get_or_insert(fc.sea_level);
                     has_water = true;
+
+                    // If water is directly below, snap seed down to the surface.
+                    if dy == -1 {
+                        seed_y -= 1;
+                    }
                     break;
                 }
             }
@@ -196,7 +243,7 @@ fn enqueue_flow_on_block_removed(
         if !has_water { continue; }
 
         queue.0.push_back(FlowJob {
-            seeds: vec![Seed{ c, x: e.chunk_x as i32, y: e.chunk_y as i32, z: e.chunk_z as i32 }],
+            seeds: vec![Seed{ c, x: seed_x, y: seed_y, z: seed_z }],
             sea_level: sea_level.unwrap_or(SEA_LEVEL),
             cap: WATER_FLOW_CAP,
         });

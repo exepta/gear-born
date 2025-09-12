@@ -1,0 +1,13 @@
+{
+  "name": "deep_stone_block",
+  "texture_dir": "textures/blocks/deep_stone",
+  "texture": {
+    "all": "deep_stone"
+  },
+  "stats": {
+    "hardness": 5.75,
+    "blast_resistance": 4.0,
+    "opaque": true,
+    "emissive": 0.0
+  }
+}

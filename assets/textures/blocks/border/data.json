@@ -1,0 +1,9 @@
+{
+  "image": "border.png",
+  "tile_size": 512,
+  "columns": 1,
+  "rows": 1,
+  "tiles": {
+    "border": [0, 0]
+  }
+}

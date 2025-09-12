@@ -1,0 +1,9 @@
+{
+  "image": "deep_stone.png",
+  "tile_size": 512,
+  "columns": 1,
+  "rows": 1,
+  "tiles": {
+    "deep_stone": [0, 0]
+  }
+}
