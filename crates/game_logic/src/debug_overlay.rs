@@ -23,7 +23,8 @@ use game_core::world::biome::registry::BiomeRegistry;
 struct DebugSnapshot {
     // Numbers
     fps: f32,
-    cpu_percent: f32,
+    cpu_percent: f32,        // system-wide CPU (%)
+    app_cpu_percent: f32,
     app_mem_bytes: u64,
     v_ram_label: String,
 
@@ -42,6 +43,7 @@ struct DebugSnapshot {
     app_ver: &'static str,
     bevy_ver: &'static str,
     backend_name: String,
+    cpu_brand: String,
     backend_str: &'static str,
     chunk_range: i32,
     mode_text: &'static str,
@@ -84,7 +86,14 @@ impl Plugin for DebugOverlayPlugin {
             .add_systems(
                 Update,
                 (
-                    (snap_perf, snap_camera_and_world, snap_selection, snap_build_and_mode, snap_v_ram).chain(),
+                    (
+                        snap_perf,
+                        snap_camera_and_world,
+                        snap_selection,
+                        snap_build_and_mode,
+                        snap_v_ram,
+                        snap_cpu_brand
+                    ).chain(),
                     render_debug_text,
                 )
                     .run_if(in_state(AppState::InGame(InGameStates::Game)))
@@ -97,6 +106,7 @@ fn snap_perf(diag: Res<DiagnosticsStore>, stats: Res<SysStats>, mut snap: ResMut
     snap.fps = diag.get(&FrameTimeDiagnosticsPlugin::FPS)
         .and_then(|d| d.smoothed()).unwrap_or(0.0) as f32;
     snap.cpu_percent = stats.cpu_percent;
+    snap.app_cpu_percent = stats.app_cpu_percent;
     snap.app_mem_bytes = stats.app_mem_bytes;
 }
 
@@ -225,6 +235,30 @@ fn setup_sys_info(mut stats: ResMut<SysStats>) {
     stats.sys = s;
 }
 
+fn snap_cpu_brand(stats: Res<SysStats>, mut snap: ResMut<DebugSnapshot>) {
+    if !snap.cpu_brand.is_empty() {
+        return;
+    }
+
+    let brand = stats
+        .sys
+        .cpus()
+        .iter()
+        .map(|c| c.brand().trim())
+        .find(|b| !b.is_empty())
+        .map(|s| s.to_string())
+        .or_else(|| {
+            stats
+                .sys
+                .cpus()
+                .first()
+                .map(|c| c.name().trim().to_string())
+        })
+        .unwrap_or_else(|| "Unknown CPU".to_string());
+
+    snap.cpu_brand = brand;
+}
+
 fn snap_v_ram(mut snap: ResMut<DebugSnapshot>) {
     if let Some(info) = detect_v_ram_best_effort() {
         // Example: "512 MB (DXGI / adapter-wide)" or "1.8 GB (NVML / per-process)"
@@ -252,8 +286,9 @@ fn render_debug_text(
         "{app} {app_ver}  (Bevy {bevy_ver})\n\
      FPS: {:>5.1}\n\
      Graphic: {}\n\
+     Used CPU: {}\n\
      V-RAM: {}\n\
-     CPU: {:>4.1}%  RAM: {}  Backend: {}\n\
+     CPU: ({:>4.1}% / {:>4.1}%)  RAM: {}  Backend: {}\n\
      Location: ({:.2}, {:.2}, {:.2})\n\
      Facing: {} ({:.1}°)\n\
      Chunk: ({}, {})  (size: {}x{}, range: {})\n\
@@ -264,8 +299,10 @@ fn render_debug_text(
      {}: Toggle Debug Overlay   {}: Toggle Chunk Grid",
         snap.fps,
         snap.backend_name,
+        snap.cpu_brand,
         snap.v_ram_label,
         snap.cpu_percent,
+        snap.app_cpu_percent,
         mem_str,
         snap.backend_str,
         snap.pos_bs.x, snap.pos_bs.y, snap.pos_bs.z,
@@ -339,7 +376,7 @@ fn ensure_overlay_exists(
                 position_type: PositionType::Absolute,
                 top: Val::Px(10.0),
                 left: Val::Px(10.0),
-                padding: UiRect::all(Val::Px(8.0)),
+                padding: UiRect::all(Val::Px(10.0)),
                 ..default()
             },
             BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.28)),
@@ -376,14 +413,18 @@ fn poll_sys_info(time: Res<Time>, mut stats: ResMut<SysStats>) {
         stats.sys.refresh_processes(ProcessesToUpdate::Some(&[pid]), false);
 
         let cpu_percent = stats.sys.global_cpu_usage();
-        let (app_mem_bytes, app_cpu_percent) = match stats.sys.process(pid) {
+
+        let (app_mem_bytes, app_cpu_raw) = match stats.sys.process(pid) {
             Some(p) => (p.memory(), p.cpu_usage()),
             None => (0, 0.0),
         };
 
+        let logical = stats.sys.cpus().len().max(1) as f32;
+        let app_cpu_norm = (app_cpu_raw / logical).clamp(0.0, 100.0);
+
         stats.cpu_percent = cpu_percent;
         stats.app_mem_bytes = app_mem_bytes;
-        stats.app_cpu_percent = app_cpu_percent;
+        stats.app_cpu_percent = app_cpu_norm; // store normalized value
     }
 }
 
@@ -509,3 +550,5 @@ fn facing_dir_from_cam(cam_gt: &GlobalTransform) -> (&'static str, f32) {
 fn overlay_visible(state: Option<Res<DebugOverlayState>>) -> bool {
     state.map_or(false, |s| s.show)
 }
+
+
