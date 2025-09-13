@@ -9,7 +9,7 @@
     "top": ["sand_block"],
     "bottom": ["sand_block"],
     "sea_floor": ["sand_block"],
-    "upper_zero": ["sand_stone_block"],
+    "upper_zero": ["stone_block"],
     "under_zero": ["stone_block"]
   },
   "settings": {

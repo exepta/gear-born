@@ -1,5 +1,5 @@
 use bevy::prelude::*;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet, VecDeque};
 
 use crate::world::block::{BlockId, DIR4_XZ};
 use crate::world::chunk_dim::*;
@@ -22,6 +22,15 @@ pub fn index3_to_xyz(i: usize) -> (usize, usize, usize) {
 }
 
 #[inline] pub fn in_bounds(x: usize, y: usize, z: usize) -> bool { x < CX && y < CY && z < CZ }
+
+/// Tracks which chunks still need caves and which are already done.
+#[derive(Resource, Default, Debug)]
+pub struct CaveTracker {
+    /// Pending chunk coords to process (FIFO).
+    pub pending: VecDeque<IVec2>,
+    /// Set of chunks that have already been carved (to avoid double work).
+    pub done: HashSet<IVec2>,
+}
 
 #[derive(Clone)]
 pub struct ChunkData {

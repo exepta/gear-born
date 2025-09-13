@@ -1,7 +1,7 @@
 use bevy::prelude::*;
 
 #[derive(Resource, Clone, Copy, PartialEq, Eq, Debug, Default)]
-pub enum LoadingPhase { #[default] BaseGen, WaterGen, Done }
+pub enum LoadingPhase { #[default] BaseGen, WaterGen, CaveGen, Done }
 
 #[derive(Clone, Copy, Default, Debug)]
 pub struct PhaseDetail {
@@ -17,6 +17,7 @@ pub struct LoadingProgress {
     pub phase: LoadingPhase,
     pub base:  PhaseDetail,
     pub water: PhaseDetail,
+    pub cave:  PhaseDetail,
     pub overall_pct: f32,
 }
 

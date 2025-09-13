@@ -29,6 +29,5 @@ fn change_mode(
 
         let mut fly_state = fly_state.single_mut().unwrap();
         fly_state.flying = game_mode.0 == GameMode::Creative || game_mode.0 == GameMode::Spectator;
-
     }
 }

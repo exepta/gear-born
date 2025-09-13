@@ -1,5 +1,3 @@
-use std::collections::{HashSet, VecDeque};
-
 use bevy::prelude::*;
 use bevy::tasks::{AsyncComputeTaskPool, Task};
 use futures_lite::future;
@@ -19,15 +17,6 @@ pub struct CaveBudget {
 }
 impl Default for CaveBudget {
     fn default() -> Self { Self { chunks_per_frame: 2 } }
-}
-
-/// Tracks which chunks still need caves and which are already done.
-#[derive(Resource, Default, Debug)]
-pub struct CaveTracker {
-    /// Pending chunk coords to process (FIFO).
-    pending: VecDeque<IVec2>,
-    /// Set of chunks that have already been carved (to avoid double work).
-    done: HashSet<IVec2>,
 }
 
 /// Wrap Task to avoid the ` # [must_use] ` warning when stored in a tuple.
