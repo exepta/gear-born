@@ -480,7 +480,7 @@ fn water_finish_check(
 
     if boot.started && world_ok && gen_done && coverage_ok && mesh_done {
         debug!("Water gen complete");
-        next.set(AppState::InGame(InGameStates::Game));
+        next.set(AppState::Loading(LoadingStates::CaveGen)); // Next step caves
     }
 }
 

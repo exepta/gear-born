@@ -55,7 +55,8 @@ pub struct FlightState { pub flying: bool }
 pub enum GameMode {
     Survival,
     #[default]
-    Creative
+    Creative,
+    Spectator,
 }
 
 #[derive(Resource, Default)]

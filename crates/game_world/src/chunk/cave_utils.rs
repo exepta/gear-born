@@ -1,0 +1,469 @@
+//! Cave utilities: region-based world-space "worm" caves and rare large rooms.
+//!
+//! Goals:
+//! - Long tunnels that cross chunk borders
+//! - Walkable: capsule sweep (ellipsoid) with headroom, limited pitch
+//! - Rare large chambers
+//! - Deterministic from (seed, a region)
+//!
+//! No Bevy deps; uses glam and fastnoise_lite.
+
+use bevy::prelude::*;
+use fastnoise_lite::*;
+
+#[derive(Debug, Clone)]
+pub struct CaveParams {
+    /* -------- global / tunnels -------- */
+    pub seed: i32,
+    pub y_top: i32,
+    pub y_bottom: i32,
+    pub worms_per_region: f32,   // expected worms per region (Poisson-ish)
+    pub region_chunks: i32,      // region = region_chunks x region_chunks chunks
+    pub base_radius: f32,        // base tunnel radius in X/Z
+    pub radius_var: f32,         // extra widening
+    pub step_len: f32,           // step size; will be clamped to <= radius
+    pub worm_len_steps: i32,     // typical worm length in steps
+    pub room_event_chance: f32,  // small rooms along tunnels
+    pub room_radius_min: f32,
+    pub room_radius_max: f32,
+
+    /* -------- caverns (new) -------- */
+    /// Expected *cavern clusters* per region (can be fractional, often 0 or 1).
+    pub caverns_per_region: f32,
+    /// Number of rooms per cluster (min,max).
+    pub cavern_room_count_min: i32,
+    pub cavern_room_count_max: i32,
+    /// Horizontal radius range per room (min,max).
+    pub cavern_room_radius_xz_min: f32,
+    pub cavern_room_radius_xz_max: f32,
+    /// Vertical radius range per room (min,max).
+    pub cavern_room_radius_y_min: f32,
+    pub cavern_room_radius_y_max: f32,
+    /// Corridor radius connecting rooms.
+    pub cavern_connector_radius: f32,
+    /// Depth window for caverns (usually deeper than tunnels).
+    pub cavern_y_top: i32,
+    pub cavern_y_bottom: i32,
+}
+
+/// IDs kept for compatibility with the previous API (not used directly here).
+#[derive(Copy, Clone, Debug)]
+#[allow(dead_code)]
+pub struct CaveBlockIds {
+    pub air: u32,
+    pub water: u32,
+    pub protected_1: Option<u32>,
+}
+
+/* =========================
+   small deterministic RNG
+   ========================= */
+
+#[derive(Clone)]
+struct Rng(u64);
+impl Rng {
+    #[inline] fn new(seed: u64) -> Self { Self(seed | 1) }
+    #[inline] fn next_u64(&mut self) -> u64 {
+        let mut x = self.0;
+        x ^= x << 13; x ^= x >> 7; x ^= x << 17;
+        self.0 = x; x
+    }
+    #[inline] fn f01(&mut self) -> f32 {
+        (self.next_u64() >> 11) as f32 * (1.0 / ((1u64<<53) as f32))
+    }
+    #[inline] fn range_f(&mut self, a: f32, b: f32) -> f32 { a + (b - a) * self.f01() }
+    #[inline] fn range_i(&mut self, a: i32, b: i32) -> i32 {
+        a + ((self.next_u64() % (1 + (b - a) as u64)) as i32)
+    }
+    #[inline] fn prob(&mut self, p: f32) -> bool { self.f01() < p }
+}
+
+#[inline]
+fn div_floor(a: i32, b: i32) -> i32 {
+    let d = a / b;
+    let r = a % b;
+    if (r != 0) && ((r < 0) != (b < 0)) { d - 1 } else { d }
+}
+
+fn region_seed(world_seed: i32, region: IVec2) -> u64 {
+    let a = region.x as i64;
+    let b = region.y as i64;
+    let mut h = (a.wrapping_mul(0x9E3779B185EBCA87u64 as i64) ^ b.wrapping_mul(0xC2B2AE3D27D4EB4Fu64 as i64)) as u64;
+    h ^= (world_seed as i64 as u64).wrapping_mul(0xD6E8FEB86659FD93);
+    h
+}
+
+/// Convert chunk coord to region coord (square grid).
+pub fn chunk_to_region(chunk: IVec2, region_chunks: i32) -> IVec2 {
+    IVec2::new(div_floor(chunk.x, region_chunks), div_floor(chunk.y, region_chunks))
+}
+
+/* =========================
+   Tunnels (worms)
+   ========================= */
+
+#[derive(Clone, Debug)]
+struct Worm {
+    start: Vec3,
+    dir: Vec3,
+    steps: i32,
+    base_r: f32,  // horizontal radius
+    var_r: f32,   // extra widening
+    step_len: f32,
+}
+
+fn worms_for_region(params: &CaveParams, region: IVec2, chunk_size: IVec2) -> Vec<Worm> {
+    let mut rng = Rng::new(region_seed(params.seed, region));
+
+    // Poisson-ish sampling around worms_per_region
+    let expected = params.worms_per_region.max(0.0);
+    let mut count = expected.floor() as i32;
+    if rng.prob(expected.fract()) { count += 1; }
+    if count == 0 { return Vec::new(); }
+
+    let reg_min = IVec3::new(
+        region.x * params.region_chunks * chunk_size.x,
+        params.y_bottom,
+        region.y * params.region_chunks * chunk_size.y,
+    );
+    let reg_max = IVec3::new(
+        reg_min.x + params.region_chunks * chunk_size.x - 1,
+        params.y_top,
+        reg_min.z + params.region_chunks * chunk_size.y - 1,
+    );
+
+    let mut worms = Vec::with_capacity(count as usize);
+    for _ in 0..count {
+        let sx = rng.range_i(reg_min.x, reg_max.x) as f32 + 0.5;
+        let sz = rng.range_i(reg_min.z, reg_max.z) as f32 + 0.5;
+        let sy = rng.range_i(params.y_bottom, params.y_top) as f32 + 0.5;
+
+        // Mostly horizontal start direction with a small tilt
+        let yaw   = rng.range_f(0.0, std::f32::consts::TAU);
+        let pitch = rng.range_f(-0.18, 0.18); // radians
+        let dir = Vec3::new(yaw.cos() * pitch.cos(), pitch.sin(), yaw.sin() * pitch.cos()).normalize();
+
+        let steps = (params.worm_len_steps as f32 * rng.range_f(0.9, 1.3)).round() as i32;
+        let base_r = params.base_radius * rng.range_f(0.95, 1.25);
+        // step <= radius to avoid gaps (capsule continuity)
+        let step_len = params.step_len.min(base_r * 0.8).max(0.5);
+
+        worms.push(Worm {
+            start: Vec3::new(sx, sy, sz),
+            dir,
+            steps,
+            base_r,
+            var_r: params.radius_var,
+            step_len,
+        });
+    }
+    worms
+}
+
+/* =========================
+   Caverns (clusters of big rooms)
+   ========================= */
+
+#[derive(Clone)]
+struct CavernRoom {
+    center: Vec3,
+    rx: f32, ry: f32, rz: f32, // radii (ellipsoid)
+}
+
+#[derive(Clone)]
+struct CavernCluster {
+    rooms: Vec<CavernRoom>,
+    connector_r: f32,
+}
+
+fn caverns_for_region(params: &CaveParams, region: IVec2, chunk_size: IVec2) -> Vec<CavernCluster> {
+    let mut rng = Rng::new(region_seed(params.seed.wrapping_add(0xA5A5_0001u32 as i32), region));
+    let expected = params.caverns_per_region.max(0.0);
+    let mut count = expected.floor() as i32;
+    if rng.prob(expected.fract()) { count += 1; }
+    if count == 0 { return Vec::new(); }
+
+    let reg_min = IVec3::new(
+        region.x * params.region_chunks * chunk_size.x,
+        params.cavern_y_bottom,
+        region.y * params.region_chunks * chunk_size.y,
+    );
+    let reg_max = IVec3::new(
+        reg_min.x + params.region_chunks * chunk_size.x - 1,
+        params.cavern_y_top,
+        reg_min.z + params.region_chunks * chunk_size.y - 1,
+    );
+
+    let mut out = Vec::with_capacity(count as usize);
+    for _ in 0..count {
+        // number of rooms
+        let n = rng.range_i(params.cavern_room_count_min, params.cavern_room_count_max).max(1);
+        let mut rooms = Vec::with_capacity(n as usize);
+
+        // choose a cluster center deep underground
+        let cx = rng.range_i(reg_min.x, reg_max.x) as f32 + 0.5;
+        let cz = rng.range_i(reg_min.z, reg_max.z) as f32 + 0.5;
+        let cy = rng.range_i(params.cavern_y_bottom, params.cavern_y_top) as f32 + 0.5;
+        let center = Vec3::new(cx, cy, cz);
+
+        // spread rooms around a center
+        for _ in 0..n {
+            let dx = rng.range_f(-24.0, 24.0);
+            let dz = rng.range_f(-24.0, 24.0);
+            let dy = rng.range_f(-8.0, 8.0);
+
+            let rx = rng.range_f(params.cavern_room_radius_xz_min, params.cavern_room_radius_xz_max);
+            let rz = rng.range_f(params.cavern_room_radius_xz_min, params.cavern_room_radius_xz_max);
+            let ry = rng.range_f(params.cavern_room_radius_y_min,  params.cavern_room_radius_y_max);
+
+            rooms.push(CavernRoom {
+                center: center + Vec3::new(dx, dy, dz),
+                rx, ry, rz,
+            });
+        }
+
+        out.push(CavernCluster {
+            rooms,
+            connector_r: params.cavern_connector_radius,
+        });
+    }
+
+    out
+}
+
+/* =========================
+   Geometry helpers
+   ========================= */
+
+#[inline]
+fn lerp(a: f32, b: f32, t: f32) -> f32 { a + (b - a) * t }
+
+/// Append voxels of an *ellipsoid* into `out`, converted to local coords.
+/// Horizontal radii = (rx, rz), vertical radius = ry.
+fn append_ellipsoid_into_chunk(
+    out: &mut Vec<(u16,u16,u16)>,
+    center: Vec3,
+    rx: f32, ry: f32, rz: f32,
+    wx0: i32, wz0: i32,
+    chunk_size: IVec2,
+    y_min: i32, y_max: i32,
+) {
+    let cx = center.x.floor() as i32;
+    let cy = center.y.floor() as i32;
+    let cz = center.z.floor() as i32;
+
+    let x0 = (cx - rx as i32).max(wx0);
+    let x1 = (cx + rx as i32).min(wx0 + chunk_size.x - 1);
+    let z0 = (cz - rz as i32).max(wz0);
+    let z1 = (cz + rz as i32).min(wz0 + chunk_size.y - 1);
+    let y0 = (cy - ry as i32).max(y_min);
+    let y1 = (cy + ry as i32).min(y_max);
+
+    let inv_rx2 = 1.0 / (rx * rx).max(1e-6);
+    let inv_ry2 = 1.0 / (ry * ry).max(1e-6);
+    let inv_rz2 = 1.0 / (rz * rz).max(1e-6);
+
+    for wx in x0..=x1 {
+        let dx2 = (wx as f32 - center.x).powi(2) * inv_rx2;
+        for wz in z0..=z1 {
+            let dz2 = (wz as f32 - center.z).powi(2) * inv_rz2;
+            let base = dx2 + dz2;
+            if base > 1.0 { continue; }
+            for wy in y0..=y1 {
+                let dy2 = (wy as f32 - center.y).powi(2) * inv_ry2;
+                if base + dy2 <= 1.0 {
+                    let lx = (wx - wx0) as u16;
+                    let lz = (wz - wz0) as u16;
+                    let ly = (wy - y_min) as u16;
+                    out.push((lx, ly, lz));
+                }
+            }
+        }
+    }
+}
+
+/* =========================
+   Public: main per-chunk edit generator
+   ========================= */
+
+/// Compute local voxel edits for a chunk by:
+/// 1) sweeping capsule-like ellipsoids along long "worms" (tunnels),
+/// 2) adding rare *cavern clusters* (big ellipsoidal rooms plus connecting corridors).
+pub fn worm_edits_for_chunk(
+    params: &CaveParams,
+    chunk_coord: IVec2,
+    chunk_size: IVec2, // (CX, CZ)
+    y_min: i32,
+    y_max: i32,
+) -> Vec<(u16, u16, u16)> {
+    // Region neighborhood (3x3) for continuity
+    let reg = chunk_to_region(chunk_coord, params.region_chunks);
+
+    let mut worms: Vec<Worm> = Vec::new();
+    let mut caverns: Vec<CavernCluster> = Vec::new();
+    for dz in -1..=1 {
+        for dx in -1..=1 {
+            let r = IVec2::new(reg.x + dx, reg.y + dz);
+            worms.extend(worms_for_region(params, r, chunk_size));
+            caverns.extend(caverns_for_region(params, r, chunk_size));
+        }
+    }
+
+    // Chunk world bounds
+    let wx0 = chunk_coord.x * chunk_size.x;
+    let wz0 = chunk_coord.y * chunk_size.y;
+    let wx1 = wx0 + chunk_size.x - 1;
+    let wz1 = wz0 + chunk_size.y - 1;
+
+    // Smooth curvature noise for tunnels
+    let mut warp = FastNoiseLite::with_seed(params.seed.wrapping_add(0x5A5A));
+    warp.set_noise_type(Some(NoiseType::OpenSimplex2));
+    warp.set_frequency(Some(0.015));
+
+    // Local widening along tunnels
+    let mut widen = FastNoiseLite::with_seed(params.seed.wrapping_add(0xBEEF));
+    widen.set_noise_type(Some(NoiseType::OpenSimplex2));
+    widen.set_frequency(Some(0.035));
+
+    let mut edits: Vec<(u16, u16, u16)> = Vec::new();
+
+    /* --------- Tunnels --------- */
+    let clamp_pitch = |dir: Vec3| -> Vec3 {
+        // keep tunnels mostly walkable
+        let mut v = dir;
+        v.y = v.y.clamp(-0.18, 0.18);
+        v.normalize()
+    };
+
+    for w in worms {
+        let mut p_prev = w.start;
+        let mut d = clamp_pitch(w.dir);
+
+        for step in 0..w.steps {
+            // Curvature (yaw/pitch) from noise
+            let n1 = warp.get_noise_3d(p_prev.x, p_prev.y, p_prev.z);
+            let n2 = warp.get_noise_3d(p_prev.z * 0.7, p_prev.x * 0.7, p_prev.y * 0.7);
+            let yaw_delta   = n1 * 0.09;
+            let pitch_delta = n2 * 0.06;
+
+            let cy = yaw_delta.cos(); let sy = yaw_delta.sin();
+            let cp = pitch_delta.cos(); let sp = pitch_delta.sin();
+
+            let dx =  cy * d.x + sy * d.z;
+            let dz = -sy * d.x + cy * d.z;
+            let dy = d.y * cp + sp * dx.hypot(dz).min(1.0);
+            d = clamp_pitch(Vec3::new(dx, dy, dz).normalize());
+
+            // Advance
+            let p_next = p_prev + d * w.step_len;
+
+            // Vertical limits
+            if (p_next.y as i32) < params.y_bottom || (p_next.y as i32) > params.y_top {
+                p_prev = p_next;
+                continue;
+            }
+
+            // AABB quick reject vs. chunk using max radius
+            let max_r = (w.base_r + w.var_r).ceil() as i32 + 1;
+            if (p_next.x as i32) + max_r < wx0 || (p_next.x as i32) - max_r > wx1 ||
+                (p_next.z as i32) + max_r < wz0 || (p_next.z as i32) - max_r > wz1 {
+                p_prev = p_next;
+                continue;
+            }
+
+            // Local radii
+            let widen_f = 0.5 * (widen.get_noise_3d(p_next.x, p_next.y, p_next.z) + 1.0);
+            let r_h = w.base_r + widen_f * w.var_r;   // X/Z radius
+            let r_v = (r_h * 0.85).max(1.8);          // Y radius with headroom
+
+            // Capsule sweep between p_prev and p_next
+            let seg = p_next - p_prev;
+            let seg_len = seg.length().max(1e-4);
+            let samples = (seg_len / (r_h * 0.6).max(0.6)).ceil() as i32;
+            for s in 0..=samples {
+                let t = s as f32 / samples.max(1) as f32;
+                let q = p_prev.lerp(p_next, t);
+                append_ellipsoid_into_chunk(
+                    &mut edits, q, r_h, r_v, r_h, wx0, wz0, chunk_size, y_min, y_max
+                );
+            }
+
+            // Occasional small-ish room along a tunnel
+            if params.room_event_chance > 0.0 && (step % 28 == 0) {
+                let trigger = 0.5 * (warp.get_noise_3d(p_next.x * 0.2, p_next.y * 0.2, p_next.z * 0.2) + 1.0);
+                if trigger > (1.0 - params.room_event_chance) {
+                    let t = 0.5 * (widen.get_noise_3d(p_next.y, p_next.z, p_next.x) + 1.0);
+                    let rr = lerp(params.room_radius_min, params.room_radius_max, t);
+                    append_ellipsoid_into_chunk(
+                        &mut edits, p_next, rr, rr * 0.85, rr, wx0, wz0, chunk_size, y_min, y_max
+                    );
+                }
+            }
+
+            p_prev = p_next;
+        }
+    }
+
+    /* --------- Caverns (big rooms + connectors) --------- */
+
+    // IMPORTANT: Do not capture `&mut edits` in this closure.
+    // Pass it in as a parameter to avoid long-lived mutable borrow.
+    let append_corridor = |ed: &mut Vec<(u16, u16, u16)>, a: &CavernRoom, b: &CavernRoom, r: f32| {
+        let pa = a.center; let pb = b.center;
+        // Quick reject: corridor bbox vs chunk
+        let min_x = pa.x.min(pb.x) as i32 - (r as i32) - 1;
+        let max_x = pa.x.max(pb.x) as i32 + (r as i32) + 1;
+        let min_z = pa.z.min(pb.z) as i32 - (r as i32) - 1;
+        let max_z = pa.z.max(pb.z) as i32 + (r as i32) + 1;
+        if max_x < wx0 || min_x > wx1 || max_z < wz0 || min_z > wz1 {
+            return;
+        }
+        let seg = pb - pa;
+        let len = seg.length().max(1e-4);
+        let samples = (len / (r * 0.7).max(0.8)).ceil() as i32;
+        for s in 0..=samples {
+            let t = s as f32 / samples.max(1) as f32;
+            let q = pa.lerp(pb, t);
+            append_ellipsoid_into_chunk(ed, q, r, r * 0.85, r, wx0, wz0, chunk_size, y_min, y_max);
+        }
+    };
+
+    for cluster in caverns {
+        // Rooms
+        for room in &cluster.rooms {
+            // Quick reject against chunk AABB
+            let rx = room.rx; let ry = room.ry; let rz = room.rz;
+            let min_x = (room.center.x - rx) as i32;
+            let max_x = (room.center.x + rx) as i32;
+            let min_z = (room.center.z - rz) as i32;
+            let max_z = (room.center.z + rz) as i32;
+            if max_x < wx0 || min_x > wx1 || max_z < wz0 || min_z > wz1 { continue; }
+            append_ellipsoid_into_chunk(
+                &mut edits, room.center, rx, ry, rz, wx0, wz0, chunk_size, y_min, y_max
+            );
+        }
+        // Connect rooms by a simple nearest-neighbor chain
+        if cluster.rooms.len() >= 2 {
+            let mut used = vec![false; cluster.rooms.len()];
+            let mut idx = 0usize;
+            used[idx] = true;
+            for _ in 1..cluster.rooms.len() {
+                // Find nearest not used
+                let p = cluster.rooms[idx].center;
+                let mut best: Option<(usize, f32)> = None;
+                for (j, r) in cluster.rooms.iter().enumerate() {
+                    if used[j] { continue; }
+                    let d2 = (r.center - p).length_squared();
+                    if best.map_or(true, |(_, bd)| d2 < bd) { best = Some((j, d2)); }
+                }
+                if let Some((j, _)) = best {
+                    append_corridor(&mut edits, &cluster.rooms[idx], &cluster.rooms[j], cluster.connector_r);
+                    used[j] = true;
+                    idx = j;
+                }
+            }
+        }
+    }
+
+    edits
+}

@@ -23,10 +23,12 @@ fn change_mode(
     if keys.just_pressed(key) {
         game_mode.0 = match game_mode.0 {
             GameMode::Survival => GameMode::Creative,
-            GameMode::Creative => GameMode::Survival,
+            GameMode::Creative => GameMode::Spectator,
+            GameMode::Spectator => GameMode::Survival,
         };
 
         let mut fly_state = fly_state.single_mut().unwrap();
-        fly_state.flying = game_mode.0 == GameMode::Creative;
+        fly_state.flying = game_mode.0 == GameMode::Creative || game_mode.0 == GameMode::Spectator;
+
     }
 }

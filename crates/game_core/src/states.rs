@@ -71,6 +71,8 @@ pub enum LoadingStates {
     BaseGen,
     
     WaterGen,
+    
+    CaveGen
 }
 
 /// Main in-game state and relevant substates.

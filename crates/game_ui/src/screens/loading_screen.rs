@@ -33,11 +33,12 @@ impl Plugin for LoadingScreen {
                 (update_loading_progress, update_loading_text, update_progress_bar)
                     .run_if(
                         in_state(AppState::Loading(LoadingStates::BaseGen))
-                            .or(in_state(AppState::Loading(LoadingStates::WaterGen)))
+                            .or(in_state(AppState::Loading(LoadingStates::WaterGen))
+                                .or(in_state(AppState::Loading(LoadingStates::CaveGen))))
                     )
             )
             .add_systems(
-                OnExit(AppState::Loading(LoadingStates::WaterGen)),
+                OnExit(AppState::Loading(LoadingStates::CaveGen)),
                 (despawn_loading_ui, clear_loading_resources)
             );
     }
