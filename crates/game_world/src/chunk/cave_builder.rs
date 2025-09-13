@@ -129,34 +129,46 @@ fn carve_caves_step(
     let params_template = CaveParams {
         seed: world_gen_config.seed,
 
-        /* tunnels window */
+        /* tunnels vertical window */
         y_top: 52,
-        y_bottom: -120,
+        y_bottom: -110,
 
         /* worms: sparser, longer, wider */
-        worms_per_region: 0.6,
-        region_chunks: 4,
-        base_radius: 2.4,
-        radius_var: 1.3,
-        step_len: 1.1,
-        worm_len_steps: 340,
+        worms_per_region: 1.0, // fewer overall
+        region_chunks: 3,
+        base_radius: 3.6,
+        radius_var: 2.5,
+        step_len: 1.3,
+        worm_len_steps: 360,
 
         /* small rooms along tunnels */
-        room_event_chance: 0.05,
-        room_radius_min: 5.0,
-        room_radius_max: 9.0,
+        room_event_chance: 0.09,
+        room_radius_min: 6.0,
+        room_radius_max: 10.5,
 
-        /* caverns: rare but huge, deep */
-        caverns_per_region: 0.35,
-        cavern_room_count_min: 3,
-        cavern_room_count_max: 7,
-        cavern_room_radius_xz_min: 10.0,
-        cavern_room_radius_xz_max: 22.0,
-        cavern_room_radius_y_min: 6.0,
-        cavern_room_radius_y_max: 14.0,
-        cavern_connector_radius: 3.2,
+        /* normal caverns: uncommon mid-sized rooms */
+        caverns_per_region: 0.45,
+        cavern_room_count_min: 5,
+        cavern_room_count_max: 9,
+        cavern_room_radius_xz_min: 16.0,
+        cavern_room_radius_xz_max: 34.0,
+        cavern_room_radius_y_min: 9.0,
+        cavern_room_radius_y_max: 21.0,
+        cavern_connector_radius: 4.2,
         cavern_y_top: -10,
-        cavern_y_bottom: -110,
+        cavern_y_bottom: -100,
+
+        /* MEGA caverns: very rare, very large (requested 40–122 wide) */
+        mega_caverns_per_region: 0.075,      // ~6% chance per region on average
+        mega_room_count_min: 1,
+        mega_room_count_max: 3,              // keep low; rooms are huge
+        mega_room_radius_xz_min: 45.0,
+        mega_room_radius_xz_max: 144.0,
+        mega_room_radius_y_min: 20.0,        // tall, but not as wide
+        mega_room_radius_y_max: 46.0,
+        mega_connector_radius: 8.0,          // thick connectors between mega rooms
+        mega_y_top: -30,                      // keep deep to avoid surface damage
+        mega_y_bottom: -105,
     };
 
     // 1) spawn a few jobs per frame

@@ -2,6 +2,7 @@ use bevy::prelude::*;
 use bevy::render::view::RenderLayers;
 use game_core::debug::SelectionGizmoGroup;
 use game_core::player::selection::SelectionState;
+use game_core::player::{GameMode, GameModeState};
 use game_core::states::{AppState, InGameStates};
 use game_core::world::block::{get_block_world, BlockRegistry, SelectedBlock, VOXEL_SIZE};
 use game_core::world::chunk::{ChunkMap, VoxelStage};
@@ -40,7 +41,9 @@ fn update_selection(
     mut sel: ResMut<SelectionState>,
     q_cam: Query<(&GlobalTransform, &Camera), (With<Camera3d>, Without<BlockCatalogPreviewCam>)>,
     chunk_map: Res<ChunkMap>,
+    game_mode: Res<GameModeState>,
 ) {
+    if game_mode.0.eq(&GameMode::Spectator) { return; }
     let Ok((tf, _cam)) = q_cam.single() else { return; };
 
     let origin_bs = tf.translation() / VOXEL_SIZE;
@@ -53,7 +56,9 @@ fn update_selection(
 fn draw_selection_gizmo(
     sel: Res<SelectionState>,
     mut gizmos: Gizmos<SelectionGizmoGroup>,
+    game_mode: Res<GameModeState>,
 ) {
+    if game_mode.0.eq(&GameMode::Spectator) { return; }
     if let Some(hit) = sel.hit {
         let s = VOXEL_SIZE;
         let center = Vec3::new(
@@ -72,7 +77,9 @@ fn pick_block_from_look(
     chunk_map: Res<ChunkMap>,
     reg: Res<BlockRegistry>,
     mut selected: ResMut<SelectedBlock>,
+    game_mode: Res<GameModeState>,
 ) {
+    if game_mode.0.eq(&GameMode::Spectator) { return; }
     if !buttons.just_pressed(MouseButton::Middle) { return; }
     let Some(hit) = sel_state.hit else { return; };
 
