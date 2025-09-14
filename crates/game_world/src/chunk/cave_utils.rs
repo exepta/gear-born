@@ -432,16 +432,16 @@ pub fn worm_edits_for_chunk(
         let mut v = dir; v.y = v.y.clamp(-0.18, 0.18); v.normalize()
     };
 
-    // Entrance spur pitch: allow stronger upward tendency
+    // Entrance spur pitch: allow a stronger upward tendency
     let clamp_pitch_up = |dir: Vec3| -> Vec3 {
         let mut v = dir; v.y = v.y.clamp(-0.05, 0.45); v.normalize()
     };
 
-    // Carve a short upward spur starting near the top of cave window.
+    // Carve a short upward spur starting near the top of a cave window.
     // It gradually narrows while climbing a bit above params.y_top (up to entrance_extra_top).
     let carve_entrance_spur = |out: &mut Vec<(u16,u16,u16)>, start: Vec3, base_dir: Vec3, base_r: f32| {
         // Early out if already above allowed entrance ceiling
-        let y_ceiling = (params.y_top + params.entrance_extra_top) as f32;
+        let _y_ceiling = (params.y_top + params.entrance_extra_top) as f32;
 
         let mut p_prev = start;
         let mut d = clamp_pitch_up(Vec3::new(base_dir.x, (base_dir.y + 0.35).clamp(0.1, 0.45), base_dir.z));
@@ -525,7 +525,7 @@ pub fn worm_edits_for_chunk(
 
             let p_next = p_prev + d * w.step_len;
 
-            // Keep main tunnel within the base window; still advance simulation
+            // Keep the main tunnel within the base window; still advance simulation
             if (p_next.y as i32) < params.y_bottom || (p_next.y as i32) > params.y_top {
                 p_prev = p_next;
                 continue;
@@ -547,7 +547,7 @@ pub fn worm_edits_for_chunk(
             let r_h = w.base_r + widen_f * w.var_r;
             let r_v = (r_h * 0.85).max(1.8);
 
-            // Carve main segment as a string of ellipsoids
+            // Carve the main segment as a string of ellipsoids
             let seg = p_next - p_prev;
             let seg_len = seg.length().max(1e-4);
             let samples = (seg_len / (r_h * 0.6).max(0.6)).ceil() as i32;
