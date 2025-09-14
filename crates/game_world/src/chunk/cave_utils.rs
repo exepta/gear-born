@@ -51,7 +51,6 @@ pub struct CaveParams {
     pub mega_y_bottom: i32,
 
     /* -------- entrances (upward spurs near top window) -------- */
-    pub entrance_extra_top: i32,     // how far above y_top we may continue carving
     pub entrance_chance: f32,        // probability to spawn an entrance spur near top
     pub entrance_len_steps: i32,     // how many steps an entrance spur will try to climb
     pub entrance_radius_scale: f32,  // scale of entrance radius relative to local tunnel radius
@@ -395,26 +394,57 @@ pub fn worm_edits_for_chunk(
     y_min: i32,
     y_max: i32,
 ) -> Vec<(u16, u16, u16)> {
+    // --- which region does this chunk belong to? ---
     let reg = chunk_to_region(chunk_coord, params.region_chunks);
 
+    /* ---------------------------------------------------------------
+       FIX #1: include more neighbor REGIONS to avoid flat planes
+       at region/chunk borders for large features (mega rooms, long
+       tunnels). We compute a conservative search radius in regions.
+       ---------------------------------------------------------------- */
+
+    // Width of one "region" in world-voxels (assuming square X/Z)
+    let region_w = params.region_chunks * chunk_size.x;
+
+    // The biggest horizontal radius any single room can have
+    let max_room_r = params
+        .mega_room_radius_xz_max
+        .max(params.cavern_room_radius_xz_max)
+        .ceil() as i32;
+
+    // Very rough tunnel reach in voxels (length ~ steps * step_len)
+    let approx_worm_reach =
+        (params.worm_len_steps as f32 * params.step_len).ceil() as i32;
+
+    // Convert world reach to "how many extra regions" we should scan.
+    // Example: region_w=3*32=96, max_room_r=144 -> 1 + 144/96 = 2
+    let rr_rooms = 1 + max_room_r / region_w.max(1);
+    let rr_worms = 1 + approx_worm_reach / region_w.max(1);
+
+    // Final radius: cap to keep perf sane (2..3 is usually plenty)
+    let reg_radius = rr_rooms.max(rr_worms).clamp(1, 3);
+
+    // Collect sources (worms and caverns) from a square of regions.
     let mut worms: Vec<Worm> = Vec::new();
     let mut caverns: Vec<CavernCluster> = Vec::new();
-    for dz in -1..=1 {
-        for dx in -1..=1 {
+    for dz in -reg_radius..=reg_radius {
+        for dx in -reg_radius..=reg_radius {
             let r = IVec2::new(reg.x + dx, reg.y + dz);
+            // NOTE: These are inexpensive to generate; later we cull a per-segment
+            // against the target chunk AABB, so far-away items cost almost nothing.
             worms.extend(worms_for_region(params, r, chunk_size));
             caverns.extend(caverns_for_region(params, r, chunk_size));
             caverns.extend(mega_caverns_for_region(params, r, chunk_size));
         }
     }
 
-    // Chunk world bounds
+    // --- chunk world AABB (used for fast XY culling) ---
     let wx0 = chunk_coord.x * chunk_size.x;
     let wz0 = chunk_coord.y * chunk_size.y;
     let wx1 = wx0 + chunk_size.x - 1;
     let wz1 = wz0 + chunk_size.y - 1;
 
-    // Smooth curvature and local widen
+    // --- smooth curvature and local widen noise ---
     let mut warp = FastNoiseLite::with_seed(params.seed.wrapping_add(0x5A5A));
     warp.set_noise_type(Some(NoiseType::OpenSimplex2));
     warp.set_frequency(Some(0.015));
@@ -425,7 +455,7 @@ pub fn worm_edits_for_chunk(
 
     let mut edits: Vec<(u16, u16, u16)> = Vec::new();
 
-    /* --------- helpers --------- */
+    /* ------------------------- helpers ------------------------- */
 
     // Keep pitch between gentle down and gentle up
     let clamp_pitch = |dir: Vec3| -> Vec3 {
@@ -437,14 +467,19 @@ pub fn worm_edits_for_chunk(
         let mut v = dir; v.y = v.y.clamp(-0.05, 0.45); v.normalize()
     };
 
-    // Carve a short upward spur starting near the top of a cave window.
-    // It gradually narrows while climbing a bit above params.y_top (up to entrance_extra_top).
+    // Carve a short upward spur near the top of the cave window.
+    // EN: Will gently climb; allowed to go high up to (y_max - clearance)
+    // so mountain tops can be reached.
     let carve_entrance_spur = |out: &mut Vec<(u16,u16,u16)>, start: Vec3, base_dir: Vec3, base_r: f32| {
-        // Early out if already above allowed entrance ceiling
-        let _y_ceiling = (params.y_top + params.entrance_extra_top) as f32;
+        // Dynamic ceiling: as high as the world allows (minus safety clearance).
+        let y_ceiling = (y_max - Y_CLEARANCE) as f32;
 
         let mut p_prev = start;
-        let mut d = clamp_pitch_up(Vec3::new(base_dir.x, (base_dir.y + 0.35).clamp(0.1, 0.45), base_dir.z));
+        let mut d = clamp_pitch_up(Vec3::new(
+            base_dir.x,
+            (base_dir.y + 0.35).clamp(0.10, 0.45),
+            base_dir.z,
+        ));
 
         // Shorter steps for more control when going up
         let step_len = (base_r * 0.55).max(0.5);
@@ -467,11 +502,11 @@ pub fn worm_edits_for_chunk(
 
             let p_next = p_prev + d * step_len;
 
-            // Abort if we went too high or out of global Y bounds
-            if p_next.y as i32 >= params.y_top + params.entrance_extra_top { break; }
+            // Stop if we went too high or left global Y bounds
+            if p_next.y >= y_ceiling { break; }
             if (p_next.y as i32) < y_min || (p_next.y as i32) > y_max { break; }
 
-            // Culling by XY to avoid doing work for far-away chunks
+            // Quick XY cull against our target chunk
             let r_max = base_r * params.entrance_radius_scale;
             let max_r_i = r_max.ceil() as i32 + 1;
             let min_x = (p_prev.x.min(p_next.x) as i32) - max_r_i;
@@ -482,13 +517,13 @@ pub fn worm_edits_for_chunk(
                 p_prev = p_next; continue;
             }
 
-            // Taper radius: start from a scaled base down to a minimum
+            // Taper the radius as we climb
             let t = (s as f32 / params.entrance_len_steps.max(1) as f32).clamp(0.0, 1.0);
             let rh0 = (base_r * params.entrance_radius_scale).max(params.entrance_min_radius);
             let rh  = lerp(rh0, params.entrance_min_radius, t);
             let rv  = (rh * 0.85).max(1.6);
 
-            // Sample step density similar to main tunnel
+            // Sample along the short segment
             let seg = p_next - p_prev;
             let seg_len = seg.length().max(1e-4);
             let samples = (seg_len / (rh * 0.6).max(0.5)).ceil() as i32;
@@ -502,7 +537,7 @@ pub fn worm_edits_for_chunk(
         }
     };
 
-    /* --------- Tunnels --------- */
+    /* ------------------------- tunnels ------------------------- */
 
     for w in worms {
         let mut p_prev = w.start;
@@ -525,13 +560,14 @@ pub fn worm_edits_for_chunk(
 
             let p_next = p_prev + d * w.step_len;
 
-            // Keep the main tunnel within the base window; still advance simulation
+            // Keep simulation going even when outside the main window,
+            // but only carve inside the nominal [y_bottom, y_top] band
             if (p_next.y as i32) < params.y_bottom || (p_next.y as i32) > params.y_top {
                 p_prev = p_next;
                 continue;
             }
 
-            // Segment XY culling to the current chunk AABB (with a small radius margin)
+            // Segment-AABB XY cull against this chunk (with radius margin)
             let max_r = (w.base_r + w.var_r).ceil() as i32 + 1;
             let min_x = (p_prev.x.min(p_next.x) as i32) - max_r;
             let max_x = (p_prev.x.max(p_next.x) as i32) + max_r;
@@ -547,7 +583,7 @@ pub fn worm_edits_for_chunk(
             let r_h = w.base_r + widen_f * w.var_r;
             let r_v = (r_h * 0.85).max(1.8);
 
-            // Carve the main segment as a string of ellipsoids
+            // Carve the main segment (string of ellipsoids)
             let seg = p_next - p_prev;
             let seg_len = seg.length().max(1e-4);
             let samples = (seg_len / (r_h * 0.6).max(0.6)).ceil() as i32;
@@ -567,15 +603,14 @@ pub fn worm_edits_for_chunk(
                 }
             }
 
-            /* --------- NEW: entrance spur trigger near top window ---------
-             * When the next point is inside a small vertical band below y_top,
-             * and chance hits, carve an upward spur that may climb slightly
-             * above y_top (up to entrance_extra_top).
-             */
+            /* -------- entrances near top window --------
+               EN: When the tunnel approaches the top of the cave band,
+               we may branch an upward spur. The spur itself can climb
+               well above y_top (up to y_max - clearance), which lets
+               caves under mountains actually reach the outside.        */
             if (p_next.y as i32) >= params.y_top - params.entrance_trigger_band as i32
                 && (p_next.y as i32) <= params.y_top
             {
-                // Deterministic-ish chance via noise at this location
                 let chance_v = 0.5 * (widen.get_noise_3d(p_next.x * 0.19, p_next.y * 0.19, p_next.z * 0.19) + 1.0);
                 if chance_v > (1.0 - params.entrance_chance).clamp(0.0, 1.0) && d.y >= -0.02 {
                     carve_entrance_spur(&mut edits, p_next, d, r_h);
@@ -586,10 +621,11 @@ pub fn worm_edits_for_chunk(
         }
     }
 
-    /* --------- Caverns (rooms + corridors) --------- */
+    /* -------------------- caverns (rooms + corridors) -------------------- */
 
     let append_corridor = |ed: &mut Vec<(u16, u16, u16)>, a: &CavernRoom, b: &CavernRoom, noisy: bool, seed: i32, r: f32| {
         let pa = a.center; let pb = b.center;
+        // Fast XY reject against this chunk
         let min_x = pa.x.min(pb.x) as i32 - (r as i32) - 1;
         let max_x = pa.x.max(pb.x) as i32 + (r as i32) + 1;
         let min_z = pa.z.min(pb.z) as i32 - (r as i32) - 1;
@@ -665,3 +701,4 @@ pub fn worm_edits_for_chunk(
 
     edits
 }
+

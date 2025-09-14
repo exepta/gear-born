@@ -172,12 +172,11 @@ fn carve_caves_step(
         mega_y_bottom: -105,
 
         /* entrances (NEW) */
-        entrance_extra_top: 20,       // allow up to ~12 blocks above y_top
-        entrance_chance: 0.75,        // ~35% chance when a segment hits the trigger band
+        entrance_chance: 0.55,        // ~35% chance when a segment hits the trigger band
         entrance_len_steps: 40,       // short spur climb
         entrance_radius_scale: 0.55,  // narrower than the main tunnel
         entrance_min_radius: 2.8,     // don't get thinner than this
-        entrance_trigger_band: 12.0,   // start spurs within 8 blocks below y_top
+        entrance_trigger_band: 12.0,   // start spurs within 12 blocks below y_top
     };
 
     // 1) Spawn a few jobs per frame.
