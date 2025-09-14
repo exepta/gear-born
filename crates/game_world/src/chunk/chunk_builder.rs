@@ -457,7 +457,7 @@ fn collect_meshed_subchunks(
                     let cent = commands
                         .spawn((
                             RigidBody::Fixed,
-                            //collider,
+                            collider,
                             Transform::from_translation(origin),
                             Name::new(format!("collider chunk({},{}) sub{}", coord.x, coord.y, sub)),
                         ))

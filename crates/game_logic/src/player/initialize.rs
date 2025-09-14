@@ -43,6 +43,7 @@ impl Plugin for PlayerInitialize {
                     release_cursor_on_escape,
                     mouse_look,
                     player_move_kcc,
+                    apply_noclip_to_player
                 )
                     .run_if(resource_exists::<BlockRegistry>),
             );
@@ -89,6 +90,7 @@ fn spawn_player(mut commands: Commands, game_config: Res<GameConfig>) {
             Visibility::default(),
             RigidBody::KinematicPositionBased,
             Collider::capsule_y(half_h, RADIUS),
+            CollisionGroups::default(),
             LockedAxes::ROTATION_LOCKED,
 
             KinematicCharacterController {
@@ -313,4 +315,48 @@ fn player_move_kcc(
     }
 
     kcc.translation = Some(translation);
+}
+
+fn apply_noclip_to_player(
+    mut commands: Commands,
+    game_mode: Res<GameModeState>,
+    mut q: Query<
+        (
+            Entity,
+            Option<&Sensor>,
+            Option<&mut CollisionGroups>,
+            &mut KinematicCharacterController,
+            &mut FlightState,
+        ),
+        With<Player>
+    >,
+) {
+    let Ok((e, has_sensor, groups_opt, mut kcc, mut flight)) =
+        q.single_mut() else { return; };
+
+    let spectator = matches!(game_mode.0, GameMode::Spectator);
+
+    if spectator {
+        flight.flying = true;
+
+        if has_sensor.is_none() {
+            commands.entity(e).insert(Sensor);
+        }
+        match groups_opt {
+            Some(mut g) => *g = CollisionGroups::new(Group::NONE, Group::NONE),
+            None => {
+                commands.entity(e).insert(CollisionGroups::new(Group::NONE, Group::NONE));
+            }
+        }
+
+        kcc.filter_groups = Some(CollisionGroups::new(Group::NONE, Group::NONE));
+        kcc.snap_to_ground = None;
+    } else {
+        if has_sensor.is_some() {
+            commands.entity(e).remove::<Sensor>();
+        }
+        commands.entity(e).insert(CollisionGroups::default());
+
+        kcc.filter_groups = None;
+    }
 }
