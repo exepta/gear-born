@@ -1,9 +1,9 @@
-//! Water utilities: generation, meshing, serialization and runtime helpers.
+//! Water utilities: generation, meshing, serialization, and runtime helpers.
 //!
 //! This module provides:
 //! - **Data & mesh types** for water rendering.
 //! - **Snapshots** for solids and fluids (for flow/meshing).
-//! - **Chunk water generation** (sea & optional lakes).
+//! - **Chunk water generation** (sea and optional lakes).
 //! - **Water meshing** per subchunk with border stitching.
 //! - **Persistence** (encode/decode/load/save to region files).
 //! - **Runtime helpers** (masks, neighbor lookup, state checks).
@@ -29,7 +29,7 @@ use std::collections::HashMap;
 
 /// File magic for legacy water format (column spans).
 pub(crate) const WATER_MAGIC_V1: u32 = 0x3154_4157; // "WAT1" LE
-/// File magic for current water format (bitset + LZ4).
+/// File magic for the current water format (bitset + LZ4).
 pub(crate) const WATER_MAGIC_V2: u32 = 0x3254_4157; // "WAT2" LE
 
 /* ======================================================================= */
@@ -477,7 +477,7 @@ pub fn save_water_chunk_sync(ws: &WorldSave, cache: &mut RegionCache, coord: IVe
     let _ = cache.write_chunk_replace(ws, coord, &merged);
 }
 
-/// Load a water chunk from disk in any supported format (V2 preferred, V1 legacy).
+/// Load a water chunk from the disk in any supported format (V2 preferred, V1 legacy).
 pub fn load_water_chunk_from_disk_any(ws_root: std::path::PathBuf, coord: IVec2) -> Option<(FluidChunk, u32)> {
     let (r_coord, _) = chunk_to_region_slot(coord);
     let path = ws_root.join("region").join(format!("r.{}.{}.region", r_coord.x, r_coord.y));

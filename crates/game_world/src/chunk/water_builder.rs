@@ -208,7 +208,7 @@ fn enqueue_flow_on_block_removed(
     for e in ev.read() {
         let c = e.chunk_coord;
 
-        // Skip if cell isn't actually air now
+        // Skip if cell isn't air now
         if let Some(ch) = chunks.chunks.get(&c) {
             if ch.get(e.chunk_x as usize, e.chunk_y as usize, e.chunk_z as usize) != 0 { continue; }
         } else { continue; }
@@ -216,7 +216,7 @@ fn enqueue_flow_on_block_removed(
         let mut sea_level = None;
         let mut has_water = false;
 
-        // Choose seed position; start at broken block
+        // Choose a seed position; start at the broken block
         let seed_x = e.chunk_x as i32;
         let mut seed_y = e.chunk_y as i32;
         let seed_z = e.chunk_z as i32;

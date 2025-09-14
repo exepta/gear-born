@@ -135,15 +135,15 @@ fn carve_caves_step(
         y_bottom: -110,
 
         /* worms: a bit wider/longer */
-        worms_per_region: 1.2,
+        worms_per_region: 1.35,
         region_chunks: 3,
         base_radius: 4.2,
         radius_var: 3.0,
-        step_len: 1.45,
+        step_len: 1.5,
         worm_len_steps: 360,
 
         /* small rooms along tunnels */
-        room_event_chance: 0.09,
+        room_event_chance: 0.1,
         room_radius_min: 6.0,
         room_radius_max: 10.5,
 
@@ -155,7 +155,7 @@ fn carve_caves_step(
         cavern_room_radius_xz_max: 34.0,
         cavern_room_radius_y_min: 9.0,
         cavern_room_radius_y_max: 21.0,
-        cavern_connector_radius: 8.5,
+        cavern_connector_radius: 12.5,
         cavern_y_top: -10,
         cavern_y_bottom: -100,
 
