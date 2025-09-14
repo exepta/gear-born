@@ -299,7 +299,7 @@ pub(crate) async fn generate_chunk_async_biome(
                         let bx = wxf - t_dir.x * seg;
                         let bz = wzf - t_dir.y * seg;
                         let p_tail = river.potential(bx, bz, width_blocks);
-                        p_eff = (0.85 * p_tail).min(p_core); // gentle, never deeper than local profile
+                        p_eff = (0.85 * p_tail).min(p_core); // gentle, never deeper than the local profile
                     }
 
                     if p_eff > 0.0 {
@@ -357,7 +357,7 @@ pub(crate) async fn generate_chunk_async_biome(
 
             // --- COLUMN WRITE LOOP (patched) ---------------------------------
             // Split at y=0: upper_zero for wy >= 0, under_zero for wy < 0.
-            // Ensure seabed (when underwater) is at least 3 blocks thick.
+            // Ensure the seabed (when underwater) is at least 3 blocks thick.
             for ly in 0..CY {
                 let wy = Y_MIN + ly as i32;
                 if wy > h_final { break; }
