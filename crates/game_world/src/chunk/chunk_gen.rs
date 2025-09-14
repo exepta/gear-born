@@ -1,4 +1,5 @@
 use crate::chunk::chunk_utils::map01;
+use crate::chunk::river_utils::RiverSystem;
 use bevy::prelude::*;
 use fastnoise_lite::*;
 use game_core::world::biome::biome_func::*;
@@ -7,7 +8,6 @@ use game_core::world::biome::Biome;
 use game_core::world::block::{BlockId, BlockRegistry};
 use game_core::world::chunk::{ChunkData, SEA_LEVEL};
 use game_core::world::chunk_dim::{CX, CY, CZ, Y_MIN};
-use crate::chunk::river_utils::RiverSystem;
 /* ========================= Generator =================================== */
 
 pub(crate) async fn generate_chunk_async_biome(
@@ -17,6 +17,7 @@ pub(crate) async fn generate_chunk_async_biome(
     biomes: &BiomeRegistry,
 ) -> ChunkData {
     let fallback_label = choose_biome_label_smoothed(biomes, coord, cfg_seed);
+    let id_border = reg.id_or_air("border_block");
 
     // Per-chunk noises
     let seafloor_n = make_seafloor_noise(cfg_seed, OCEAN_FREQ);
@@ -373,6 +374,8 @@ pub(crate) async fn generate_chunk_async_biome(
 
                 if id != 0 { chunk.set(lx, ly, lz, id); }
             }
+
+            chunk.set(lx, 0, lz, id_border);
         }
     }
 

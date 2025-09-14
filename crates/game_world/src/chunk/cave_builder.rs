@@ -134,7 +134,7 @@ fn carve_caves_step(
         y_bottom: -110,
 
         /* worms: a bit wider/longer */
-        worms_per_region: 1.0,
+        worms_per_region: 1.2,
         region_chunks: 3,
         base_radius: 4.2,
         radius_var: 3.0,
@@ -154,7 +154,7 @@ fn carve_caves_step(
         cavern_room_radius_xz_max: 34.0,
         cavern_room_radius_y_min: 9.0,
         cavern_room_radius_y_max: 21.0,
-        cavern_connector_radius: 6.5,
+        cavern_connector_radius: 8.5,
         cavern_y_top: -10,
         cavern_y_bottom: -100,
 

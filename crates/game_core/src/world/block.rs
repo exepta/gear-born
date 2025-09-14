@@ -212,7 +212,13 @@ pub enum Blocks {
     Log,
     Sand,
     Water,
-    Glass
+    Glass,
+    Border,
+    Clay,
+    Gravel,
+    DeepStone,
+    SandStone,
+    Snow
 }
 impl Blocks {
     pub const fn localized_name(self) -> &'static str {
@@ -224,6 +230,12 @@ impl Blocks {
             Blocks::Sand  => "sand_block",
             Blocks::Water => "water_block",
             Blocks::Glass => "glass_block",
+            Blocks::Border => "border_block",
+            Blocks::Clay  => "clay_block",
+            Blocks::Gravel => "gravel_block",
+            Blocks::DeepStone => "deep_stone_block",
+            Blocks::SandStone => "sand_stone_block",
+            Blocks::Snow => "snow_block",
         }
     }
 }
