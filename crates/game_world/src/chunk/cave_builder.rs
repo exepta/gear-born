@@ -122,6 +122,7 @@ fn carve_caves_step(
 
     let air_id: u32 = reg.id_opt("air_block").unwrap_or(0) as u32;
     let water_id: u32 = reg.id_opt("water_block").unwrap_or(1) as u32;
+    let border_id: u32 = reg.id_opt("border_block").unwrap_or(0) as u32;
 
     let _ids = CaveBlockIds { air: air_id, water: water_id, protected_1: None };
 
@@ -208,7 +209,10 @@ fn carve_caves_step(
                         if sub < SEC_COUNT { touched[sub] = true; }
 
                         let cur = chunk.get(lx as usize, ly as usize, lz as usize);
-                        if cur != 0 && cur != water_id as BlockId {
+                        if cur != 0
+                            && cur != water_id as BlockId
+                            && cur != border_id as BlockId
+                        {
                             chunk.set(lx as usize, ly as usize, lz as usize, air_id as BlockId);
                         }
                     }

@@ -17,6 +17,8 @@ pub(crate) async fn generate_chunk_async_biome(
     biomes: &BiomeRegistry,
 ) -> ChunkData {
     let fallback_label = choose_biome_label_smoothed(biomes, coord, cfg_seed);
+
+    // Border/bedrock ID used at world bottom (Y_MIN)
     let id_border = reg.id_or_air("border_block");
 
     // Per-chunk noises
@@ -227,7 +229,7 @@ pub(crate) async fn generate_chunk_async_biome(
                 let generate = &land_biome_for_materials.generation;
 
                 if generate.rivers && perm_here > 0.02 {
-                    // Chance gate (your original rule)
+                    // Chance gate
                     let keep   = river.tile_keep_value(wx, wz);
                     let chance = generate.river_chance.max(0.0).min(1.0);
                     let allow_spawn_here = keep < chance;
@@ -250,14 +252,10 @@ pub(crate) async fn generate_chunk_async_biome(
                     let width_fac = (width_blocks as f32 / 16.0).clamp(0.75, 2.0);
                     let mut p_eff = p_core * perm_here.powf(1.15 + 0.60 * width_fac);
 
-                    // --- Border smoothing (THE IMPORTANT PART) -------------------------
-                    // If the river is about to enter a blocking area (rivers:false),
-                    // reduce depth *ahead* of us so we don't end with a vertical wall.
-                    // We sample the biome permission a short distance along the course.
+                    // --- Border smoothing ahead along the course ---
                     let mut border_fade = 1.0;
                     if t_dir.length_squared() > 0.0 {
                         // Convert arbitrary world (x,z) -> the "p_chunks" space used by site queries.
-                        // NOTE: In this world the mapping equals (wx + 0.5) / CX etc. (see your code).
                         let perm_at_world = |x: f32, z: f32| -> f32 {
                             let px_q = (x + 0.5) / (CX as f32);
                             let pz_q = (z + 0.5) / (CZ as f32);
@@ -293,7 +291,6 @@ pub(crate) async fn generate_chunk_async_biome(
                         border_fade = 1.0 - smoothstep(0.10, 0.90, drop);
                     }
 
-                    // Apply forward fade. Also apply a cheap tail when carving stops completely.
                     if may_carve {
                         p_eff *= border_fade.powf(1.35);
                     } else if p_core > 0.0 && t_dir.length_squared() > 0.0 {
@@ -304,7 +301,6 @@ pub(crate) async fn generate_chunk_async_biome(
                         let p_tail = river.potential(bx, bz, width_blocks);
                         p_eff = (0.85 * p_tail).min(p_core); // gentle, never deeper than local profile
                     }
-                    // -------------------------------------------------------------------
 
                     if p_eff > 0.0 {
                         let h_before = h_f;
@@ -343,6 +339,15 @@ pub(crate) async fn generate_chunk_async_biome(
             let id_sea_floor  = reg.id_or_air(sea_floor_name);
             let id_upper_zero = reg.id_or_air(upper_zero_name);
 
+            // NEW: resolve under/upper-zero for land and ocean biomes
+            let under_zero_name = pick(&dom_biome.surface.under_zero, wx, wz, pick_seed ^ 0x55);
+            let id_under_zero   = reg.id_or_air(under_zero_name);
+
+            let ocean_upper_zero_name = pick(&ocean_biome.surface.upper_zero, wx, wz, pick_seed ^ 0x66);
+            let ocean_under_zero_name = pick(&ocean_biome.surface.under_zero, wx, wz, pick_seed ^ 0x77);
+            let id_ocean_upper_zero   = reg.id_or_air(ocean_upper_zero_name);
+            let id_ocean_under_zero   = reg.id_or_air(ocean_under_zero_name);
+
             // Beach cap width with detail noise
             let bw_noise = map01(coast_d.get_noise_2d(wxf, wzf));
             let beach_cap = BEACH_MIN + ((BEACH_MAX - BEACH_MIN) as f32 * bw_noise).round() as i32;
@@ -350,7 +355,9 @@ pub(crate) async fn generate_chunk_async_biome(
             // Adaptive soil from the dominating land site
             let soil_cap = if w0 >= w1 { soil0 } else { soil1 };
 
-            // Write column blocks
+            // --- COLUMN WRITE LOOP (patched) ---------------------------------
+            // Split at y=0: upper_zero for wy >= 0, under_zero for wy < 0.
+            // Ensure seabed (when underwater) is at least 3 blocks thick.
             for ly in 0..CY {
                 let wy = Y_MIN + ly as i32;
                 if wy > h_final { break; }
@@ -358,30 +365,39 @@ pub(crate) async fn generate_chunk_async_biome(
                 let underwater = h_final < SEA_LEVEL;
 
                 let id: BlockId = if underwater {
-                    // Sand-only underwater
-                    id_sea_floor
+                    // OCEAN: seabed is at h_final; enforce ≥3 blocks of sea_floor.
+                    let depth_from_seabed = (h_final - wy).max(0);
+                    if depth_from_seabed <= 2 {
+                        // Top 3 layers of seabed
+                        id_sea_floor
+                    } else {
+                        // Below seabed: use ocean biome's zero-split
+                        if wy >= 0 { id_ocean_upper_zero } else { id_ocean_under_zero }
+                    }
                 } else {
-                    // Sand cap around coasts for beaches
+                    // LAND: normal surface/soil then zero-split core below soil.
                     let near_coast = t_ocean > 0.10 && t_ocean < 0.90 && (h_final - SEA_LEVEL).abs() <= 5;
+
                     if wy == h_final {
                         if near_coast { id_sea_floor } else { id_top }
                     } else if wy >= h_final - if near_coast { beach_cap } else { soil_cap } {
                         if near_coast { id_sea_floor } else { id_bottom }
                     } else {
-                        id_upper_zero
+                        // Core below the soil horizon -> split at world zero
+                        if wy >= 0 { id_upper_zero } else { id_under_zero }
                     }
                 };
 
                 if id != 0 { chunk.set(lx, ly, lz, id); }
             }
 
+            // Always enforce bedrock/border at the world bottom (ly == 0 -> Y_MIN)
             chunk.set(lx, 0, lz, id_border);
         }
     }
 
     chunk
 }
-
 
 /* ============================= Noises ======================================= */
 
