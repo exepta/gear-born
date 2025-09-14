@@ -65,38 +65,64 @@ impl Plugin for ChunkBuilder {
             .init_resource::<KickQueue>()
             .init_resource::<KickedOnce>()
             .init_resource::<QueuedOnce>()
-            .add_systems(Update, (
-                schedule_chunk_generation,
-                collect_generated_chunks,
-                collect_meshed_subchunks,
+            // --- Generation, Meshing, Kick etc. ---
+            .add_systems(
+                Update,
+                (
 
-                enqueue_kick_for_new_subchunks,
-                process_kick_queue,
+                    schedule_chunk_generation
+                        .run_if(in_state(AppState::Loading(LoadingStates::BaseGen))
+                            .or(in_state(AppState::InGame(InGameStates::Game)))),
 
-                schedule_remesh_tasks_from_events.in_set(VoxelStage::Meshing),
-                drain_mesh_backlog,
-                unload_far_chunks,
-                cleanup_kick_flags_on_unload.after(unload_far_chunks)
-            )
-                .chain()
-                .run_if(in_state(AppState::Loading(LoadingStates::BaseGen))
-                    .or(in_state(AppState::InGame(InGameStates::Game)))));
+                    collect_generated_chunks
+                        .run_if(in_state(AppState::Loading(LoadingStates::BaseGen))
+                            .or(in_state(AppState::InGame(InGameStates::Game)))),
 
-        app.add_systems(
-            Update,
-            check_base_gen_world_ready
-                .run_if(in_state(AppState::Loading(LoadingStates::BaseGen)))
-        );
+                    (
+                        collect_meshed_subchunks,
+                        enqueue_kick_for_new_subchunks,
+                        process_kick_queue
+                    ).chain()
+                        .run_if(in_state(AppState::Loading(LoadingStates::BaseGen))
+                        .or(in_state(AppState::Loading(LoadingStates::CaveGen)))
+                        .or(in_state(AppState::InGame(InGameStates::Game)))),
 
-        app.add_systems(
-            Update,
-            drain_collider_backlog
-                .after(collect_meshed_subchunks)
-                .run_if(
-                    in_state(AppState::Loading(LoadingStates::BaseGen))
-                        .or(in_state(AppState::InGame(InGameStates::Game)))
+
+                    schedule_remesh_tasks_from_events
+                        .in_set(VoxelStage::Meshing)
+                        .run_if(in_state(AppState::Loading(LoadingStates::BaseGen))
+                            .or(in_state(AppState::Loading(LoadingStates::CaveGen)))
+                            .or(in_state(AppState::InGame(InGameStates::Game)))),
+
+                    drain_mesh_backlog
+                        .run_if(in_state(AppState::Loading(LoadingStates::BaseGen))
+                            .or(in_state(AppState::Loading(LoadingStates::CaveGen)))
+                            .or(in_state(AppState::InGame(InGameStates::Game)))),
+
+                    unload_far_chunks
+                        .run_if(in_state(AppState::Loading(LoadingStates::BaseGen))
+                            .or(in_state(AppState::InGame(InGameStates::Game)))),
+
+                    cleanup_kick_flags_on_unload
+                        .after(unload_far_chunks)
+                        .run_if(in_state(AppState::Loading(LoadingStates::BaseGen))
+                            .or(in_state(AppState::InGame(InGameStates::Game)))),
                 )
-        );
+                    .chain(),
+            )
+            .add_systems(
+                Update,
+                check_base_gen_world_ready
+                    .run_if(in_state(AppState::Loading(LoadingStates::BaseGen))),
+            )
+            .add_systems(
+                Update,
+                drain_collider_backlog
+                    .after(collect_meshed_subchunks)
+                    .run_if(in_state(AppState::Loading(LoadingStates::BaseGen))
+                        .or(in_state(AppState::Loading(LoadingStates::CaveGen)))
+                        .or(in_state(AppState::InGame(InGameStates::Game)))),
+            );
     }
 }
 
@@ -389,18 +415,21 @@ fn collect_meshed_subchunks(
     mut chunk_map: ResMut<ChunkMap>,
     q_mesh: Query<&Mesh3d>,
     app_state: Res<State<AppState>>,
+    mut coll_backlog: ResMut<ColliderBacklog>,
 ) {
     let waiting = is_waiting(&app_state);
     let apply_cap = if waiting { BIG } else { MAX_UPDATE_FRAMES };
     let mut done_keys = Vec::new();
     let mut applied = 0usize;
 
+    // Per-frame collider budget. If we run out, we queue the rest.
     let mut collider_budget = if waiting { BIG } else { MAX_COLLIDERS_PER_FRAME };
 
     for (key, task) in pending_mesh.0.iter_mut() {
         if applied >= apply_cap { break; }
 
         if let Some(((coord, sub), builds)) = future::block_on(future::poll_once(task)) {
+            // Despawn render meshes for this (coord,sub) first (safe).
             let old_keys: Vec<_> = mesh_index
                 .map
                 .keys()
@@ -409,10 +438,6 @@ fn collect_meshed_subchunks(
                 .collect();
             despawn_mesh_set(old_keys, &mut mesh_index, &mut commands, &q_mesh, &mut meshes);
 
-            if let Some(ent) = collider_index.0.remove(&(coord, sub as u8)) {
-                commands.entity(ent).despawn();
-            }
-
             let s = VOXEL_SIZE;
             let origin = Vec3::new(
                 (coord.x * CX as i32) as f32 * s,
@@ -420,6 +445,7 @@ fn collect_meshed_subchunks(
                 (coord.y * CZ as i32) as f32 * s,
             );
 
+            // Build, render meshes, collect physics arrays.
             let mut phys_positions: Vec<[f32; 3]> = Vec::new();
             let mut phys_indices:   Vec<u32>       = Vec::new();
 
@@ -443,27 +469,53 @@ fn collect_meshed_subchunks(
                 mesh_index.map.insert((coord, sub as u8, bid), ent);
             }
 
-            if !phys_positions.is_empty() && collider_budget > 0 {
-                let mut pm = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::RENDER_WORLD);
-                pm.insert_attribute(Mesh::ATTRIBUTE_POSITION, phys_positions);
-                pm.insert_indices(Indices::U32(phys_indices));
+            // ----- Physics collider handling -----
+            let need_collider = !phys_positions.is_empty();
 
-                let flags = TriMeshFlags::FIX_INTERNAL_EDGES
-                    | TriMeshFlags::MERGE_DUPLICATE_VERTICES
-                    | TriMeshFlags::DELETE_DEGENERATE_TRIANGLES
-                    | TriMeshFlags::ORIENTED;
+            if need_collider {
+                // Try to (re)create collider now if we have a budget …
+                if collider_budget > 0 {
+                    // Remove the old collider only if we create a new one immediately.
+                    if let Some(ent) = collider_index.0.remove(&(coord, sub as u8)) {
+                        commands.entity(ent).despawn();
+                    }
 
-                if let Some(collider) = Collider::from_bevy_mesh(&pm, &ComputedColliderShape::TriMesh(flags)) {
-                    let cent = commands
-                        .spawn((
-                            RigidBody::Fixed,
-                            collider,
-                            Transform::from_translation(origin),
-                            Name::new(format!("collider chunk({},{}) sub{}", coord.x, coord.y, sub)),
-                        ))
-                        .id();
-                    collider_index.0.insert((coord, sub as u8), cent);
-                    collider_budget = collider_budget.saturating_sub(1);
+                    let mut pm = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::RENDER_WORLD);
+                    pm.insert_attribute(Mesh::ATTRIBUTE_POSITION, phys_positions);
+                    pm.insert_indices(Indices::U32(phys_indices));
+
+                    let flags = TriMeshFlags::FIX_INTERNAL_EDGES
+                        | TriMeshFlags::MERGE_DUPLICATE_VERTICES
+                        | TriMeshFlags::DELETE_DEGENERATE_TRIANGLES
+                        | TriMeshFlags::ORIENTED;
+
+                    if let Some(collider) = Collider::from_bevy_mesh(&pm, &ComputedColliderShape::TriMesh(flags)) {
+                        let cent = commands
+                            .spawn((
+                                RigidBody::Fixed,
+                                collider,
+                                Transform::from_translation(origin),
+                                Name::new(format!("collider chunk({},{}) sub{}", coord.x, coord.y, sub)),
+                            ))
+                            .id();
+                        collider_index.0.insert((coord, sub as u8), cent);
+                        collider_budget = collider_budget.saturating_sub(1);
+                    }
+                } else {
+                    // …otherwise, keep the OLD collider alive (no hole!)
+                    // and queue a rebuild for later.
+                    coll_backlog.0.push(ColliderTodo {
+                        coord,
+                        sub: sub as u8,
+                        origin,
+                        positions: phys_positions,
+                        indices: phys_indices,
+                    });
+                }
+            } else {
+                // No geometry → ensure collider is removed (solid gone).
+                if let Some(ent) = collider_index.0.remove(&(coord, sub as u8)) {
+                    commands.entity(ent).despawn();
                 }
             }
 

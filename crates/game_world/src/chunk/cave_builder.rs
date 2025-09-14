@@ -11,7 +11,7 @@ use game_core::world::chunk_dim::*;
 
 use crate::chunk::cave_utils::{worm_edits_for_chunk, CaveBlockIds, CaveParams};
 
-/// Configure how many chunks we process per frame to avoid spikes.
+/// How many chunks get processed per frame (to avoid spikes).
 #[derive(Resource, Debug, Clone)]
 pub struct CaveBudget {
     pub chunks_per_frame: usize,
@@ -20,14 +20,14 @@ impl Default for CaveBudget {
     fn default() -> Self { Self { chunks_per_frame: 2 } }
 }
 
-/// Wrap Task to avoid the ` # [must_use] ` warning when stored in a tuple.
+/// Small wrapper to silence #[must_use] when stored in a tuple.
 #[derive(Debug)]
 pub struct CaveTask(pub Task<Vec<(u16, u16, u16)>>);
 
 /// Async job container: running cave jobs and their results.
 #[derive(Resource, Default)]
 pub struct CaveJobs {
-    /// (ChunkCoord, Task wrapper -> list of (lx,ly,lz) that should be carved to air)
+    /// (ChunkCoord, Task -> list of (lx, ly, lz) that should be carved to air)
     pub running: Vec<(IVec2, CaveTask)>,
 }
 
@@ -44,7 +44,7 @@ impl Plugin for CaveBuilder {
                 OnEnter(AppState::Loading(LoadingStates::CaveGen)),
                 enqueue_all_loaded_chunks_for_caves,
             )
-            // 2) While we are in CaveGen (loading) → carve step
+            // 2) While we are in CaveGen (loading) → carve step.
             .add_systems(
                 Update,
                 carve_caves_step.run_if(in_state(AppState::Loading(LoadingStates::CaveGen))),
@@ -68,26 +68,34 @@ impl Plugin for CaveBuilder {
    Queue Management
    ========================= */
 
+#[inline]
+fn enqueue_pending_impl(tracker: &mut CaveTracker, chunk_map: &ChunkMap) {
+    // Iterate keys once; push only if neither done nor already pending.
+    for &coord in chunk_map.chunks.keys() {
+        if tracker.done.contains(&coord) || tracker.pending.contains(&coord) {
+            continue;
+        }
+        tracker.pending.push_back(coord);
+    }
+}
+
 fn enqueue_all_loaded_chunks_for_caves(
     mut tracker: ResMut<CaveTracker>,
     chunk_map: Res<ChunkMap>,
 ) {
-    for &coord in chunk_map.chunks.keys() {
-        if tracker.done.contains(&coord) || tracker.pending.contains(&coord) { continue; }
-        tracker.pending.push_back(coord);
-    }
+    // OnEnter: enqueue whatever is already loaded at state start.
+    enqueue_pending_impl(&mut tracker, &chunk_map);
 }
 
+/// During gameplay: whenever a chunk appears and isn't processed yet, enqueue it.
 fn enqueue_newly_loaded_chunks_during_game(
     mut tracker: ResMut<CaveTracker>,
     chunk_map: Res<ChunkMap>,
 ) {
-    for &coord in chunk_map.chunks.keys() {
-        if tracker.done.contains(&coord) || tracker.pending.contains(&coord) { continue; }
-        tracker.pending.push_back(coord);
-    }
+    enqueue_pending_impl(&mut tracker, &chunk_map);
 }
 
+/// Clear the queue when leaving the state (safety net).
 fn clear_cave_queue(mut tracker: ResMut<CaveTracker>) {
     tracker.pending.clear();
 }
@@ -106,6 +114,7 @@ fn carve_caves_step(
     world_gen_config: Res<WorldGenConfig>,
     mut ev_remesh: EventWriter<SubChunkNeedRemeshEvent>,
 ) {
+    // If nothing to do, exit CaveGen (or no-op in InGame).
     if tracker.pending.is_empty() && jobs.running.is_empty() {
         next_state.set(AppState::InGame(InGameStates::Game));
         return;
@@ -116,7 +125,7 @@ fn carve_caves_step(
 
     let _ids = CaveBlockIds { air: air_id, water: water_id, protected_1: None };
 
-    // Tuned for walkable tunnels + **rare big cavern clusters**.
+    // Tuned for walkable tunnels + rare big cavern clusters.
     let params_template = CaveParams {
         seed: world_gen_config.seed,
 
@@ -124,8 +133,8 @@ fn carve_caves_step(
         y_top: 52,
         y_bottom: -110,
 
-        /* worms: sparser, longer, wider */
-        worms_per_region: 1.0, // fewer overall
+        /* worms: a bit wider/longer */
+        worms_per_region: 1.0,
         region_chunks: 3,
         base_radius: 4.2,
         radius_var: 3.0,
@@ -149,26 +158,27 @@ fn carve_caves_step(
         cavern_y_top: -10,
         cavern_y_bottom: -100,
 
-        /* MEGA caverns: very rare, very large (requested 40–122 wide) */
-        mega_caverns_per_region: 0.075,      // ~7.5% chance per region on average
+        /* MEGA caverns: very rare, very large */
+        mega_caverns_per_region: 0.075,
         mega_room_count_min: 1,
-        mega_room_count_max: 3,              // keep low; rooms are huge
+        mega_room_count_max: 3,
         mega_room_radius_xz_min: 45.0,
         mega_room_radius_xz_max: 144.0,
-        mega_room_radius_y_min: 20.0,        // tall, but not as wide
+        mega_room_radius_y_min: 20.0,
         mega_room_radius_y_max: 46.0,
-        mega_connector_radius: 8.0,          // thick connectors between mega rooms
-        mega_y_top: -30,                      // keep deep to avoid surface damage
+        mega_connector_radius: 8.0,
+        mega_y_top: -30,
         mega_y_bottom: -105,
     };
 
-    // 1) spawn a few jobs per frame
+    // 1) Spawn a few jobs per frame.
     let pool = AsyncComputeTaskPool::get();
     let mut started = 0usize;
 
     while started < budget.chunks_per_frame {
         let Some(coord) = tracker.pending.pop_front() else { break; };
         if !chunk_map.is_loaded(coord) {
+            // If the chunk is gone again, mark as done (no-op).
             tracker.done.insert(coord);
             continue;
         }
@@ -183,12 +193,13 @@ fn carve_caves_step(
         started += 1;
     }
 
-    // 2) reap completed jobs
+    // 2) Reap completed jobs and apply edits.
     if !jobs.running.is_empty() {
         let mut finished: Vec<usize> = Vec::new();
 
         for (i, (coord, task_wrap)) in jobs.running.iter_mut().enumerate() {
             if let Some(edits) = future::block_on(future::poll_once(&mut task_wrap.0)) {
+                // Track which subchunks got changed so we can remesh them (and neighbors).
                 let mut touched = [false; SEC_COUNT];
 
                 if let Some(chunk) = chunk_map.get_chunk_mut(*coord) {
@@ -203,12 +214,17 @@ fn carve_caves_step(
                     }
                 }
 
+                // Fire remesh events for changed subchunks in this chunk + 4-neighborhood.
                 for sub in 0..SEC_COUNT {
                     if !touched[sub] { continue; }
                     ev_remesh.write(SubChunkNeedRemeshEvent { coord: *coord, sub });
 
-                    const N4: [IVec2;4] = [IVec2::new(1,0), IVec2::new(-1,0),
-                        IVec2::new(0,1), IVec2::new(0,-1)];
+                    const N4: [IVec2; 4] = [
+                        IVec2::new( 1, 0),
+                        IVec2::new(-1, 0),
+                        IVec2::new( 0, 1),
+                        IVec2::new( 0,-1),
+                    ];
                     for d in N4 {
                         let nc = IVec2::new(coord.x + d.x, coord.y + d.y);
                         if chunk_map.is_loaded(nc) {
@@ -222,11 +238,13 @@ fn carve_caves_step(
             }
         }
 
+        // Remove finished tasks.
         for i in finished.into_iter().rev() {
             jobs.running.swap_remove(i);
         }
     }
 
+    // If nothing is left, we can leave CaveGen.
     if tracker.pending.is_empty() && jobs.running.is_empty() {
         next_state.set(AppState::InGame(InGameStates::Game));
     }
