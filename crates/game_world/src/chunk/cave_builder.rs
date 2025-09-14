@@ -3,6 +3,7 @@ use bevy::tasks::{AsyncComputeTaskPool, Task};
 use futures_lite::future;
 
 use game_core::configuration::WorldGenConfig;
+use game_core::events::chunk_events::SubChunkNeedRemeshEvent;
 use game_core::states::{AppState, InGameStates, LoadingStates};
 use game_core::world::block::{BlockId, BlockRegistry};
 use game_core::world::chunk::*;
@@ -103,6 +104,7 @@ fn carve_caves_step(
     reg: Res<BlockRegistry>,
     mut chunk_map: ResMut<ChunkMap>,
     world_gen_config: Res<WorldGenConfig>,
+    mut ev_remesh: EventWriter<SubChunkNeedRemeshEvent>,
 ) {
     if tracker.pending.is_empty() && jobs.running.is_empty() {
         next_state.set(AppState::InGame(InGameStates::Game));
@@ -125,9 +127,9 @@ fn carve_caves_step(
         /* worms: sparser, longer, wider */
         worms_per_region: 1.0, // fewer overall
         region_chunks: 3,
-        base_radius: 3.6,
-        radius_var: 2.5,
-        step_len: 1.3,
+        base_radius: 4.2,
+        radius_var: 3.0,
+        step_len: 1.45,
         worm_len_steps: 360,
 
         /* small rooms along tunnels */
@@ -136,19 +138,19 @@ fn carve_caves_step(
         room_radius_max: 10.5,
 
         /* normal caverns: uncommon mid-sized rooms */
-        caverns_per_region: 0.45,
-        cavern_room_count_min: 5,
-        cavern_room_count_max: 9,
+        caverns_per_region: 0.5,
+        cavern_room_count_min: 6,
+        cavern_room_count_max: 11,
         cavern_room_radius_xz_min: 16.0,
         cavern_room_radius_xz_max: 34.0,
         cavern_room_radius_y_min: 9.0,
         cavern_room_radius_y_max: 21.0,
-        cavern_connector_radius: 4.2,
+        cavern_connector_radius: 6.5,
         cavern_y_top: -10,
         cavern_y_bottom: -100,
 
         /* MEGA caverns: very rare, very large (requested 40–122 wide) */
-        mega_caverns_per_region: 0.075,      // ~6% chance per region on average
+        mega_caverns_per_region: 0.075,      // ~7.5% chance per region on average
         mega_room_count_min: 1,
         mega_room_count_max: 3,              // keep low; rooms are huge
         mega_room_radius_xz_min: 45.0,
@@ -187,14 +189,34 @@ fn carve_caves_step(
 
         for (i, (coord, task_wrap)) in jobs.running.iter_mut().enumerate() {
             if let Some(edits) = future::block_on(future::poll_once(&mut task_wrap.0)) {
+                let mut touched = [false; SEC_COUNT];
+
                 if let Some(chunk) = chunk_map.get_chunk_mut(*coord) {
                     for (lx, ly, lz) in edits {
+                        let sub = (ly as usize) / SEC_H;
+                        if sub < SEC_COUNT { touched[sub] = true; }
+
                         let cur = chunk.get(lx as usize, ly as usize, lz as usize);
                         if cur != 0 && cur != water_id as BlockId {
                             chunk.set(lx as usize, ly as usize, lz as usize, air_id as BlockId);
                         }
                     }
                 }
+
+                for sub in 0..SEC_COUNT {
+                    if !touched[sub] { continue; }
+                    ev_remesh.write(SubChunkNeedRemeshEvent { coord: *coord, sub });
+
+                    const N4: [IVec2;4] = [IVec2::new(1,0), IVec2::new(-1,0),
+                        IVec2::new(0,1), IVec2::new(0,-1)];
+                    for d in N4 {
+                        let nc = IVec2::new(coord.x + d.x, coord.y + d.y);
+                        if chunk_map.is_loaded(nc) {
+                            ev_remesh.write(SubChunkNeedRemeshEvent { coord: nc, sub });
+                        }
+                    }
+                }
+
                 tracker.done.insert(*coord);
                 finished.push(i);
             }
