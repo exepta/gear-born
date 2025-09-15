@@ -1,4 +1,5 @@
 use crate::chunk::chunk_utils::map01;
+use crate::chunk::river_utils::RiverSystem;
 use bevy::prelude::*;
 use fastnoise_lite::*;
 use game_core::world::biome::biome_func::*;
@@ -7,7 +8,6 @@ use game_core::world::biome::Biome;
 use game_core::world::block::{BlockId, BlockRegistry};
 use game_core::world::chunk::{ChunkData, SEA_LEVEL};
 use game_core::world::chunk_dim::{CX, CY, CZ, Y_MIN};
-use crate::chunk::river_utils::RiverSystem;
 /* ========================= Generator =================================== */
 
 pub(crate) async fn generate_chunk_async_biome(
@@ -17,6 +17,9 @@ pub(crate) async fn generate_chunk_async_biome(
     biomes: &BiomeRegistry,
 ) -> ChunkData {
     let fallback_label = choose_biome_label_smoothed(biomes, coord, cfg_seed);
+
+    // Border/bedrock ID used at world bottom (Y_MIN)
+    let id_border = reg.id_or_air("border_block");
 
     // Per-chunk noises
     let seafloor_n = make_seafloor_noise(cfg_seed, OCEAN_FREQ);
@@ -225,85 +228,38 @@ pub(crate) async fn generate_chunk_async_biome(
 
                 let generate = &land_biome_for_materials.generation;
 
+                /* ==================== RIVER PATCH (uses potential_gated_smoothed) ====================
+                 * English:
+                 * - We compute a smoothed, chance-gated river potential via RiverSystem::potential_gated_smoothed.
+                 * - We still respect cross-site permission (perm_here) by modulating the depth.
+                 * - We keep neighbor continuation: if chance==0 but the river is coming from a neighbor,
+                 *   we allow a gentle tail so ends never stop abruptly at the biome boundary.
+                 */
                 if generate.rivers && perm_here > 0.02 {
-                    // Chance gate (your original rule)
-                    let keep   = river.tile_keep_value(wx, wz);
-                    let chance = generate.river_chance.max(0.0).min(1.0);
-                    let allow_spawn_here = keep < chance;
-                    let may_carve        = allow_spawn_here || (chance == 0.0 && neighbor_has_river);
-
-                    // Width is stable per tile
+                    // Stable width per coarse tile
                     let width_blocks = river.tile_width_blocks(wx, wz, generate.river_size_between);
 
-                    // Core potential + flow direction (unit tangent)
-                    let (p0_raw, t_dir) = river.potential_with_dir(wxf, wzf, width_blocks);
+                    // Base smoothed potential from the river field (already handles tile gating and longitudinal fade)
+                    let mut p_smoothed = river.potential_gated_smoothed(
+                        wxf, wzf,
+                        width_blocks,
+                        generate.river_chance,     // local chance threshold
+                        true                       // rivers_enabled at this biome
+                    );
 
-                    // Lightweight neighbor smoothing (does not inflate width)
-                    let pn = river.potential(wxf,       wzf + 1.0, width_blocks);
-                    let ps = river.potential(wxf,       wzf - 1.0, width_blocks);
-                    let pe = river.potential(wxf + 1.0, wzf,       width_blocks);
-                    let pw = river.potential(wxf - 1.0, wzf,       width_blocks);
-                    let p_core = 0.75 * p0_raw + 0.25 * (pn + ps + pe + pw) * 0.25;
+                    // If this biome's chance is 0.0, only allow continuation from neighbors:
+                    if generate.river_chance == 0.0 {
+                        if neighbor_has_river {
+                            // soften a bit so the tail looks natural
+                            p_smoothed *= 0.90;
+                        } else {
+                            p_smoothed = 0.0;
+                        }
+                    }
 
-                    // Permission softens depth inside the allowed biome
+                    // Modulate by cross-site permission -> soft fade across biome blends
                     let width_fac = (width_blocks as f32 / 16.0).clamp(0.75, 2.0);
-                    let mut p_eff = p_core * perm_here.powf(1.15 + 0.60 * width_fac);
-
-                    // --- Border smoothing (THE IMPORTANT PART) -------------------------
-                    // If the river is about to enter a blocking area (rivers:false),
-                    // reduce depth *ahead* of us so we don't end with a vertical wall.
-                    // We sample the biome permission a short distance along the course.
-                    let mut border_fade = 1.0;
-                    if t_dir.length_squared() > 0.0 {
-                        // Convert arbitrary world (x,z) -> the "p_chunks" space used by site queries.
-                        // NOTE: In this world the mapping equals (wx + 0.5) / CX etc. (see your code).
-                        let perm_at_world = |x: f32, z: f32| -> f32 {
-                            let px_q = (x + 0.5) / (CX as f32);
-                            let pz_q = (z + 0.5) / (CZ as f32);
-                            let p_chunks_q = Vec2::new(px_q, pz_q);
-
-                            let (l0q, _p0, _r0, s0q, l1q_opt, _p1, _r1, s1q) =
-                                best_two_land_sites(biomes, p_chunks_q, cfg_seed, fallback_label);
-
-                            let w0q = land_weight_from_score(s0q);
-                            let w1q = land_weight_from_score(s1q);
-                            let w_sum_q = (w0q + w1q).max(1e-6);
-
-                            let a0 = if l0q.generation.rivers { w0q } else { 0.0 };
-                            let a1 = if let Some(l1q) = l1q_opt {
-                                if l1q.generation.rivers { w1q } else { 0.0 }
-                            } else { 0.0 };
-
-                            ((a0 + a1) / w_sum_q).clamp(0.0, 1.0)
-                        };
-
-                        // Look ahead one and two half-widths.
-                        let look = (width_blocks as f32 * 1.2).clamp(6.0, 18.0);
-                        let ax1 = wxf + t_dir.x * (0.5 * look);
-                        let az1 = wzf + t_dir.y * (0.5 * look);
-                        let ax2 = wxf + t_dir.x * (1.0 * look);
-                        let az2 = wzf + t_dir.y * (1.0 * look);
-
-                        let perm_ahead = 0.6 * perm_at_world(ax1, az1) + 0.4 * perm_at_world(ax2, az2);
-
-                        // If permission drops ahead, fade our carving now.
-                        let drop = (perm_here - perm_ahead).clamp(0.0, 1.0);
-                        // Smooth drop -> 1..0 factor
-                        border_fade = 1.0 - smoothstep(0.10, 0.90, drop);
-                    }
-
-                    // Apply forward fade. Also apply a cheap tail when carving stops completely.
-                    if may_carve {
-                        p_eff *= border_fade.powf(1.35);
-                    } else if p_core > 0.0 && t_dir.length_squared() > 0.0 {
-                        // Short upstream tail (prevents a hard end even if this column is disallowed)
-                        let seg = (width_blocks as f32 * 0.9).clamp(6.0, 14.0);
-                        let bx = wxf - t_dir.x * seg;
-                        let bz = wzf - t_dir.y * seg;
-                        let p_tail = river.potential(bx, bz, width_blocks);
-                        p_eff = (0.85 * p_tail).min(p_core); // gentle, never deeper than local profile
-                    }
-                    // -------------------------------------------------------------------
+                    let p_eff = p_smoothed * perm_here.powf(1.15 + 0.60 * width_fac);
 
                     if p_eff > 0.0 {
                         let h_before = h_f;
@@ -311,19 +267,16 @@ pub(crate) async fn generate_chunk_async_biome(
                             .carve_height(h_before, p_eff, width_blocks, SEA_LEVEL as f32)
                             .clamp((Y_MIN + 1) as f32, (SEA_LEVEL + 170) as f32);
 
-                        // Extra safety: limit the last cut near a strong drop ahead (round the lip)
-                        if border_fade < 0.95 {
-                            let severity = (1.0 - border_fade).clamp(0.0, 1.0);
-                            let max_cut_far = 2.6 + 0.34 * (width_blocks as f32); // ≈2.6..7.0
-                            let max_cut = (1.0 - smoothstep(0.10, 0.80, severity)) * max_cut_far;
-                            let cut = (h_before - h_carved).max(0.0);
-                            if cut > max_cut { h_carved = h_before - max_cut; }
-                            h_carved = h_carved + (h_before - h_carved) * (0.25 * severity);
+                        // Small safety against sudden large cuts if p_smoothed dropped quickly:
+                        // reduce the final cut by ~20% near the boundary (keeps lips rounded).
+                        if p_smoothed < 0.25 {
+                            h_carved = h_carved + (h_before - h_carved) * 0.20;
                         }
 
                         h_f = h_carved;
                     }
                 }
+                /* ================== /RIVER PATCH END ================== */
             }
 
             let h_final = h_f.round() as i32;
@@ -342,6 +295,15 @@ pub(crate) async fn generate_chunk_async_biome(
             let id_sea_floor  = reg.id_or_air(sea_floor_name);
             let id_upper_zero = reg.id_or_air(upper_zero_name);
 
+            // NEW: resolve under/upper-zero for land and ocean biomes
+            let under_zero_name = pick(&dom_biome.surface.under_zero, wx, wz, pick_seed ^ 0x55);
+            let id_under_zero   = reg.id_or_air(under_zero_name);
+
+            let ocean_upper_zero_name = pick(&ocean_biome.surface.upper_zero, wx, wz, pick_seed ^ 0x66);
+            let ocean_under_zero_name = pick(&ocean_biome.surface.under_zero, wx, wz, pick_seed ^ 0x77);
+            let id_ocean_upper_zero   = reg.id_or_air(ocean_upper_zero_name);
+            let id_ocean_under_zero   = reg.id_or_air(ocean_under_zero_name);
+
             // Beach cap width with detail noise
             let bw_noise = map01(coast_d.get_noise_2d(wxf, wzf));
             let beach_cap = BEACH_MIN + ((BEACH_MAX - BEACH_MIN) as f32 * bw_noise).round() as i32;
@@ -349,7 +311,9 @@ pub(crate) async fn generate_chunk_async_biome(
             // Adaptive soil from the dominating land site
             let soil_cap = if w0 >= w1 { soil0 } else { soil1 };
 
-            // Write column blocks
+            // --- COLUMN WRITE LOOP (unchanged) ---------------------------------
+            // Split at y=0: upper_zero for wy >= 0, under_zero for wy < 0.
+            // Ensure the seabed (when underwater) is at least 3 blocks thick.
             for ly in 0..CY {
                 let wy = Y_MIN + ly as i32;
                 if wy > h_final { break; }
@@ -357,22 +321,34 @@ pub(crate) async fn generate_chunk_async_biome(
                 let underwater = h_final < SEA_LEVEL;
 
                 let id: BlockId = if underwater {
-                    // Sand-only underwater
-                    id_sea_floor
+                    // OCEAN: seabed is at h_final; enforce ≥3 blocks of sea_floor.
+                    let depth_from_seabed = (h_final - wy).max(0);
+                    if depth_from_seabed <= 2 {
+                        // Top 3 layers of seabed
+                        id_sea_floor
+                    } else {
+                        // Below seabed: use ocean biome's zero-split
+                        if wy >= 0 { id_ocean_upper_zero } else { id_ocean_under_zero }
+                    }
                 } else {
-                    // Sand cap around coasts for beaches
+                    // LAND: normal surface/soil then zero-split core below soil.
                     let near_coast = t_ocean > 0.10 && t_ocean < 0.90 && (h_final - SEA_LEVEL).abs() <= 5;
+
                     if wy == h_final {
                         if near_coast { id_sea_floor } else { id_top }
                     } else if wy >= h_final - if near_coast { beach_cap } else { soil_cap } {
                         if near_coast { id_sea_floor } else { id_bottom }
                     } else {
-                        id_upper_zero
+                        // Core below the soil horizon -> split at world zero
+                        if wy >= 0 { id_upper_zero } else { id_under_zero }
                     }
                 };
 
                 if id != 0 { chunk.set(lx, ly, lz, id); }
             }
+
+            // Always enforce bedrock/border at the world bottom (ly == 0 -> Y_MIN)
+            chunk.set(lx, 0, lz, id_border);
         }
     }
 

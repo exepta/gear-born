@@ -2,7 +2,7 @@ use bevy::prelude::*;
 use game_core::configuration::GameConfig;
 use game_core::load_state::{LoadingPhase, LoadingProgress, LoadingTarget, PhaseDetail};
 use game_core::states::{AppState, LoadingStates};
-use game_core::world::chunk::{ChunkMap, LoadCenter};
+use game_core::world::chunk::{CaveTracker, ChunkMap, LoadCenter};
 use game_core::world::fluid::FluidMap;
 use game_core::UI_ACCENT_COLOR;
 
@@ -34,10 +34,11 @@ impl Plugin for LoadingScreen {
                     .run_if(
                         in_state(AppState::Loading(LoadingStates::BaseGen))
                             .or(in_state(AppState::Loading(LoadingStates::WaterGen)))
+                            .or(in_state(AppState::Loading(LoadingStates::CaveGen)))
                     )
             )
             .add_systems(
-                OnExit(AppState::Loading(LoadingStates::WaterGen)),
+                OnExit(AppState::Loading(LoadingStates::CaveGen)),
                 (despawn_loading_ui, clear_loading_resources)
             );
     }
@@ -189,6 +190,8 @@ fn update_loading_progress(
     target: Option<Res<LoadingTarget>>,
     chunk_map: Res<ChunkMap>,
     water: Option<Res<FluidMap>>,
+    // ✨ Neu: Cave-Progress
+    cave_tracker: Option<Res<CaveTracker>>,
 ) {
     let Some(target) = target else { return; };
     let center = target.center;
@@ -216,16 +219,34 @@ fn update_loading_progress(
         gen_done_water as f32 / total_chunks as f32
     } else { 0.0 };
 
-    // Phase & Overall
+    // --- CAVES nur Gen (done-Set aus CaveTracker) ---
+    let mut gen_done_cave = 0usize;
+    if let Some(ct) = &cave_tracker {
+        for &c in ct.done.iter() {
+            if in_area(center, radius, c) { gen_done_cave += 1; }
+        }
+    }
+    let cave_pct = if total_chunks > 0 {
+        gen_done_cave as f32 / total_chunks as f32
+    } else { 0.0 };
+
+    // Phase
     let phase = match app_state.get() {
-        AppState::Loading(LoadingStates::BaseGen) => LoadingPhase::BaseGen,
+        AppState::Loading(LoadingStates::BaseGen)  => LoadingPhase::BaseGen,
         AppState::Loading(LoadingStates::WaterGen) => LoadingPhase::WaterGen,
+        AppState::Loading(LoadingStates::CaveGen)  => LoadingPhase::CaveGen,
         _ => LoadingPhase::Done,
     };
 
+    // Overall (1/3 je Phase)
+    const W_BASE: f32 = 1.0 / 3.0;
+    const W_WATER: f32 = 1.0 / 3.0;
+    const W_CAVE: f32 = 1.0 / 3.0;
+
     let overall = match phase {
-        LoadingPhase::BaseGen  => clamp01(base_pct * 0.5),
-        LoadingPhase::WaterGen => clamp01(0.5 + water_pct * 0.5),
+        LoadingPhase::BaseGen  => clamp01(base_pct * W_BASE),
+        LoadingPhase::WaterGen => clamp01(W_BASE + water_pct * W_WATER),
+        LoadingPhase::CaveGen  => clamp01(W_BASE + W_WATER + cave_pct * W_CAVE),
         LoadingPhase::Done     => 1.0,
     };
 
@@ -239,6 +260,12 @@ fn update_loading_progress(
         gen_done: gen_done_water, gen_total: total_chunks,
         mesh_done: 0, mesh_total: 0,
         pct: water_pct,
+    };
+    
+    lp.cave = PhaseDetail {
+        gen_done: gen_done_cave, gen_total: total_chunks,
+        mesh_done: 0, mesh_total: 0,
+        pct: cave_pct,
     };
     lp.overall_pct = overall;
 }

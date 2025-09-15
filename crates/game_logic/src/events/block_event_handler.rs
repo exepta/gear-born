@@ -49,6 +49,7 @@ fn block_break_handler(
     mut ev_dirty: EventWriter<SubChunkNeedRemeshEvent>,
     mut break_ev: EventWriter<BlockBreakByPlayerEvent>,
 ) {
+    if game_mode.0.eq(&GameMode::Spectator) { return; }
     // --- Creative: instant break on click ---
     if matches!(game_mode.0, GameMode::Creative) {
         if !buttons.just_pressed(MouseButton::Left) {
@@ -67,7 +68,7 @@ fn block_break_handler(
             return;
         }
 
-        // remove block immediately
+        // remove the block immediately
         if let Some(mut access) = world_access_mut(&mut chunk_map, hit.block_pos) {
             access.set(0);
         }
@@ -159,12 +160,14 @@ fn block_place_handler(
     sel: Res<SelectionState>,
     selected: Res<SelectedBlock>,
     registry: Res<BlockRegistry>,
+    game_mode: Res<GameModeState>,
 
     mut fluids: ResMut<FluidMap>,
     mut chunk_map: ResMut<ChunkMap>,
     mut ev_dirty: EventWriter<SubChunkNeedRemeshEvent>,
     mut place_ev: EventWriter<BlockPlaceByPlayerEvent>,
 ) {
+    if game_mode.0.eq(&GameMode::Spectator) { return; }
     if !buttons.just_pressed(MouseButton::Right) { return; }
     let id = selected.id;
     if id == 0 { return; }

@@ -8,16 +8,16 @@ use game_core::key_converter::convert;
 use game_core::player::selection::SelectionState;
 use game_core::player::{GameMode, GameModeState};
 use game_core::states::{AppState, InGameStates};
+use game_core::v_ram_detection::{detect_v_ram_best_effort, fmt_bytes};
+use game_core::world::biome::biome_func::dominant_biome_at_p_chunks;
+// ---- NEU: Biome-Imports ----
+use game_core::world::biome::registry::BiomeRegistry;
 use game_core::world::block::{block_name_from_registry, get_block_world, BlockRegistry, MiningState, VOXEL_SIZE};
 use game_core::world::chunk::ChunkMap;
 use game_core::world::chunk_dim::*;
 use game_core::{BlockCatalogPreviewCam, BuildInfo};
 use std::ops::Neg;
 use sysinfo::{CpuRefreshKind, MemoryRefreshKind, Pid, ProcessesToUpdate, RefreshKind, System};
-use game_core::v_ram_detection::{detect_v_ram_best_effort, fmt_bytes};
-use game_core::world::biome::biome_func::dominant_biome_at_p_chunks;
-// ---- NEU: Biome-Imports ----
-use game_core::world::biome::registry::BiomeRegistry;
 
 #[derive(Resource, Default)]
 struct DebugSnapshot {
@@ -206,6 +206,7 @@ fn snap_build_and_mode(
     snap.mode_text = match game_mode.0 {
         GameMode::Creative => "Creative",
         GameMode::Survival => "Survival",
+        GameMode::Spectator => "Spectator",
     };
 }
 
