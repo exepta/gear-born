@@ -46,4 +46,4 @@ features = [
     "debug-render"
 ]
 [dependencies.serde_json]
-version = "1.0.143"
+version = "1.0.145"

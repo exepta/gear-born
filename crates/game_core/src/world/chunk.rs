@@ -4,8 +4,8 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use crate::world::block::{BlockId, DIR4_XZ};
 use crate::world::chunk_dim::*;
 
-pub const BIG: usize = 160;
-pub const MAX_UPDATE_FRAMES: usize = 20;
+pub const BIG: usize = 175;
+pub const MAX_UPDATE_FRAMES: usize = 32;
 
 pub const SEA_LEVEL: i32 = 60;
 
