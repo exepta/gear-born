@@ -98,7 +98,9 @@ pub struct GraphicsConfig {
     /// Identifier for the graphics backend to use (e.g., "wgpu", "OpenGL", "Vulkan").
     pub graphic_backend: String,
     
-    pub chunk_range: i32
+    pub chunk_range: i32,
+    #[serde(default)]
+    pub texture_res: TextureResolution,
 }
 
 impl Default for GraphicsConfig {
@@ -109,7 +111,8 @@ impl Default for GraphicsConfig {
             fullscreen: false,
             vsync: true,
             graphic_backend: String::from("AUTO"),
-            chunk_range: 8
+            chunk_range: 8,
+            texture_res: TextureResolution::default(),
         }
     }
 }
@@ -250,6 +253,32 @@ impl Default for WorldGenConfig {
     fn default() -> Self {
         Self {
             seed: 1337
+        }
+    }
+}
+
+#[derive(Deserialize, Serialize, Default, Debug, Clone, Copy, Eq, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub enum TextureResolution {
+    #[default]
+    #[serde(alias = "Low")]
+    Low,
+    #[serde(alias = "Medium")]
+    Medium,
+    #[serde(alias = "High")]
+    High,
+    #[serde(alias = "Max")]
+    Max,
+}
+
+impl TextureResolution {
+    /// Map resolution to tile size in pixels.
+    pub const fn tile_px(self) -> u32 {
+        match self {
+            TextureResolution::Low    => 64,
+            TextureResolution::Medium => 128,
+            TextureResolution::High   => 256,
+            TextureResolution::Max    => 512,
         }
     }
 }

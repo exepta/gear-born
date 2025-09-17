@@ -5,7 +5,7 @@ use crate::world::block::{BlockId, DIR4_XZ};
 use crate::world::chunk_dim::*;
 
 pub const BIG: usize = 175;
-pub const MAX_UPDATE_FRAMES: usize = 32;
+pub const MAX_UPDATE_FRAMES: usize = 28;
 
 pub const SEA_LEVEL: i32 = 60;
 

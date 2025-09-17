@@ -4,4 +4,6 @@ fullscreen = false
 vsync = true
 graphic_backend = "auto"
 
-chunk_range = 8
+chunk_range = 4
+# ["low" = 64px / "medium" = 128px / "high" = 256px / "max" = 512px]
+texture_res = "high"
