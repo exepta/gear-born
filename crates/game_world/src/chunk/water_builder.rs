@@ -18,7 +18,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 const WATER_GEN_BUDGET_PER_FRAME: usize = 48;
 const MAX_INFLIGHT_WATER_LOAD: usize = 32;
 
-const MAX_INFLIGHT_WATER_MESH: usize = 64;
+const MAX_INFLIGHT_WATER_MESH: usize = 16;
 
 #[derive(Resource, Default)]
 struct WaterBoot {
