@@ -9,7 +9,7 @@ use serde::Deserialize;
 use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
-
+use crate::configuration::TextureResolution;
 /* ---------------- constants ---------------- */
 
 pub const VOXEL_SIZE: f32 = 1.0;
@@ -133,6 +133,16 @@ impl BlockRegistry {
         materials: &mut Assets<StandardMaterial>,
         blocks_dir: &str,
     ) -> Self {
+        Self::load_all_with_res(asset_server, materials, blocks_dir, TextureResolution::Low)
+    }
+
+    /// New: choose textures based on resolution.
+    pub fn load_all_with_res(
+        asset_server: &AssetServer,
+        materials: &mut Assets<StandardMaterial>,
+        blocks_dir: &str,
+        texture_res: TextureResolution,
+    ) -> Self {
         // 0 = air
         let mut defs: Vec<BlockDef> = Vec::new();
         let mut name_to_id = HashMap::new();
@@ -157,15 +167,25 @@ impl BlockRegistry {
                 .clone()
                 .unwrap_or_else(|| guess_tex_dir_from_block_name(&block_json.name));
 
-            // tileset is read from disk (not via asset server)
+            // Read tileset description from disk (base is 64 by default).
             let tileset_path = format!("assets/{}/data.json", tex_dir);
-            let tileset: BlockTileset = read_json(&tileset_path);
+            let mut tileset: BlockTileset = read_json(&tileset_path);
 
-            // atlas image is loaded via asset_server
-            let atlas_path = format!("{}/{}", tex_dir, tileset.image);
+            // Override tile size according to config.
+            // Desired tile size from config
+            let desired_px = texture_res.clone().tile_px();
+
+            // Resolve atlas file with per-block fallback to 64 if file is missing
+            let (atlas_file, effective_px) = resolve_atlas_for_res(&tex_dir, &tileset.image, desired_px);
+
+            // Use the effective tile size for UV math
+            tileset.tile_size = effective_px;
+
+            // Load the resolved atlas
+            let atlas_path = format!("{}/{}", tex_dir, atlas_file);
             let image: Handle<Image> = asset_server.load(atlas_path.as_str());
 
-            // resolve faces (supports: specific keys, 'all', 'vertical', 'horizontal', and 'nord' fallback)
+            // Resolve per-face tiles.
             let faces = block_json.texture.resolve();
             let uv_top    = tile_uv(&tileset, require_face(&faces.top,    "top",    &block_json.name)).unwrap();
             let uv_bottom = tile_uv(&tileset, require_face(&faces.bottom, "bottom", &block_json.name)).unwrap();
@@ -697,5 +717,39 @@ fn material_policy_from_stats(stats: &BlockStats) -> (AlphaMode, Color) {
         (AlphaMode::Opaque, Color::WHITE)
     } else {
         (AlphaMode::Blend, Color::srgba(1.0, 1.0, 1.0, 0.8))
+    }
+}
+
+/// Insert suffix like `_128` before file extension if tile_px != 64.
+fn image_name_for_res(base_name: &str, tile_px: u32) -> String {
+    if tile_px == 64 {
+        return base_name.to_string();
+    }
+    let p = Path::new(base_name);
+    let stem = p.file_stem().and_then(|s| s.to_str()).unwrap_or(base_name);
+    let ext = p.extension().and_then(|s| s.to_str()).unwrap_or("png");
+    format!("{stem}_{tile_px}.{ext}")
+}
+
+fn resolve_atlas_for_res(tex_dir: &str, base_image: &str, desired_px: u32) -> (String, u32) {
+    // Low res requested: nothing to resolve.
+    if desired_px == 64 {
+        return (base_image.to_string(), 64);
+    }
+
+    // Construct candidate like "border_128.png".
+    let candidate = image_name_for_res(base_image, desired_px);
+
+    // Check physical file existence: assets/<tex_dir>/<candidate>
+    let full_path = Path::new("assets").join(tex_dir).join(&candidate);
+    if full_path.exists() {
+        (candidate, desired_px)
+    } else {
+        // Graceful per-block fallback
+        warn!(
+            "Missing atlas: {:?}. Falling back to 64px for this block ({}).",
+            full_path, base_image
+        );
+        (base_image.to_string(), 64)
     }
 }

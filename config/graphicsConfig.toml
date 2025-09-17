@@ -5,6 +5,5 @@ vsync = true
 graphic_backend = "auto"
 
 chunk_range = 4
-# [1 = 64px / 2 = 128px / 4 = 256px / 8 = 512px]
-texture_maps = 1
-
+# ["low" = 64px / "medium" = 128px / "high" = 256px / "max" = 512px]
+texture_res = "high"
