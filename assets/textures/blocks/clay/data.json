@@ -1,6 +1,6 @@
 {
   "image": "clay.png",
-  "tile_size": 512,
+  "tile_size": 64,
   "columns": 1,
   "rows": 1,
   "tiles": {

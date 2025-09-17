@@ -46,9 +46,7 @@ pub enum BeforeUiState {
     #[default]
     Menu,
     /// Title/menu screen.
-    Title,
-    /// Account login, registration, or account management screen.
-    Account,
+    Settings,
 }
 
 /// State for network fetching procedures (e.g., user data, save files, etc.).
