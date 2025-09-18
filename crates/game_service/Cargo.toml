@@ -1,0 +1,33 @@
+[package]
+name = "game_service"
+version = "0.1.4"
+edition = "2024"
+authors = ["Daniel Ramke <genshin.exepta@outlook.com>"]
+
+[lib]
+name = "game_service"
+path = "src/lib.rs"
+
+##############################################
+#                  Crates                    #
+##############################################
+
+# Game Core for handle global states and resources
+[dependencies.game_core]
+path = "../game_core"
+
+# Game logic for the services. This crate gives only functional methods.
+[dependencies.game_logic]
+path = "../game_logic"
+
+
+##############################################
+#               Dependencies                 #
+##############################################
+
+# Main dependency for the project. This is absolute needed for work with
+# graphics and systems. If you change the Version make sure that you change it
+# in all crates of the project!
+[dependencies.bevy]
+version = "0.16.1"
+default-features = true

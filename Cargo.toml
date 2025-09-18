@@ -1,17 +1,20 @@
 [package]
-name = "gear-born-ng"
+name = "gear-born"
 version = "0.1.4"
 edition = "2024"
 authors = ["Daniel Ramke <genshin.exepta@outlook.com>"]
 
 [[bin]]
-name = "gear-born-ng"
+name = "gear-born"
 path = "src/main.rs"
 
 [workspace]
 members = [
-    "crates/game_core"
-]
+    "crates/game_core",
+    "crates/game_logic",
+    "crates/game_service",
+    "crates/game_ui"
+, "crates/game_world"]
 
 [features]
 v_ram_nvidia = [] # NVIDIA support for VRAM detection (Linux)
@@ -46,6 +49,19 @@ debug = true
 [dependencies.game_core]
 path = "crates/game_core"
 features = ["v_ram_nvml", "v_ram_dxgi", "v_ram_metal"]
+
+# Game uis and all ui objects present here
+[dependencies.game_ui]
+path = "crates/game_ui"
+
+# Game logic function no systems! This crate stores all technical functions
+# for other creates!
+[dependencies.game_logic]
+path = "crates/game_logic"
+
+# Game services for handle all system stuffs.
+[dependencies.game_service]
+path = "crates/game_service"
 
 ##############################################
 #               Dependencies                 #

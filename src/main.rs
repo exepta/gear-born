@@ -260,6 +260,9 @@ mod manager {
     use game_core::config::GlobalConfig;
     use game_core::debug::WorldInspectorState;
     use game_core::GameCorePlugin;
+    use game_logic::GameLogicPlugin;
+    use game_service::GameServicePlugin;
+    use game_ui::GameUiPlugin;
 
     pub struct ManagerPlugin;
 
@@ -273,9 +276,12 @@ mod manager {
                 ..default()
             });
 
-            app.add_plugins(
-                GameCorePlugin
-            );
+            app.add_plugins((
+                GameCorePlugin,
+                GameLogicPlugin,
+                GameServicePlugin,
+                GameUiPlugin
+            ));
 
             app.add_systems(Startup, setup_shadow_map);
             app.add_systems(Update, toggle_world_inspector);
