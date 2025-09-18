@@ -1,26 +1,28 @@
 [package]
-name = "gear-born"
-version = "0.1.3-2"
+name = "gear-born-ng"
+version = "0.1.4"
 edition = "2024"
 authors = ["Daniel Ramke <genshin.exepta@outlook.com>"]
 
 [[bin]]
-name = "gear-born"
+name = "gear-born-ng"
 path = "src/main.rs"
 
 [workspace]
 members = [
-    "crates/game_core",
-    "crates/game_logic",
-    "crates/game_ui",
-    "crates/game_world",
+    "crates/game_core"
 ]
 
 [features]
-vram_nvml = []   # NVIDIA per-process via NVML (Windows/Linux)
-vram_dxgi = []   # Windows adapter-wide via DXGI (AMD & NVIDIA)
-vram_metal = []  # macOS device-wide via Metal
+v_ram_nvidia = [] # NVIDIA support for VRAM detection (Linux)
+v_ram_amd_nvidia_win = [] # AMD / NVIDIA support VRAM detection (Windows)
+v_ram_metal = [] # MAC GRAPHIC support VRAM detection (Mac)
 
+##############################################
+#                 Profiles                   #
+##############################################
+
+# RELEASE
 [profile.release]
 panic = "unwind"
 opt-level = "s"
@@ -28,6 +30,7 @@ lto = true
 codegen-units = 1
 strip = true
 
+# DEVELOPMENT
 [profile.dev]
 opt-level = 1
 
@@ -35,55 +38,54 @@ opt-level = 1
 opt-level = 3
 debug = true
 
+##############################################
+#                  Crates                    #
+##############################################
+
+# All game relevant structs, events, func etc...
 [dependencies.game_core]
 path = "crates/game_core"
-features = ["vram_dxgi", "vram_nvml", "vram_metal"]
+features = ["v_ram_nvml", "v_ram_dxgi", "v_ram_metal"]
 
-[dependencies.game_logic]
-path = "crates/game_logic"
+##############################################
+#               Dependencies                 #
+##############################################
 
-[dependencies.game_ui]
-path = "crates/game_ui"
-
-[dependencies.game_world]
-path = "crates/game_world"
-
+# Main dependency for the project. This is absolute needed for work with
+# graphics and systems. If you change the Version make sure that you change it
+# in all crates of the project!
 [dependencies.bevy]
 version = "0.16.1"
-default-features = false
-features = [
-    "bevy_asset",
-    "bevy_state",
-    "bevy_core_pipeline",
-    "bevy_log",
-    "bevy_render",
-    "bevy_window",
-    "bevy_winit",
-    "default_font",
-    "multi_threaded",
-    "x11"
-]
+default-features = true
 
+# Bevy Inspector UI for debug things
 [dependencies.bevy-inspector-egui]
 version = "0.33.1"
+features = ["egui_clipboard"]
 
+# Bevy Rapier3D for initialize game physics
 [dependencies.bevy_rapier3d]
 version = "0.31.0"
-features = [
-    "default",
-    "simd-stable",
-    "debug-render-3d"
-]
+features = ["default", "simd-stable", "debug-render-3d"]
 
+# Tracing Subscriber for look up traces in logs and for print them
+# into a log file
 [dependencies.tracing-subscriber]
 version = "0.3.20"
 
+# Date util for handle colcks
 [dependencies.chrono]
 version = "0.4.42"
 features = ["clock"]
 
+# Environment file support for better settings
 [dependencies.dotenvy]
 version = "0.15.7"
 
+##############################################
+#             Dev-Dependencies               #
+##############################################
+
+# For test which needed serialization
 [dev-dependencies.serial_test]
 version = "3.2.0"

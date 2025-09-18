@@ -1,8 +1,5 @@
-/.idea
-.idea
 /target
-target
 /logs
-/log
 /saves
-coverage.lcov
+.idea
+/idea

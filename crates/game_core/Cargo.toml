@@ -1,6 +1,6 @@
 [package]
 name = "game_core"
-version = "0.1.0"
+version = "0.1.4"
 edition = "2024"
 authors = ["Daniel Ramke <genshin.exepta@outlook.com>"]
 
@@ -8,53 +8,59 @@ authors = ["Daniel Ramke <genshin.exepta@outlook.com>"]
 name = "game_core"
 path = "src/lib.rs"
 
-
 [features]
 default = []
-# Use dep: syntax so Cargo weiß, dass diese Features nur die jeweilige Dependency aktivieren.
-vram_nvml  = ["dep:nvml-wrapper"]  # NVIDIA per-process (Win/Linux)
-vram_dxgi  = ["dep:windows"]       # Windows adapter-wide (AMD & NVIDIA)
-vram_metal = ["dep:metal"]         # macOS device-wide
+# Use dep for control the dependencies which ar activated by the feature
+v_ram_nvml  = ["dep:nvml"]  # NVIDIA per-process (Win/Linux)
+v_ram_dxgi  = ["dep:windows"]       # Windows adapter-wide (AMD & NVIDIA)
+v_ram_metal = ["dep:metal"]         # macOS device-wide
 
+##############################################
+#               Dependencies                 #
+##############################################
+
+# Main dependency for the project. This is absolute needed for work with
+# graphics and systems. If you change the Version make sure that you change it
+# in all crates of the project!
 [dependencies.bevy]
 version = "0.16.1"
-default-features = false
-features = [
-    "bevy_state",
-    "bevy_log",
-    "bevy_asset",
-    "bevy_animation",
-    "png",
-    "bevy_text"
-]
+default-features = true
 
+# Serde for seralize structs
 [dependencies.serde]
 version = "1.0.225"
 features = ["derive"]
 
+# Serde JSON for handle struct by json files
 [dependencies.serde_json]
 version = "1.0.145"
 
+# Random generated u32 / u64 / i32 / i64 etc
 [dependencies.rand]
 version = "0.9.2"
 
+# TOML file support for our config files
 [dependencies.toml]
 version = "0.9.6"
-features = [
-    "parse",
-    "display"
-]
+features = ["parse", "display"]
 
+# Fetch system information for windows, linux and mac
 [dependencies.sysinfo]
 version = "0.37.0"
 
-[dependencies]
-nvml-wrapper = { version = "0.11.0", optional = true }
+# NVML for NVIDIA cards under linux
+[target.'cfg(target_os = "linux")'.dependencies.nvml]
+package = "nvml-wrapper"
+version = "0.11.0"
+optional = true
 
-[target.'cfg(windows)'.dependencies]
-windows = { version = "0.62.0", optional = true, features = [
-    "Win32_Graphics_Dxgi", "Win32_Graphics_Dxgi_Common"
-] }
+# DXGI for ADM / NVIDIA cards under windows
+[target.'cfg(windows)'.dependencies.windows]
+version = "0.62.0"
+optional = true
+features = ["Win32_Graphics_Dxgi", "Win32_Graphics_Dxgi_Common"]
 
-[target.'cfg(target_os = "macos")'.dependencies]
-metal = { version = "0.32.0", optional = true }
+# METAL for aple devices cards
+[target.'cfg(target_os = "macos")'.dependencies.metal]
+version = "0.32.0"
+optional = true

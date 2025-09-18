@@ -1,0 +1,8 @@
+# This file contains all game inputs. You can change it here or
+# in game at the settings ui.
+
+##############################################
+#                   Debug                    #
+##############################################
+
+inspector = "F1"

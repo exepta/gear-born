@@ -1,29 +1,49 @@
 #![feature(coverage_attribute)]
 
-mod manager;
-
-use crate::manager::ManagerPlugin;
-use bevy::image::{ImageAddressMode, ImageFilterMode, ImageSamplerDescriptor};
-use bevy::log::{BoxedLayer, Level, LogPlugin};
-use bevy::prelude::*;
-use bevy::render::settings::{Backends, RenderCreation, WgpuFeatures, WgpuSettings};
-use bevy::render::RenderPlugin;
-use bevy::window::{PresentMode, WindowMode, WindowResolution};
-use bevy_inspector_egui::bevy_egui::EguiPlugin;
-use bevy_inspector_egui::quick::WorldInspectorPlugin;
-use chrono::Utc;
-use dotenvy::dotenv;
-use game_core::configuration::GameConfig;
-use game_core::debug::WorldInspectorState;
-use game_core::states::AppState;
-use game_core::BuildInfo;
 use std::env;
 use std::fs::{File, OpenOptions};
 use std::io::Write;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
+use bevy::image::*;
+use bevy::log::*;
+use bevy::prelude::*;
+use bevy::render::*;
+use bevy::render::render_resource::WgpuFeatures;
+use bevy::render::settings::*;
+use bevy::window::*;
+use bevy_inspector_egui::bevy_egui::EguiPlugin;
+use bevy_inspector_egui::quick::WorldInspectorPlugin;
+use chrono::Utc;
+use dotenvy::dotenv;
 use tracing_subscriber::fmt::writer::BoxMakeWriter;
 use tracing_subscriber::Layer;
+use game_core::config::GlobalConfig;
+use game_core::debug::WorldInspectorState;
+use game_core::states::AppState;
+
+use crate::manager::ManagerPlugin;
+
+/// Helper struct to insert a start log entry when logging is initialized.
+///
+/// When this struct is dropped, it writes a separator message to the log file
+/// to indicate when logging has started.
+struct StartLogText {
+    file: Arc<Mutex<File>>, // Shared reference to the log file
+}
+
+impl Drop for StartLogText {
+
+    #[coverage(off)]
+    fn drop(&mut self) {
+        let mut file = self.file.lock().unwrap();
+        let _ = writeln!(
+            file,
+            "\n====================================== [ Start ] ======================================\n"
+        );
+        let _ = file.flush();
+    }
+}
 
 /// Application entry point for debug builds.
 /// Initializes logging, loads configuration, creates the Bevy app, and runs the core client.
@@ -32,9 +52,9 @@ use tracing_subscriber::Layer;
 #[cfg(debug_assertions)]
 #[coverage(off)]
 fn main() {
-    let options = GameConfig::new();
+    let config = GlobalConfig::new();
     let mut app = App::new();
-    init_bevy_app(&mut app, &options);
+    init_bevy_app(&mut app, &config);
 }
 
 /// Application entry point for release builds.
@@ -44,47 +64,38 @@ fn main() {
 #[cfg(not(debug_assertions))]
 #[coverage(off)]
 fn main() {
-    let options = GameConfig::new();
+    let config = GlobalConfig::new();
     let mut app = App::new();
-    init_bevy_app(&mut app, &options);
+    init_bevy_app(&mut app, &config);
 }
 
 /// Initializes core Bevy app plugins and logging settings.
 ///
 /// # Parameters
 /// - `app`: A mutable reference to the [`App`] instance.
-/// - `options`: [`ClientOptions`] containing window configuration.
-///
-/// # Returns
-/// A mutable reference to the initialized [`App`] instance.
-#[coverage(off)]
-fn init_bevy_app(app: &mut App, config: &GameConfig) {
-    let build = BuildInfo {
-        app_name: "Game Version",
-        app_version: env!("CARGO_PKG_VERSION"),
-        bevy_version: "0.16.1",
-    };
-
+/// - `config`: [`GlobalConfig`] containing window configuration.
+fn init_bevy_app(app: &mut App, config: &GlobalConfig) {
     app
         .insert_resource(config.clone())
-        .insert_resource(build)
         .add_plugins(DefaultPlugins.set(
-        WindowPlugin {
-            primary_window: Some(Window {
-                title: String::from("Gear Born"),
-                mode: if config.graphics.fullscreen { WindowMode::BorderlessFullscreen(MonitorSelection::Primary) } else { WindowMode::Windowed }, //BorderlessFullscreen(MonitorSelection::Primary)
-                resolution: WindowResolution::new(config.graphics.window_width, config.graphics.window_height),
-                present_mode: PresentMode::AutoVsync,
+            WindowPlugin {
+                primary_window: Some(Window {
+                    title: String::from("Gear Born"),
+                    mode: if config.graphics_config.fullscreen { WindowMode::BorderlessFullscreen(MonitorSelection::Primary) } else { WindowMode::Windowed }, //BorderlessFullscreen(MonitorSelection::Primary)
+                    resolution: WindowResolution::new(
+                        config.graphics_config.get_window_width(),
+                        config.graphics_config.get_window_height()),
+                    present_mode: PresentMode::AutoVsync,
+                    ..default()
+                }),
                 ..default()
-            }),
-            ..default()
-        }
-    ).set(
-        RenderPlugin {
-            render_creation: RenderCreation::Automatic(create_gpu_settings(&config.graphics.graphic_backend)),
-            ..default()
-        }
-    ).set(ImagePlugin {
+            }
+        ).set(
+            RenderPlugin {
+                render_creation: RenderCreation::Automatic(create_gpu_settings(&config.graphics_config.video_backend)),
+                ..default()
+            }
+        ).set(ImagePlugin {
             default_sampler: ImageSamplerDescriptor {
                 address_mode_u: ImageAddressMode::Repeat,
                 address_mode_v: ImageAddressMode::Repeat,
@@ -95,22 +106,24 @@ fn init_bevy_app(app: &mut App, config: &GameConfig) {
                 anisotropy_clamp: 16,
                 ..default()
             },
-        ..default()
-    }).set(LogPlugin {
-        level: Level::DEBUG,
-        filter: load_log_env_filter(),
-        custom_layer: log_file_appender
-    }))
+            ..default()
+        }).set(LogPlugin {
+            level: Level::DEBUG,
+            filter: load_log_env_filter(),
+            custom_layer: log_file_appender
+        }))
         .insert_resource(ClearColor(Color::Srgba(Srgba::rgb_u8(20, 25,27))))
         .init_state::<AppState>()
         .insert_resource(WorldInspectorState(false))
         .add_plugins(EguiPlugin::default())
         .add_plugins(WorldInspectorPlugin::default().run_if(check_world_inspector_state))
         .add_plugins(ManagerPlugin)
-        .add_systems(Update, init_app_finish.run_if(in_state(AppState::AppInit).and(resource_exists::<GameConfig>)))
+        .add_systems(Update, init_app_finish.run_if(in_state(AppState::AppInit).and(resource_exists::<GlobalConfig>)))
         .run();
 }
 
+/// After finish creation of the app `init_bevy_app` this function will
+/// set the current [`AppState`] to `AppState::PreLoad`.
 #[coverage(off)]
 fn init_app_finish(mut next_state: ResMut<NextState<AppState>>) {
     info!("Finish initializing app...");
@@ -240,25 +253,52 @@ fn load_log_env_filter() -> String {
     env.to_string()
 }
 
-/// Helper struct to insert a start log entry when logging is initialized.
-///
-/// When this struct is dropped, it writes a separator message to the log file
-/// to indicate when logging has started.
-struct StartLogText {
-    file: Arc<Mutex<File>>, // Shared reference to the log file
-}
+mod manager {
+    use bevy::pbr::DirectionalLightShadowMap;
+    use bevy::prelude::*;
+    use bevy_rapier3d::prelude::*;
+    use game_core::config::GlobalConfig;
+    use game_core::debug::WorldInspectorState;
+    use game_core::GameCorePlugin;
 
-impl Drop for StartLogText {
+    pub struct ManagerPlugin;
+
+    impl Plugin for ManagerPlugin {
+
+        #[coverage(off)]
+        fn build(&self, app: &mut App) {
+            app.add_plugins(RapierPhysicsPlugin::<NoUserData>::default());
+            app.add_plugins(RapierDebugRenderPlugin {
+                enabled: false,
+                ..default()
+            });
+
+            app.add_plugins(
+                GameCorePlugin
+            );
+
+            app.add_systems(Startup, setup_shadow_map);
+            app.add_systems(Update, toggle_world_inspector);
+        }
+    }
+
+    fn setup_shadow_map(mut commands: Commands) {
+        commands.insert_resource(DirectionalLightShadowMap { size: 1024 });
+    }
 
     #[coverage(off)]
-    fn drop(&mut self) {
-        let mut file = self.file.lock().unwrap();
-        let _ = writeln!(
-            file,
-            "\n====================================== [ Start ] ======================================\n"
-        );
-        let _ = file.flush();
+    fn toggle_world_inspector(
+        mut debug_context: ResMut<WorldInspectorState>,
+        keyboard: ResMut<ButtonInput<KeyCode>>,
+        global_config: Res<GlobalConfig>
+    ) {
+        let key = global_config.input_config.get_inspector_key();
+        if keyboard.just_pressed(key) {
+            debug_context.0 = !debug_context.0;
+            info!("World Inspector: {}", debug_context.0);
+        }
     }
+
 }
 
 // =================================================================================================
@@ -269,6 +309,7 @@ impl Drop for StartLogText {
 
 #[cfg(test)]
 mod tests {
+    use std::env;
     use super::*;
     use serial_test::serial;
 
@@ -310,8 +351,8 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "Invalid backend")]
     fn test_create_gpu_settings_invalid() {
-        let _ = create_gpu_settings("unknown-backend");
+        let settings = create_gpu_settings("unknown-backend");
+        assert_eq!(settings.backends, Some(Backends::PRIMARY))
     }
 }

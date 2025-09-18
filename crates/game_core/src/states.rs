@@ -18,12 +18,8 @@ pub enum AppState {
     Preload,
 
     /// Active during UI-driven screens before entering the game.
-    /// Contains its own `BeforeUiState`.
-    Screen(BeforeUiState),
-
-    /// Represents asynchronous fetching from the network/server.
-    /// Contains its own `FetchState`.
-    NetworkFetch(FetchState),
+    /// Contains its own `UiState`.
+    Screen(UiState),
 
     /// Represents asset loading logic (e.g., loading models, textures, data).
     /// Contains its own `AssetLoadState`.
@@ -41,37 +37,23 @@ pub enum AppState {
 ///
 /// Used as a substate of `AppState::Screen`.
 #[derive(States, Default, Debug, Clone, Eq, PartialEq, Hash)]
-pub enum BeforeUiState {
+pub enum UiState {
     /// Splash screen (logo, studio, etc.).
     #[default]
-    Splash,
+    Menu,
     /// Title/menu screen.
-    Title,
-    /// Account login, registration, or account management screen.
-    Account,
-}
-
-/// State for network fetching procedures (e.g., user data, save files, etc.).
-///
-/// Used as a substate of `AppState::NetworkFetch`.
-#[derive(States, Default, Debug, Clone, Eq, PartialEq, Hash)]
-pub enum FetchState {
-    /// Currently fetching data from the network.
-    #[default]
-    Fetching,
-    /// Network fetching is complete.
-    FetchingComplete,
+    Settings,
 }
 
 
 #[derive(States, Default, Debug, Clone, Eq, PartialEq, Hash)]
 pub enum LoadingStates {
-    
+
     #[default]
     BaseGen,
-    
+
     WaterGen,
-    
+
     CaveGen
 }
 
