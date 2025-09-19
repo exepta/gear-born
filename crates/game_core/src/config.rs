@@ -122,7 +122,7 @@ pub enum TextureQuality {
 
 impl TextureQuality {
     /// Map resolution to tile size in pixels.
-    pub const fn tile_px(self) -> u32 {
+    pub const fn tile_px(self) -> u16 {
         match self {
             TextureQuality::Low    => 64,
             TextureQuality::Medium => 128,

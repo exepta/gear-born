@@ -13,8 +13,9 @@ members = [
     "crates/game_core",
     "crates/game_logic",
     "crates/game_service",
-    "crates/game_ui"
-, "crates/game_world"]
+    "crates/game_ui",
+    "crates/game_world"
+]
 
 [features]
 v_ram_nvidia = [] # NVIDIA support for VRAM detection (Linux)
@@ -55,7 +56,7 @@ features = ["v_ram_nvml", "v_ram_dxgi", "v_ram_metal"]
 path = "crates/game_ui"
 
 # Game logic function no systems! This crate stores all technical functions
-# for other creates!
+# for other creations!
 [dependencies.game_logic]
 path = "crates/game_logic"
 
@@ -63,12 +64,15 @@ path = "crates/game_logic"
 [dependencies.game_service]
 path = "crates/game_service"
 
+[dependencies.game_world]
+path = "crates/game_world"
+
 ##############################################
 #               Dependencies                 #
 ##############################################
 
-# Main dependency for the project. This is absolute needed for work with
-# graphics and systems. If you change the Version make sure that you change it
+# Main dependency for the project. This is absolutely needed for work with
+# graphics and systems. If you change the Version, make sure that you change it
 # in all crates of the project!
 [dependencies.bevy]
 version = "0.16.1"

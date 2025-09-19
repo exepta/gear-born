@@ -2547,7 +2547,7 @@ dependencies = [
 
 [[package]]
 name = "game_world"
-version = "0.1.0"
+version = "0.1.4"
 dependencies = [
  "bevy",
  "bevy_rapier3d",
@@ -2567,6 +2567,7 @@ dependencies = [
  "game_logic",
  "game_service",
  "game_ui",
+ "game_world",
  "serial_test",
  "tracing-subscriber",
 ]

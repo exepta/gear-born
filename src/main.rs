@@ -253,6 +253,12 @@ fn load_log_env_filter() -> String {
     env.to_string()
 }
 
+// =================================================================================================
+//
+//                                            Manager
+//
+// =================================================================================================
+
 mod manager {
     use bevy::pbr::DirectionalLightShadowMap;
     use bevy::prelude::*;
@@ -263,6 +269,7 @@ mod manager {
     use game_logic::GameLogicPlugin;
     use game_service::GameServicePlugin;
     use game_ui::GameUiPlugin;
+    use game_world::GameWorldPlugin;
 
     pub struct ManagerPlugin;
 
@@ -280,6 +287,7 @@ mod manager {
                 GameCorePlugin,
                 GameLogicPlugin,
                 GameServicePlugin,
+                GameWorldPlugin,
                 GameUiPlugin
             ));
 
@@ -301,7 +309,6 @@ mod manager {
         let key = global_config.input_config.get_inspector_key();
         if keyboard.just_pressed(key) {
             debug_context.0 = !debug_context.0;
-            info!("World Inspector: {}", debug_context.0);
         }
     }
 
