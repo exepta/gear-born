@@ -17,7 +17,7 @@ vram_dxgi  = ["dep:windows"]       # Windows adapter-wide (AMD & NVIDIA)
 vram_metal = ["dep:metal"]         # macOS device-wide
 
 [dependencies.bevy]
-version = "0.16.1"
+version = "0.17.2"
 default-features = false
 features = [
     "bevy_state",

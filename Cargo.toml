@@ -49,7 +49,7 @@ path = "crates/game_ui"
 path = "crates/game_world"
 
 [dependencies.bevy]
-version = "0.16.1"
+version = "0.17.2"
 default-features = false
 features = [
     "bevy_asset",
