@@ -36,7 +36,7 @@ features = [
 ]
 
 [dependencies.sysinfo]
-version = "0.37.0"
+version = "0.37.2"
 
 [dependencies.bevy_rapier3d]
 version = "0.31.0"
