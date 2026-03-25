@@ -17,8 +17,8 @@ use game_core::world::chunk::{ChunkData, ChunkMap};
 use game_core::world::chunk_dim::*;
 use game_core::world::fluid::{FluidChunk, FluidMap, SolidSnapshot, WaterMeshIndex};
 use game_core::world::save::{
-    container_find, container_upsert, slot_is_container, unpack_slot_bytes, RegionCache, RegionFile,
-    WorldSave, REGION_SIZE, TAG_WAT1,
+    REGION_SIZE, RegionCache, RegionFile, TAG_WAT1, WorldSave, container_find, container_upsert,
+    slot_is_container, unpack_slot_bytes,
 };
 use lz4_flex::{compress_prepend_size, decompress_size_prepended};
 use std::collections::HashMap;
@@ -56,8 +56,12 @@ impl WaterMeshBuild {
 
     /// Consumes the builder and returns a `Mesh` ready for rendering.
     pub fn into_mesh(self) -> Mesh {
-        use bevy::render::mesh::{Indices, Mesh, PrimitiveTopology};
-        let mut m = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::RENDER_WORLD);
+        use bevy::mesh::{Indices, PrimitiveTopology};
+        use bevy::prelude::Mesh;
+        let mut m = Mesh::new(
+            PrimitiveTopology::TriangleList,
+            RenderAssetUsages::RENDER_WORLD,
+        );
         m.insert_attribute(Mesh::ATTRIBUTE_POSITION, self.pos);
         m.insert_attribute(Mesh::ATTRIBUTE_NORMAL, self.nor);
         m.insert_attribute(Mesh::ATTRIBUTE_UV_0, self.uv0);
@@ -252,8 +256,7 @@ pub(crate) fn generate_water_for_chunk(
 
                     if p_here && neigh_ok {
                         // 0..2 blocks below sea level
-                        let down =
-                            (col_rand_f01(wx, wz, seed ^ 0xDEAD_BEEF) * 3.0).floor() as i32;
+                        let down = (col_rand_f01(wx, wz, seed ^ 0xDEAD_BEEF) * 3.0).floor() as i32;
                         let lake_level = (sea_level - 1 - down).max(top_e + 1);
 
                         if lake_level > top_e {
@@ -295,13 +298,12 @@ pub async fn build_water_mesh_subchunk_async(
     let y0 = borders.y0;
     let y1 = borders.y1;
 
-    let sample_opt =
-        |opt: &Option<Vec<bool>>, y: usize, i: usize, stride: usize| -> Option<bool> {
-            opt.as_ref().map(|v| {
-                let iy = y - y0;
-                v[iy * stride + i]
-            })
-        };
+    let sample_opt = |opt: &Option<Vec<bool>>, y: usize, i: usize, stride: usize| -> Option<bool> {
+        opt.as_ref().map(|v| {
+            let iy = y - y0;
+            v[iy * stride + i]
+        })
+    };
     let east_at = |y: usize, z: usize| sample_opt(&borders.east, y, z, CZ);
     let west_at = |y: usize, z: usize| sample_opt(&borders.west, y, z, CZ);
     let south_at = |y: usize, x: usize| sample_opt(&borders.south, y, x, CX);
@@ -340,7 +342,9 @@ pub async fn build_water_mesh_subchunk_async(
                 let cy = (ly as f32 + 0.5) * s;
                 let cz = (z as f32 + 0.5) * s;
 
-                let wa = |dx: i32, dy: i32, dz: i32| water_at(x as i32 + dx, ly as i32 + dy, z as i32 + dz);
+                let wa = |dx: i32, dy: i32, dz: i32| {
+                    water_at(x as i32 + dx, ly as i32 + dy, z as i32 + dz)
+                };
                 let sa = |dx: i32, dy: i32, dz: i32| {
                     if x as i32 + dx < 0
                         || x as i32 + dx >= CX as i32
@@ -458,7 +462,8 @@ fn emit_quad_build(
     let base = build.pos.len() as u32;
     build.pos.extend_from_slice(&[a, b, c, d]);
     build.nor.extend_from_slice(&[n, n, n, n]);
-    build.uv0
+    build
+        .uv0
         .extend_from_slice(&[[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]]);
     build
         .idx
@@ -470,7 +475,12 @@ fn emit_quad_build(
 /* ======================================================================= */
 
 /// Save a water chunk to disk inside the region container under `TAG_WAT1`.
-pub fn save_water_chunk_sync(ws: &WorldSave, cache: &mut RegionCache, coord: IVec2, w: &FluidChunk) {
+pub fn save_water_chunk_sync(
+    ws: &WorldSave,
+    cache: &mut RegionCache,
+    coord: IVec2,
+    w: &FluidChunk,
+) {
     let wat = encode_fluid_chunk(w);
     let old = cache.read_chunk(ws, coord).ok().flatten();
     let merged = container_upsert(old.as_deref(), TAG_WAT1, &wat);
@@ -478,9 +488,14 @@ pub fn save_water_chunk_sync(ws: &WorldSave, cache: &mut RegionCache, coord: IVe
 }
 
 /// Load a water chunk from the disk in any supported format (V2 preferred, V1 legacy).
-pub fn load_water_chunk_from_disk_any(ws_root: std::path::PathBuf, coord: IVec2) -> Option<(FluidChunk, u32)> {
+pub fn load_water_chunk_from_disk_any(
+    ws_root: std::path::PathBuf,
+    coord: IVec2,
+) -> Option<(FluidChunk, u32)> {
     let (r_coord, _) = chunk_to_region_slot(coord);
-    let path = ws_root.join("region").join(format!("r.{}.{}.region", r_coord.x, r_coord.y));
+    let path = ws_root
+        .join("region")
+        .join(format!("r.{}.{}.region", r_coord.x, r_coord.y));
     if let Ok(mut rf) = RegionFile::open(&path) {
         if let Ok(Some(buf)) = rf.read_chunk(coord) {
             // 1) SLOT container format

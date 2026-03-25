@@ -16,7 +16,7 @@ features = ["vram_dxgi", "vram_nvml", "vram_metal"]
 path = "../game_world"
 
 [dependencies.bevy]
-version = "0.16.1"
+version = "0.18.1"
 default-features = false
 features = [
     "bevy_state",
@@ -27,7 +27,6 @@ features = [
     "bevy_core_pipeline",
     "bevy_pbr",
     "bevy_animation",
-    "animation",
     "tonemapping_luts",
     "bevy_window",
     "bevy_ui",
@@ -39,11 +38,9 @@ features = [
 version = "0.37.0"
 
 [dependencies.bevy_rapier3d]
-version = "0.31.0"
-features = [
-    "default",
-    "dim3",
-    "debug-render"
-]
+version = "0.33.0"
+default-features = false
+features = ["dim3"]
+
 [dependencies.serde_json]
 version = "1.0.145"

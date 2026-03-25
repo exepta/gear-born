@@ -3,27 +3,28 @@
 mod manager;
 
 use crate::manager::ManagerPlugin;
+use bevy::gizmos::config::GizmoConfigStore;
 use bevy::image::{ImageAddressMode, ImageFilterMode, ImageSamplerDescriptor};
 use bevy::log::{BoxedLayer, Level, LogPlugin};
 use bevy::prelude::*;
-use bevy::render::settings::{Backends, RenderCreation, WgpuFeatures, WgpuSettings};
 use bevy::render::RenderPlugin;
+use bevy::render::settings::{Backends, RenderCreation, WgpuFeatures, WgpuSettings};
 use bevy::window::{PresentMode, WindowMode, WindowResolution};
 use bevy_inspector_egui::bevy_egui::EguiPlugin;
 use bevy_inspector_egui::quick::WorldInspectorPlugin;
 use chrono::Utc;
 use dotenvy::dotenv;
+use game_core::BuildInfo;
 use game_core::configuration::GameConfig;
 use game_core::debug::WorldInspectorState;
 use game_core::states::AppState;
-use game_core::BuildInfo;
 use std::env;
 use std::fs::{File, OpenOptions};
 use std::io::Write;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
-use tracing_subscriber::fmt::writer::BoxMakeWriter;
 use tracing_subscriber::Layer;
+use tracing_subscriber::fmt::writer::BoxMakeWriter;
 
 /// Application entry point for debug builds.
 /// Initializes logging, loads configuration, creates the Bevy app, and runs the core client.
@@ -62,52 +63,67 @@ fn init_bevy_app(app: &mut App, config: &GameConfig) {
     let build = BuildInfo {
         app_name: "Game Version",
         app_version: env!("CARGO_PKG_VERSION"),
-        bevy_version: "0.16.1",
+        bevy_version: "0.18.1",
     };
 
-    app
-        .insert_resource(config.clone())
+    app.insert_resource(config.clone())
         .insert_resource(build)
-        .add_plugins(DefaultPlugins.set(
-        WindowPlugin {
-            primary_window: Some(Window {
-                title: String::from("Gear Born"),
-                mode: if config.graphics.fullscreen { WindowMode::BorderlessFullscreen(MonitorSelection::Primary) } else { WindowMode::Windowed }, //BorderlessFullscreen(MonitorSelection::Primary)
-                resolution: WindowResolution::new(config.graphics.window_width, config.graphics.window_height),
-                present_mode: PresentMode::AutoVsync,
-                ..default()
-            }),
-            ..default()
-        }
-    ).set(
-        RenderPlugin {
-            render_creation: RenderCreation::Automatic(create_gpu_settings(&config.graphics.graphic_backend)),
-            ..default()
-        }
-    ).set(ImagePlugin {
-            default_sampler: ImageSamplerDescriptor {
-                address_mode_u: ImageAddressMode::Repeat,
-                address_mode_v: ImageAddressMode::Repeat,
-                address_mode_w: ImageAddressMode::Repeat,
-                mag_filter: ImageFilterMode::Linear,
-                min_filter: ImageFilterMode::Linear,
-                mipmap_filter: ImageFilterMode::Linear,
-                anisotropy_clamp: 16,
-                ..default()
-            },
-        ..default()
-    }).set(LogPlugin {
-        level: Level::DEBUG,
-        filter: load_log_env_filter(),
-        custom_layer: log_file_appender
-    }))
-        .insert_resource(ClearColor(Color::Srgba(Srgba::rgb_u8(20, 25,27))))
+        .register_type::<GizmoConfigStore>()
+        .add_plugins(
+            DefaultPlugins
+                .set(WindowPlugin {
+                    primary_window: Some(Window {
+                        title: String::from("Gear Born"),
+                        mode: if config.graphics.fullscreen {
+                            WindowMode::BorderlessFullscreen(MonitorSelection::Primary)
+                        } else {
+                            WindowMode::Windowed
+                        }, //BorderlessFullscreen(MonitorSelection::Primary)
+                        resolution: WindowResolution::new(
+                            config.graphics.window_width as u32,
+                            config.graphics.window_height as u32,
+                        ),
+                        present_mode: PresentMode::AutoVsync,
+                        ..default()
+                    }),
+                    ..default()
+                })
+                .set(RenderPlugin {
+                    render_creation: RenderCreation::Automatic(create_gpu_settings(
+                        &config.graphics.graphic_backend,
+                    )),
+                    ..default()
+                })
+                .set(ImagePlugin {
+                    default_sampler: ImageSamplerDescriptor {
+                        address_mode_u: ImageAddressMode::Repeat,
+                        address_mode_v: ImageAddressMode::Repeat,
+                        address_mode_w: ImageAddressMode::Repeat,
+                        mag_filter: ImageFilterMode::Linear,
+                        min_filter: ImageFilterMode::Linear,
+                        mipmap_filter: ImageFilterMode::Linear,
+                        anisotropy_clamp: 16,
+                        ..default()
+                    },
+                    ..default()
+                })
+                .set(LogPlugin {
+                    level: Level::DEBUG,
+                    filter: load_log_env_filter(),
+                    custom_layer: log_file_appender,
+                    ..default()
+                }),
+        )
+        .insert_resource(ClearColor(Color::Srgba(Srgba::rgb_u8(20, 25, 27))))
         .init_state::<AppState>()
         .insert_resource(WorldInspectorState(false))
         .add_plugins(EguiPlugin::default())
         .add_plugins(WorldInspectorPlugin::default().run_if(check_world_inspector_state))
         .add_plugins(ManagerPlugin)
-        .add_systems(Update, init_app_finish.run_if(in_state(AppState::AppInit).and(resource_exists::<GameConfig>)))
+        .add_systems(
+            Update,
+            init_app_finish.run_if(in_state(AppState::AppInit).and(resource_exists::<GameConfig>)),
+        )
         .run();
 }
 
@@ -142,7 +158,11 @@ fn create_gpu_settings(backend_str: &str) -> WgpuSettings {
     };
 
     WgpuSettings {
-        features: if cfg!(debug_assertions) { WgpuFeatures::POLYGON_MODE_LINE } else { WgpuFeatures::empty() },
+        features: if cfg!(debug_assertions) {
+            WgpuFeatures::POLYGON_MODE_LINE
+        } else {
+            WgpuFeatures::empty()
+        },
         backends: backend,
         ..default()
     }
@@ -162,9 +182,7 @@ fn create_gpu_settings(backend_str: &str) -> WgpuSettings {
 /// * `true` if the World Inspector UI is visible (enabled).
 /// * `false` if the World Inspector UI is not visible (disabled).
 #[coverage(off)]
-fn check_world_inspector_state(
-    world_inspector_state: Res<WorldInspectorState>,
-) -> bool {
+fn check_world_inspector_state(world_inspector_state: Res<WorldInspectorState>) -> bool {
     world_inspector_state.0
 }
 
@@ -208,14 +226,19 @@ fn log_file_appender(_app: &mut App) -> Option<BoxedLayer> {
     };
 
     let writer = BoxMakeWriter::new(move || {
-        let file = file_arc.lock().unwrap().try_clone().expect("Failed to clone log file handle");
+        let file = file_arc
+            .lock()
+            .unwrap()
+            .try_clone()
+            .expect("Failed to clone log file handle");
         Box::new(file) as Box<dyn Write + Send>
     });
 
-    Some(Box::new(tracing_subscriber::fmt::layer()
-        .with_ansi(false)
-        .with_writer(writer)
-        .boxed()
+    Some(Box::new(
+        tracing_subscriber::fmt::layer()
+            .with_ansi(false)
+            .with_writer(writer)
+            .boxed(),
     ))
 }
 
@@ -249,7 +272,6 @@ struct StartLogText {
 }
 
 impl Drop for StartLogText {
-
     #[coverage(off)]
     fn drop(&mut self) {
         let mut file = self.file.lock().unwrap();
@@ -275,10 +297,14 @@ mod tests {
     #[test]
     #[serial]
     fn test_load_log_env_filter_from_env() {
-        unsafe { env::set_var("LOG_ENV_FILTER", "my_test_value"); }
+        unsafe {
+            env::set_var("LOG_ENV_FILTER", "my_test_value");
+        }
         let value = load_log_env_filter();
         assert_eq!(value, "my_test_value");
-        unsafe { env::remove_var("LOG_ENV_FILTER"); }
+        unsafe {
+            env::remove_var("LOG_ENV_FILTER");
+        }
     }
 
     #[test]
@@ -310,8 +336,8 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "Invalid backend")]
     fn test_create_gpu_settings_invalid() {
-        let _ = create_gpu_settings("unknown-backend");
+        let settings = create_gpu_settings("unknown-backend");
+        assert_eq!(settings.backends, Some(Backends::PRIMARY));
     }
 }

@@ -14,13 +14,13 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 pub const MAX_INFLIGHT_MESH: usize = 32;
-pub const MAX_INFLIGHT_GEN:  usize = 32;
+pub const MAX_INFLIGHT_GEN: usize = 32;
 
 pub(crate) const DIR4: [IVec2; 4] = [
-    IVec2::new( 1,  0),
-    IVec2::new(-1,  0),
-    IVec2::new( 0,  1),
-    IVec2::new( 0, -1),
+    IVec2::new(1, 0),
+    IVec2::new(-1, 0),
+    IVec2::new(0, 1),
+    IVec2::new(0, -1),
 ];
 
 pub async fn mesh_subchunk_async(
@@ -43,44 +43,78 @@ pub async fn mesh_subchunk_async(
         (None, None, None, None, y0, y1)
     };
 
-    let sample_opt = |opt: &Option<Vec<BlockId>>, y: usize, i: usize, stride: usize| -> Option<BlockId> {
-        opt.as_ref().map(|v| {
-            let iy = y - snap_y0;
-            v[iy * stride + i]
-        })
-    };
+    let sample_opt =
+        |opt: &Option<Vec<BlockId>>, y: usize, i: usize, stride: usize| -> Option<BlockId> {
+            opt.as_ref().map(|v| {
+                let iy = y - snap_y0;
+                v[iy * stride + i]
+            })
+        };
 
-    let east_at_opt  = |y: usize, z: usize| sample_opt(&east,  y, z, CZ);
-    let west_at_opt  = |y: usize, z: usize| sample_opt(&west,  y, z, CZ);
+    let east_at_opt = |y: usize, z: usize| sample_opt(&east, y, z, CZ);
+    let west_at_opt = |y: usize, z: usize| sample_opt(&west, y, z, CZ);
     let south_at_opt = |y: usize, x: usize| sample_opt(&south, y, x, CX);
     let north_at_opt = |y: usize, x: usize| sample_opt(&north, y, x, CX);
 
-    let get = |x:isize,y:isize,z:isize| -> BlockId {
-        if x < 0 || y < 0 || z < 0 || x >= CX as isize || y >= CY as isize || z >= CZ as isize { 0 }
-        else { chunk.blocks[((y as usize)*CZ + (z as usize))*CX + (x as usize)] }
+    let get = |x: isize, y: isize, z: isize| -> BlockId {
+        if x < 0 || y < 0 || z < 0 || x >= CX as isize || y >= CY as isize || z >= CZ as isize {
+            0
+        } else {
+            chunk.blocks[((y as usize) * CZ + (z as usize)) * CX + (x as usize)]
+        }
     };
-    let uvq = |u0:f32,v0:f32,u1:f32,v1:f32, flip_v:bool| -> [[f32;2];4] {
-        if !flip_v { [[u0,v0],[u1,v0],[u1,v1],[u0,v1]] } else { [[u0,v1],[u1,v1],[u1,v0],[u0,v0]] }
+    let uvq = |u0: f32, v0: f32, u1: f32, v1: f32, flip_v: bool| -> [[f32; 2]; 4] {
+        if !flip_v {
+            [[u0, v0], [u1, v0], [u1, v1], [u0, v1]]
+        } else {
+            [[u0, v1], [u1, v1], [u1, v0], [u0, v0]]
+        }
     };
 
     for y in y0..y1 {
         for z in 0..CZ {
             for x in 0..CX {
-                let id = chunk.get(x,y,z);
-                if id == 0 { continue; }
+                let id = chunk.get(x, y, z);
+                if id == 0 {
+                    continue;
+                }
 
-                let wx = x as f32 * s; let wy = y as f32 * s; let wz = z as f32 * s;
+                let wx = x as f32 * s;
+                let wy = y as f32 * s;
+                let wz = z as f32 * s;
                 let b = by_block.entry(id).or_insert_with(MeshBuild::new);
 
                 // +Y (Top)
-                if !(get(x as isize, y as isize+1, z as isize) != 0 && reg.opaque(get(x as isize, y as isize+1, z as isize))) {
+                if !(get(x as isize, y as isize + 1, z as isize) != 0
+                    && reg.opaque(get(x as isize, y as isize + 1, z as isize)))
+                {
                     let u = reg.uv(id, Face::Top);
-                    b.quad([[wx,wy+s,wz+s],[wx+s,wy+s,wz+s],[wx+s,wy+s,wz],[wx,wy+s,wz]],[0.0,1.0,0.0], uvq(u.u0,u.v0,u.u1,u.v1,false));
+                    b.quad(
+                        [
+                            [wx, wy + s, wz + s],
+                            [wx + s, wy + s, wz + s],
+                            [wx + s, wy + s, wz],
+                            [wx, wy + s, wz],
+                        ],
+                        [0.0, 1.0, 0.0],
+                        uvq(u.u0, u.v0, u.u1, u.v1, false),
+                    );
                 }
                 // -Y (Bottom)
-                if !(get(x as isize, y as isize-1, z as isize) != 0 && reg.opaque(get(x as isize, y as isize-1, z as isize))) {
+                if !(get(x as isize, y as isize - 1, z as isize) != 0
+                    && reg.opaque(get(x as isize, y as isize - 1, z as isize)))
+                {
                     let u = reg.uv(id, Face::Bottom);
-                    b.quad([[wx,wy,wz],[wx+s,wy,wz],[wx+s,wy,wz+s],[wx,wy,wz+s]],[0.0,-1.0,0.0], uvq(u.u0,u.v0,u.u1,u.v1,false));
+                    b.quad(
+                        [
+                            [wx, wy, wz],
+                            [wx + s, wy, wz],
+                            [wx + s, wy, wz + s],
+                            [wx, wy, wz + s],
+                        ],
+                        [0.0, -1.0, 0.0],
+                        uvq(u.u0, u.v0, u.u1, u.v1, false),
+                    );
                 }
                 // +X (East)
                 let n_east = if x + 1 < CX {
@@ -92,9 +126,14 @@ pub async fn mesh_subchunk_async(
                     if !(nei != 0 && reg.opaque(nei)) {
                         let u = reg.uv(id, Face::East);
                         b.quad(
-                            [[wx+s,wy,wz+s],[wx+s,wy,wz],[wx+s,wy+s,wz],[wx+s,wy+s,wz+s]],
-                            [1.0,0.0,0.0],
-                            uvq(u.u0,u.v0,u.u1,u.v1,true)
+                            [
+                                [wx + s, wy, wz + s],
+                                [wx + s, wy, wz],
+                                [wx + s, wy + s, wz],
+                                [wx + s, wy + s, wz + s],
+                            ],
+                            [1.0, 0.0, 0.0],
+                            uvq(u.u0, u.v0, u.u1, u.v1, true),
                         );
                     }
                 }
@@ -109,9 +148,14 @@ pub async fn mesh_subchunk_async(
                     if !(nei != 0 && reg.opaque(nei)) {
                         let u = reg.uv(id, Face::West);
                         b.quad(
-                            [[wx,wy,wz],[wx,wy,wz+s],[wx,wy+s,wz+s],[wx,wy+s,wz]],
-                            [-1.0,0.0,0.0],
-                            uvq(u.u0,u.v0,u.u1,u.v1,true)
+                            [
+                                [wx, wy, wz],
+                                [wx, wy, wz + s],
+                                [wx, wy + s, wz + s],
+                                [wx, wy + s, wz],
+                            ],
+                            [-1.0, 0.0, 0.0],
+                            uvq(u.u0, u.v0, u.u1, u.v1, true),
                         );
                     }
                 }
@@ -126,9 +170,14 @@ pub async fn mesh_subchunk_async(
                     if !(nei != 0 && reg.opaque(nei)) {
                         let u = reg.uv(id, Face::South);
                         b.quad(
-                            [[wx,wy,wz+s],[wx+s,wy,wz+s],[wx+s,wy+s,wz+s],[wx,wy+s,wz+s]],
-                            [0.0,0.0,1.0],
-                            uvq(u.u0,u.v0,u.u1,u.v1,true)
+                            [
+                                [wx, wy, wz + s],
+                                [wx + s, wy, wz + s],
+                                [wx + s, wy + s, wz + s],
+                                [wx, wy + s, wz + s],
+                            ],
+                            [0.0, 0.0, 1.0],
+                            uvq(u.u0, u.v0, u.u1, u.v1, true),
                         );
                     }
                 }
@@ -143,9 +192,14 @@ pub async fn mesh_subchunk_async(
                     if !(nei != 0 && reg.opaque(nei)) {
                         let u = reg.uv(id, Face::North);
                         b.quad(
-                            [[wx+s,wy,wz],[wx,wy,wz],[wx,wy+s,wz],[wx+s,wy+s,wz]],
-                            [0.0,0.0,-1.0],
-                            uvq(u.u0,u.v0,u.u1,u.v1,true)
+                            [
+                                [wx + s, wy, wz],
+                                [wx, wy, wz],
+                                [wx, wy + s, wz],
+                                [wx + s, wy + s, wz],
+                            ],
+                            [0.0, 0.0, -1.0],
+                            uvq(u.u0, u.v0, u.u1, u.v1, true),
                         );
                     }
                 }
@@ -153,7 +207,7 @@ pub async fn mesh_subchunk_async(
         }
     }
 
-    by_block.into_iter().map(|(k,b)| (k,b)).collect()
+    by_block.into_iter().map(|(k, b)| (k, b)).collect()
 }
 
 pub fn save_chunk_sync(
@@ -173,13 +227,15 @@ pub fn save_chunk_sync(
 pub async fn load_or_gen_chunk_async(
     ws_root: PathBuf,
     coord: IVec2,
-    reg: &BlockRegistry,        // ⟵ NEW: pass the registry
-    biomes: &BiomeRegistry,     // ⟵ NEW: pass the biome registry
-    cfg: WorldGenConfig,        // we only need cfg.seed right now
+    reg: &BlockRegistry,    // ⟵ NEW: pass the registry
+    biomes: &BiomeRegistry, // ⟵ NEW: pass the biome registry
+    cfg: WorldGenConfig,    // we only need cfg.seed right now
 ) -> ChunkData {
     // Try to load from a region file first
     let (r_coord, _) = chunk_to_region_slot(coord);
-    let path = ws_root.join("region").join(format!("r.{}.{}.region", r_coord.x, r_coord.y));
+    let path = ws_root
+        .join("region")
+        .join(format!("r.{}.{}.region", r_coord.x, r_coord.y));
     if let Ok(mut rf) = RegionFile::open(&path) {
         if let Ok(Some(buf)) = rf.read_chunk(coord) {
             // Detect legacy container-wrapped blobs
@@ -201,29 +257,57 @@ pub async fn load_or_gen_chunk_async(
     generate_chunk_async_biome(coord, reg, cfg.seed, biomes).await
 }
 
-pub fn snapshot_borders(chunk_map: &ChunkMap, coord: IVec2, y0: usize, y1: usize) -> BorderSnapshot {
-    let mut snap = BorderSnapshot { y0, y1, east: None, west: None, south: None, north: None };
+pub fn snapshot_borders(
+    chunk_map: &ChunkMap,
+    coord: IVec2,
+    y0: usize,
+    y1: usize,
+) -> BorderSnapshot {
+    let mut snap = BorderSnapshot {
+        y0,
+        y1,
+        east: None,
+        west: None,
+        south: None,
+        north: None,
+    };
 
-    let take_xz = |c: &ChunkData, x: usize, z: usize, y: usize| -> BlockId { c.get(x,y,z) };
+    let take_xz = |c: &ChunkData, x: usize, z: usize, y: usize| -> BlockId { c.get(x, y, z) };
 
     if let Some(n) = chunk_map.chunks.get(&IVec2::new(coord.x + 1, coord.y)) {
         let mut v = Vec::with_capacity((y1 - y0) * CZ);
-        for y in y0..y1 { for z in 0..CZ { v.push(take_xz(n, 0, z, y)); } }
+        for y in y0..y1 {
+            for z in 0..CZ {
+                v.push(take_xz(n, 0, z, y));
+            }
+        }
         snap.east = Some(v);
     }
     if let Some(n) = chunk_map.chunks.get(&IVec2::new(coord.x - 1, coord.y)) {
         let mut v = Vec::with_capacity((y1 - y0) * CZ);
-        for y in y0..y1 { for z in 0..CZ { v.push(take_xz(n, CX-1, z, y)); } }
+        for y in y0..y1 {
+            for z in 0..CZ {
+                v.push(take_xz(n, CX - 1, z, y));
+            }
+        }
         snap.west = Some(v);
     }
     if let Some(n) = chunk_map.chunks.get(&IVec2::new(coord.x, coord.y + 1)) {
         let mut v = Vec::with_capacity((y1 - y0) * CX);
-        for y in y0..y1 { for x in 0..CX { v.push(take_xz(n, x, 0, y)); } }
+        for y in y0..y1 {
+            for x in 0..CX {
+                v.push(take_xz(n, x, 0, y));
+            }
+        }
         snap.south = Some(v);
     }
     if let Some(n) = chunk_map.chunks.get(&IVec2::new(coord.x, coord.y - 1)) {
         let mut v = Vec::with_capacity((y1 - y0) * CX);
-        for y in y0..y1 { for x in 0..CX { v.push(take_xz(n, x, CZ-1, y)); } }
+        for y in y0..y1 {
+            for x in 0..CX {
+                v.push(take_xz(n, x, CZ - 1, y));
+            }
+        }
         snap.north = Some(v);
     }
     snap
@@ -240,10 +324,18 @@ pub fn area_ready(
     for dz in -radius..=radius {
         for dx in -radius..=radius {
             let c = IVec2::new(center.x + dx, center.y + dz);
-            if !chunk_map.chunks.contains_key(&c) { return false; }
-            if pending_gen.0.contains_key(&c) { return false; }
-            if pending_mesh.0.keys().any(|(cc, _)| *cc == c) { return false; }
-            if backlog.0.iter().any(|(cc, _)| *cc == c) { return false; }
+            if !chunk_map.chunks.contains_key(&c) {
+                return false;
+            }
+            if pending_gen.0.contains_key(&c) {
+                return false;
+            }
+            if pending_mesh.0.keys().any(|(cc, _)| *cc == c) {
+                return false;
+            }
+            if backlog.0.iter().any(|(cc, _)| *cc == c) {
+                return false;
+            }
         }
     }
     true
@@ -278,8 +370,12 @@ pub fn backlog_contains(backlog: &MeshBacklog, key: (IVec2, usize)) -> bool {
 }
 
 pub fn enqueue_mesh(backlog: &mut MeshBacklog, pending: &PendingMesh, key: (IVec2, usize)) {
-    if pending.0.contains_key(&key) { return; }
-    if backlog_contains(backlog, key) { return; }
+    if pending.0.contains_key(&key) {
+        return;
+    }
+    if backlog_contains(backlog, key) {
+        return;
+    }
     backlog.0.push_back(key);
 }
 
@@ -309,9 +405,15 @@ fn decode_chunk(buf: &[u8]) -> std::io::Result<ChunkData> {
     Ok(c)
 }
 
-#[inline] pub fn leap(a:f32, b:f32, t:f32) -> f32 { a + (b - a) * t }
+#[inline]
+pub fn leap(a: f32, b: f32, t: f32) -> f32 {
+    a + (b - a) * t
+}
 
-#[inline] pub fn map01(x: f32) -> f32 { x * 0.5 + 0.5 }
+#[inline]
+pub fn map01(x: f32) -> f32 {
+    x * 0.5 + 0.5
+}
 
 #[inline]
 pub fn chunk_to_region_slot(c: IVec2) -> (IVec2, usize) {
@@ -325,22 +427,24 @@ pub fn chunk_to_region_slot(c: IVec2) -> (IVec2, usize) {
 
 #[inline]
 pub(crate) fn col_rand_u32(x: i32, z: i32, seed: u32) -> u32 {
-    let mut n = (x as u32).wrapping_mul(374761393)
-        ^ (z as u32).wrapping_mul(668265263)
-        ^ seed;
+    let mut n = (x as u32).wrapping_mul(374761393) ^ (z as u32).wrapping_mul(668265263) ^ seed;
     n ^= n >> 13;
     n = n.wrapping_mul(1274126177);
     n ^ (n >> 16)
 }
 
-#[inline] fn div_floor(a: i32, b: i32) -> i32 { (a as f32 / b as f32).floor() as i32 }
-#[inline] fn mod_floor(a: i32, b: i32) -> i32 { a - div_floor(a,b)*b }
+#[inline]
+fn div_floor(a: i32, b: i32) -> i32 {
+    (a as f32 / b as f32).floor() as i32
+}
+#[inline]
+fn mod_floor(a: i32, b: i32) -> i32 {
+    a - div_floor(a, b) * b
+}
 
 #[inline]
 pub fn is_waiting(state: &State<AppState>) -> bool {
-    matches!(state.get(),
-        AppState::Loading(LoadingStates::BaseGen)
-    )
+    matches!(state.get(), AppState::Loading(LoadingStates::BaseGen))
 }
 
 #[inline]

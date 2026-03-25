@@ -1,10 +1,10 @@
+use bevy::asset::RenderAssetUsages;
+use bevy::camera::RenderTarget;
+use bevy::camera::visibility::RenderLayers;
 use bevy::prelude::*;
-use bevy::render::camera::{ImageRenderTarget, RenderTarget};
-use bevy::render::render_asset::RenderAssetUsages;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat, TextureUsages};
-use bevy::render::view::RenderLayers;
 use bevy::ui::FocusPolicy;
-use bevy::window::{CursorGrabMode, PrimaryWindow};
+use bevy::window::{CursorGrabMode, CursorOptions, PrimaryWindow};
 use game_core::configuration::GameConfig;
 use game_core::key_converter::convert;
 use game_core::states::{AppState, InGameStates};
@@ -24,6 +24,7 @@ impl Plugin for BlockCatalogUiPlugin {
             .add_systems(
                 Update,
                 (
+                    ensure_block_catalog_ui_spawned,
                     toggle_block_catalog_ui,
                     handle_block_pick_interactions,
                     spin_previews,
@@ -54,11 +55,26 @@ const PREVIEW_CAM_FOV_DEG: f32 = 32.0;
 
 /* ---------------- Systems ---------------- */
 
+fn ensure_block_catalog_ui_spawned(
+    commands: Commands,
+    ui: ResMut<BlockCatalogUiState>,
+    reg: Res<BlockRegistry>,
+    images: ResMut<Assets<Image>>,
+    meshes: ResMut<Assets<Mesh>>,
+    materials: ResMut<Assets<StandardMaterial>>,
+    game_config: Res<GameConfig>,
+) {
+    if ui.root.is_some() {
+        return;
+    }
+    spawn_block_catalog_ui(commands, ui, reg, images, meshes, materials, game_config);
+}
+
 fn toggle_block_catalog_ui(
     keys: Res<ButtonInput<KeyCode>>,
     mut ui: ResMut<BlockCatalogUiState>,
     mut q_vis: Query<&mut Visibility, With<BlockCatalogRoot>>,
-    mut windows: Query<&mut Window, With<PrimaryWindow>>,
+    mut cursor_q: Query<&mut CursorOptions, With<PrimaryWindow>>,
     game_config: Res<GameConfig>
 ) {
     let key = convert(game_config.input.ui_inventory.as_str()).expect("Invalid key");
@@ -77,13 +93,13 @@ fn toggle_block_catalog_ui(
             *v = if ui.open { Visibility::Visible } else { Visibility::Hidden };
         }
     }
-    if let Ok(mut win) = windows.single_mut() {
+    if let Ok(mut win) = cursor_q.single_mut() {
         if ui.open {
-            win.cursor_options.grab_mode = CursorGrabMode::None;
-            win.cursor_options.visible = true;
+            win.grab_mode = CursorGrabMode::None;
+            win.visible = true;
         } else {
-            win.cursor_options.grab_mode = CursorGrabMode::Locked;
-            win.cursor_options.visible = false;
+            win.grab_mode = CursorGrabMode::Locked;
+            win.visible = false;
         }
     }
 }
@@ -137,7 +153,7 @@ fn update_selected_highlight(
     let normal_back    = Color::srgb_u8(80, 80, 80);
 
     for (btn, mut border) in &mut q_borders {
-        *border = BorderColor(if btn.block_id == selected.id { UI_ACCENT_COLOR } else { normal_border });
+        *border = BorderColor::all(if btn.block_id == selected.id { UI_ACCENT_COLOR } else { normal_border });
     }
     for (lbl, mut back_color) in &mut q_labels {
         *back_color = BackgroundColor(if lbl.block_id == selected.id { UI_ACCENT_COLOR } else { normal_back });
@@ -241,9 +257,9 @@ fn spawn_block_catalog_ui(
             Camera3d::default(),
             Camera {
                 clear_color: ClearColorConfig::Custom(Color::srgba(0.20, 0.22, 0.26, 1.0)),
-                target: RenderTarget::Image(ImageRenderTarget::from(rt)),
                 ..default()
             },
+            RenderTarget::Image(rt.into()),
             Projection::Perspective(PerspectiveProjection {
                 fov: PREVIEW_CAM_FOV_DEG.to_radians(),
                 near: 0.01,
@@ -314,7 +330,7 @@ fn spawn_block_catalog_ui(
                     border: UiRect::all(Val::Px(2.0)),
                     ..default()
                 },
-                BorderColor(Color::srgba(1.0, 1.0, 1.0, 0.08)),
+                BorderColor::all(Color::srgba(1.0, 1.0, 1.0, 0.08)),
                 BackgroundColor(Color::srgb_u8(80, 80, 80)),
                 Visibility::default(),
                 Name::new(format!("BlockItem:{}", def.name)),

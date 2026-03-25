@@ -27,7 +27,7 @@ impl RiverSystem {
         // Base noise making long, meandering bands near zero
         let mut river_n = FastNoiseLite::with_seed(seed ^ 0x52495631); // 'RIV1'
         river_n.set_noise_type(Some(NoiseType::OpenSimplex2));
-        river_n.set_frequency(Some(0.0018));      // ~555 blocks period
+        river_n.set_frequency(Some(0.0018)); // ~555 blocks period
         river_n.set_fractal_type(Some(FractalType::FBm));
         river_n.set_fractal_octaves(Some(3));
         river_n.set_fractal_gain(Some(0.5));
@@ -36,29 +36,39 @@ impl RiverSystem {
         // Small warp for meanders
         let mut warp_n = FastNoiseLite::with_seed(seed ^ 0x57415250); // 'WARP'
         warp_n.set_noise_type(Some(NoiseType::OpenSimplex2));
-        warp_n.set_frequency(Some(0.010));        // faster
+        warp_n.set_frequency(Some(0.010)); // faster
         warp_n.set_fractal_type(Some(FractalType::FBm));
         warp_n.set_fractal_octaves(Some(2));
         warp_n.set_fractal_gain(Some(0.5));
         warp_n.set_fractal_lacunarity(Some(2.0));
 
-        Self { seed, river_n, warp_n }
+        Self {
+            seed,
+            river_n,
+            warp_n,
+        }
     }
 
     /// Potential [0..1] – smooth Gaussian around the river center line.
     /// This yields soft banks and avoids hard, terrace-like edges.
     pub fn potential(&self, wxf: f32, wzf: f32, width_blocks: i32) -> f32 {
-        if width_blocks <= 0 { return 0.0; }
+        if width_blocks <= 0 {
+            return 0.0;
+        }
 
         // Small warp for meanders (world-space)
         let wxw = wxf + self.warp_n.get_noise_2d(wxf * 0.06, wzf * 0.06) * 12.0;
         let wzw = wzf + self.warp_n.get_noise_2d(wxf * 0.07, wzf * 0.07) * 12.0;
 
         // Base noise and finite-difference gradient in world units (~blocks)
-        let n   = self.river_n.get_noise_2d(wxw, wzw);
+        let n = self.river_n.get_noise_2d(wxw, wzw);
         let eps = 1.0; // 1 block
-        let gx  = (self.river_n.get_noise_2d(wxw + eps, wzw) - self.river_n.get_noise_2d(wxw - eps, wzw)) * 0.5;
-        let gz  = (self.river_n.get_noise_2d(wxw, wzw + eps) - self.river_n.get_noise_2d(wxw, wzw - eps)) * 0.5;
+        let gx = (self.river_n.get_noise_2d(wxw + eps, wzw)
+            - self.river_n.get_noise_2d(wxw - eps, wzw))
+            * 0.5;
+        let gz = (self.river_n.get_noise_2d(wxw, wzw + eps)
+            - self.river_n.get_noise_2d(wxw, wzw - eps))
+            * 0.5;
         let grad = (gx * gx + gz * gz).sqrt().max(1e-4);
 
         // Approximate world-space distance to the river center line
@@ -73,7 +83,9 @@ impl RiverSystem {
 
         // Hard cap to avoid any spread beyond ~125% of the requested half-width
         let max_d = half * 1.25;
-        if d_world > max_d { return 0.0; }
+        if d_world > max_d {
+            return 0.0;
+        }
 
         // Final smooth potential
         let p = (-0.5 * (d_world / sigma).powi(2)).exp();
@@ -87,8 +99,8 @@ impl RiverSystem {
     pub fn carve_height(
         &self,
         current_h: f32,
-        potential: f32,     // [0..1], typically from potential_gated_smoothed
-        width_blocks: i32,  // full bank-to-bank width in blocks
+        potential: f32,    // [0..1], typically from potential_gated_smoothed
+        width_blocks: i32, // full bank-to-bank width in blocks
         sea_level: f32,
     ) -> f32 {
         if potential <= 0.001 || width_blocks <= 0 {
@@ -100,9 +112,9 @@ impl RiverSystem {
 
         // Target profile parameters derived from width
         let bank_submerge = 0.60 + (width_blocks as f32) * 0.02; // ~0.6. blocks under sea at banks
-        let center_depth  = 1.20 + (width_blocks as f32) * 0.22; // ~1.2. + scales with width
+        let center_depth = 1.20 + (width_blocks as f32) * 0.22; // ~1.2. + scales with width
 
-        let bank_target   = sea_level - bank_submerge;
+        let bank_target = sea_level - bank_submerge;
         let center_target = sea_level - center_depth;
 
         // Interpolate desired profile with central bias
@@ -128,7 +140,11 @@ impl RiverSystem {
     /// compared against the biome's `river_chance`.
     pub fn tile_keep_value(&self, wx: i32, wz: i32) -> f32 {
         let t = Self::tile_of(wx, wz);
-        u64_to_unit01(split_mix_64(hash3(self.seed as i64, t.x as i64, t.y as i64)))
+        u64_to_unit01(split_mix_64(hash3(
+            self.seed as i64,
+            t.x as i64,
+            t.y as i64,
+        )))
     }
 
     /// Deterministic river width (in blocks) for the tile, within [min,max].
@@ -180,28 +196,42 @@ impl RiverSystem {
     }
 
     pub fn potential_with_dir(&self, wxf: f32, wzf: f32, width_blocks: i32) -> (f32, Vec2) {
-        if width_blocks <= 0 { return (0.0, Vec2::ZERO); }
+        if width_blocks <= 0 {
+            return (0.0, Vec2::ZERO);
+        }
 
         let wxw = wxf + self.warp_n.get_noise_2d(wxf * 0.06, wzf * 0.06) * 12.0;
         let wzw = wzf + self.warp_n.get_noise_2d(wxf * 0.07, wzf * 0.07) * 12.0;
 
-        let n   = self.river_n.get_noise_2d(wxw, wzw);
+        let n = self.river_n.get_noise_2d(wxw, wzw);
         let eps = 1.0;
-        let gx  = (self.river_n.get_noise_2d(wxw + eps, wzw) - self.river_n.get_noise_2d(wxw - eps, wzw)) * 0.5;
-        let gz  = (self.river_n.get_noise_2d(wxw, wzw + eps) - self.river_n.get_noise_2d(wxw, wzw - eps)) * 0.5;
+        let gx = (self.river_n.get_noise_2d(wxw + eps, wzw)
+            - self.river_n.get_noise_2d(wxw - eps, wzw))
+            * 0.5;
+        let gz = (self.river_n.get_noise_2d(wxw, wzw + eps)
+            - self.river_n.get_noise_2d(wxw, wzw - eps))
+            * 0.5;
         let grad = (gx * gx + gz * gz).sqrt().max(1e-4);
 
         // Tangent along the course (perpendicular to gradient)
         let mut t = Vec2::new(-gz, gx);
         let len = t.length();
-        if len > 1e-4 { t /= len; } else { t = Vec2::ZERO; }
+        if len > 1e-4 {
+            t /= len;
+        } else {
+            t = Vec2::ZERO;
+        }
 
         // Distance-field potential (same as in the gradient-normalized version)
         let d_world = n.abs() / grad;
         let half = (width_blocks as f32).max(2.0) * 0.5;
         let sigma = half / 2.146;
         let max_d = half * 1.25;
-        let p = if d_world > max_d { 0.0 } else { (-0.5 * (d_world / sigma).powi(2)).exp() };
+        let p = if d_world > max_d {
+            0.0
+        } else {
+            (-0.5 * (d_world / sigma).powi(2)).exp()
+        };
 
         (p.clamp(0.0, 1.0), t)
     }
@@ -217,10 +247,10 @@ impl RiverSystem {
         let fx = (wx - tx * TILE) as f32 / TILE as f32;
         let fz = (wz - tz * TILE) as f32 / TILE as f32;
 
-        let k00 = self.tile_keep_value(tx * TILE,     tz * TILE    );
-        let k10 = self.tile_keep_value((tx+1)*TILE,   tz * TILE    );
-        let k01 = self.tile_keep_value(tx * TILE,    (tz+1)*TILE   );
-        let k11 = self.tile_keep_value((tx+1)*TILE,  (tz+1)*TILE   );
+        let k00 = self.tile_keep_value(tx * TILE, tz * TILE);
+        let k10 = self.tile_keep_value((tx + 1) * TILE, tz * TILE);
+        let k01 = self.tile_keep_value(tx * TILE, (tz + 1) * TILE);
+        let k11 = self.tile_keep_value((tx + 1) * TILE, (tz + 1) * TILE);
 
         let k0 = k00 + (k10 - k00) * fx;
         let k1 = k01 + (k11 - k01) * fx;
@@ -250,7 +280,9 @@ impl RiverSystem {
         river_chance: f32,
         rivers_enabled: bool,
     ) -> f32 {
-        if width_blocks <= 0 { return 0.0; }
+        if width_blocks <= 0 {
+            return 0.0;
+        }
 
         let (p0, t) = self.potential_with_dir(wxf, wzf, width_blocks);
 
@@ -266,24 +298,43 @@ impl RiverSystem {
         // Distances in world blocks; keep small to preserve detail.
         let s1 = 8.0;
         let s2 = 16.0;
-        let (tx, tz) = if t.length_squared() > 1e-6 { (t.x, t.y) } else { (0.0, 0.0) };
+        let (tx, tz) = if t.length_squared() > 1e-6 {
+            (t.x, t.y)
+        } else {
+            (0.0, 0.0)
+        };
 
-        let p_f  = self.potential(wxf + tx * s1, wzf + tz * s1, width_blocks);
-        let p_b  = self.potential(wxf - tx * s1, wzf - tz * s1, width_blocks);
+        let p_f = self.potential(wxf + tx * s1, wzf + tz * s1, width_blocks);
+        let p_b = self.potential(wxf - tx * s1, wzf - tz * s1, width_blocks);
         let p_f2 = self.potential(wxf + tx * s2, wzf + tz * s2, width_blocks);
         let p_b2 = self.potential(wxf - tx * s2, wzf - tz * s2, width_blocks);
 
         // Also gate neighbors smoothly (prevents a gated neighbor from dropping to zero)
-        let g_f  = self.gate_mask((wxf + tx * s1).floor() as i32, (wzf + tz * s1).floor() as i32, river_chance);
-        let g_b  = self.gate_mask((wxf - tx * s1).floor() as i32, (wzf - tz * s1).floor() as i32, river_chance);
-        let g_f2 = self.gate_mask((wxf + tx * s2).floor() as i32, (wzf + tz * s2).floor() as i32, river_chance);
-        let g_b2 = self.gate_mask((wxf - tx * s2).floor() as i32, (wzf - tz * s2).floor() as i32, river_chance);
+        let g_f = self.gate_mask(
+            (wxf + tx * s1).floor() as i32,
+            (wzf + tz * s1).floor() as i32,
+            river_chance,
+        );
+        let g_b = self.gate_mask(
+            (wxf - tx * s1).floor() as i32,
+            (wzf - tz * s1).floor() as i32,
+            river_chance,
+        );
+        let g_f2 = self.gate_mask(
+            (wxf + tx * s2).floor() as i32,
+            (wzf + tz * s2).floor() as i32,
+            river_chance,
+        );
+        let g_b2 = self.gate_mask(
+            (wxf - tx * s2).floor() as i32,
+            (wzf - tz * s2).floor() as i32,
+            river_chance,
+        );
 
         // 5-tap, symmetric weights (sum=1)
-        let p_smooth =
-            0.40 * (p0 * gate) +
-                0.20 * (p_f * g_f + p_b * g_b) +
-                0.10 * (p_f2 * g_f2 + p_b2 * g_b2);
+        let p_smooth = 0.40 * (p0 * gate)
+            + 0.20 * (p_f * g_f + p_b * g_b)
+            + 0.10 * (p_f2 * g_f2 + p_b2 * g_b2);
 
         p_smooth.clamp(0.0, 1.0)
     }
@@ -294,7 +345,11 @@ impl RiverSystem {
 #[inline]
 fn div_floor(a: i32, b: i32) -> i32 {
     // floor division for negatives
-    if (a ^ b) >= 0 { a / b } else { -(((-a) + b - 1) / b) }
+    if (a ^ b) >= 0 {
+        a / b
+    } else {
+        -(((-a) + b - 1) / b)
+    }
 }
 
 #[inline]

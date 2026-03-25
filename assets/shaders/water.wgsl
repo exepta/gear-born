@@ -1,4 +1,4 @@
-// shaders/water.wgsl
+ // shaders/water.wgsl
 
 #import bevy_pbr::mesh_view_bindings
 #import bevy_pbr::prepass_utils::prepass_depth
@@ -29,9 +29,9 @@ struct WaterParams {
   t_misc:  vec4<f32>,
   tint:    vec4<f32>,
 };
-@group(2) @binding(0) var<uniform> params: WaterParams;
-@group(2) @binding(1) var atlas_tex: texture_2d<f32>;
-@group(2) @binding(2) var atlas_smp: sampler;
+@group(#{MATERIAL_BIND_GROUP}) @binding(0) var<uniform> params: WaterParams;
+@group(#{MATERIAL_BIND_GROUP}) @binding(1) var atlas_tex: texture_2d<f32>;
+@group(#{MATERIAL_BIND_GROUP}) @binding(2) var atlas_smp: sampler;
 
 fn remap_uv_scroll(uv_in: vec2<f32>, normal_ws: vec3<f32>) -> vec2<f32> {
   let u0 = params.uv_rect.x;

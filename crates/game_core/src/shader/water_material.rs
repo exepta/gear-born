@@ -1,7 +1,8 @@
+use bevy::mesh::MeshVertexBufferLayoutRef;
 use bevy::pbr::{MaterialPipeline, MaterialPipelineKey};
 use bevy::prelude::*;
-use bevy::render::mesh::MeshVertexBufferLayoutRef;
 use bevy::render::render_resource::*;
+use bevy::shader::ShaderRef;
 pub use water_types::WaterParams;
 
 mod water_types {
@@ -12,9 +13,9 @@ mod water_types {
     #[derive(Clone, Copy, Default, ShaderType, Debug)]
     pub struct WaterParams {
         pub uv_rect: Vec4,
-        pub flow:    Vec4,
-        pub t_misc:  Vec4,
-        pub tint:    Vec4,
+        pub flow: Vec4,
+        pub t_misc: Vec4,
+        pub tint: Vec4,
     }
 }
 
@@ -32,12 +33,18 @@ pub struct WaterMaterial {
 pub struct WaterMatHandle(pub Handle<WaterMaterial>);
 
 impl Material for WaterMaterial {
-    fn vertex_shader() -> ShaderRef { ShaderRef::Path("shaders/water.wgsl".into()) }
-    fn fragment_shader() -> ShaderRef { ShaderRef::Path("shaders/water.wgsl".into()) }
-    fn alpha_mode(&self) -> AlphaMode { AlphaMode::Premultiplied }
+    fn vertex_shader() -> ShaderRef {
+        ShaderRef::Path("shaders/water.wgsl".into())
+    }
+    fn fragment_shader() -> ShaderRef {
+        ShaderRef::Path("shaders/water.wgsl".into())
+    }
+    fn alpha_mode(&self) -> AlphaMode {
+        AlphaMode::Premultiplied
+    }
 
     fn specialize(
-        _pipeline: &MaterialPipeline<Self>,
+        _pipeline: &MaterialPipeline,
         descriptor: &mut RenderPipelineDescriptor,
         _layout: &MeshVertexBufferLayoutRef,
         _key: MaterialPipelineKey<Self>,

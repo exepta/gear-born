@@ -1,7 +1,7 @@
 use bevy::prelude::*;
 use game_core::states::AppState;
-use game_core::world::biome::registry::BiomeRegistry;
 use game_core::world::biome::Biome;
+use game_core::world::biome::registry::BiomeRegistry;
 use std::fs;
 use std::path::Path;
 

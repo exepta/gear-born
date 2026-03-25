@@ -6,10 +6,12 @@ use game_core::states::{AppState, InGameStates};
 
 pub struct ChangeGameModeHandler;
 
-
 impl Plugin for ChangeGameModeHandler {
     fn build(&self, app: &mut App) {
-        app.add_systems(Update, change_mode.run_if(in_state(AppState::InGame(InGameStates::Game))));
+        app.add_systems(
+            Update,
+            change_mode.run_if(in_state(AppState::InGame(InGameStates::Game))),
+        );
     }
 }
 

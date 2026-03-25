@@ -28,13 +28,12 @@ impl Default for GameConfig {
         Self {
             graphics: GraphicsConfig::default(),
             input: InputConfig::default(),
-            audio: AudioConfig::default()
+            audio: AudioConfig::default(),
         }
     }
 }
 
 impl GameConfig {
-
     /// Loads a configuration file and deserializes it into the specified type.
     ///
     /// # Arguments
@@ -97,8 +96,8 @@ pub struct GraphicsConfig {
 
     /// Identifier for the graphics backend to use (e.g., "wgpu", "OpenGL", "Vulkan").
     pub graphic_backend: String,
-    
-    pub chunk_range: i32
+
+    pub chunk_range: i32,
 }
 
 impl Default for GraphicsConfig {
@@ -109,7 +108,7 @@ impl Default for GraphicsConfig {
             fullscreen: false,
             vsync: true,
             graphic_backend: String::from("AUTO"),
-            chunk_range: 8
+            chunk_range: 8,
         }
     }
 }
@@ -124,7 +123,6 @@ impl Default for GraphicsConfig {
 #[derive(Deserialize, Serialize, Debug, Clone)]
 pub struct InputConfig {
     // Camera
-
     /// Vertical sensitivity for mouse movement when controlling the camera.
     pub mouse_sensitivity_vertical: f32,
 
@@ -141,7 +139,6 @@ pub struct InputConfig {
     pub mouse_screen_unlock: String,
 
     // Player
-
     /// Key or button mapping for moving the player character upward.
     pub move_up: String,
 
@@ -165,11 +162,10 @@ pub struct InputConfig {
 
     /// Key or button mapping for performing a standard world attack.
     pub attack: String,
-    
+
     pub toggle_game_mode: String,
 
     // UI
-
     /// Key or button mapping to open or toggle the in‐game menu.
     pub ui_menu: String,
 
@@ -180,7 +176,6 @@ pub struct InputConfig {
     pub ui_close_back: String,
 
     // Debug
-
     pub debug_overlay: String,
 
     pub chunk_grid: String,
@@ -207,7 +202,7 @@ impl Default for InputConfig {
             interact: String::from("F"),
             attack: String::from("MouseLeft"),
             toggle_game_mode: String::from("F2"),
-            
+
             ui_menu: String::from("Escape"),
             ui_inventory: String::from("Tab"),
             ui_close_back: String::from("Escape"),
@@ -217,7 +212,6 @@ impl Default for InputConfig {
             world_inspector: String::from("F1"),
         }
     }
-
 }
 
 #[derive(Deserialize, Serialize, Debug, Clone)]
@@ -226,7 +220,7 @@ pub struct AudioConfig {
     pub environment_volume: f32,
     pub speak_volume: f32,
     pub sfx_volume: f32,
-    pub ui_volume: f32
+    pub ui_volume: f32,
 }
 
 impl Default for AudioConfig {
@@ -236,27 +230,25 @@ impl Default for AudioConfig {
             environment_volume: 1.0,
             speak_volume: 1.0,
             sfx_volume: 1.0,
-            ui_volume: 1.0
+            ui_volume: 1.0,
         }
     }
 }
 
 #[derive(Resource, Clone)]
 pub struct WorldGenConfig {
-    pub seed: i32
+    pub seed: i32,
 }
 
 impl Default for WorldGenConfig {
     fn default() -> Self {
-        Self {
-            seed: 1337
-        }
+        Self { seed: 1337 }
     }
 }
 
 #[derive(Resource)]
 pub struct CrosshairConfig {
-    pub radius: f32, 
+    pub radius: f32,
     pub thickness: f32,
     pub segments: usize,
     pub color: Color,

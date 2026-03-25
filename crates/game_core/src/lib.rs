@@ -1,15 +1,15 @@
 #![feature(coverage_attribute)]
 
-pub mod debug;
-pub mod states;
 pub mod configuration;
-pub mod key_converter;
-pub mod world;
-pub mod player;
-pub mod load_state;
+pub mod debug;
 pub mod events;
+pub mod key_converter;
+pub mod load_state;
+pub mod player;
 pub mod shader;
+pub mod states;
 pub mod v_ram_detection;
+pub mod world;
 
 use crate::configuration::{CrosshairConfig, WorldGenConfig};
 use crate::events::EventModule;
@@ -29,7 +29,10 @@ pub struct BuildInfo {
 pub struct BlockCatalogPreviewCam;
 
 #[derive(Resource, Default)]
-pub struct BlockCatalogUiState { pub open: bool, pub root: Option<Entity> }
+pub struct BlockCatalogUiState {
+    pub open: bool,
+    pub root: Option<Entity>,
+}
 
 pub const UI_ACCENT_COLOR: Color = Color::srgb_u8(96, 94, 230);
 

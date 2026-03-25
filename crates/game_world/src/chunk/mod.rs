@@ -1,12 +1,12 @@
-mod chunk_builder;
-pub mod chunk_utils;
-mod chunk_struct;
-mod water_builder;
-mod water_utils;
-mod chunk_gen;
-mod river_utils;
 mod cave_builder;
 mod cave_utils;
+mod chunk_builder;
+mod chunk_gen;
+mod chunk_struct;
+pub mod chunk_utils;
+mod river_utils;
+mod water_builder;
+mod water_utils;
 
 use crate::chunk::cave_builder::CaveBuilder;
 use crate::chunk::chunk_builder::ChunkBuilder;

@@ -49,7 +49,9 @@ pub struct FpsController {
 /// When `flying == true`, typical behavior is to disable gravity and collisions
 /// and allow free 3D movement using the FPS controls.
 #[derive(Component)]
-pub struct FlightState { pub flying: bool }
+pub struct FlightState {
+    pub flying: bool,
+}
 
 #[derive(Default, PartialEq, Eq)]
 pub enum GameMode {

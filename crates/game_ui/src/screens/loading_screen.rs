@@ -1,22 +1,10 @@
 use bevy::prelude::*;
+use bevy_extended_ui::widgets::ProgressBar;
 use game_core::configuration::GameConfig;
 use game_core::load_state::{LoadingPhase, LoadingProgress, LoadingTarget, PhaseDetail};
 use game_core::states::{AppState, LoadingStates};
 use game_core::world::chunk::{CaveTracker, ChunkMap, LoadCenter};
 use game_core::world::fluid::FluidMap;
-use game_core::UI_ACCENT_COLOR;
-
-#[derive(Component)]
-struct LoadingScreenRoot;
-
-#[derive(Component)]
-struct LoadingTextTag;
-
-#[derive(Component)]
-struct ProgressBarRoot;
-
-#[derive(Component)]
-struct ProgressCell(pub usize);
 
 pub struct LoadingScreen;
 
@@ -26,11 +14,11 @@ impl Plugin for LoadingScreen {
             .init_resource::<LoadingProgress>()
             .add_systems(
                 OnEnter(AppState::Loading(LoadingStates::BaseGen)),
-                (enter_loading, spawn_loading_ui)
+                enter_loading
             )
             .add_systems(
                 Update,
-                (update_loading_progress, update_loading_text, update_progress_bar)
+                (update_loading_progress, sync_loading_progressbar)
                     .run_if(
                         in_state(AppState::Loading(LoadingStates::BaseGen))
                             .or(in_state(AppState::Loading(LoadingStates::WaterGen)))
@@ -39,7 +27,7 @@ impl Plugin for LoadingScreen {
             )
             .add_systems(
                 OnExit(AppState::Loading(LoadingStates::CaveGen)),
-                (despawn_loading_ui, clear_loading_resources)
+                clear_loading_resources
             );
     }
 }
@@ -57,131 +45,20 @@ fn enter_loading(mut commands: Commands, game_config: Res<GameConfig>) {
     });
 }
 
-fn spawn_loading_ui(mut commands: Commands) {
-    commands.spawn((
-        Camera2d,
-        Camera {
-            clear_color: ClearColorConfig::Custom(Color::BLACK),
-            ..default()
-        },
-        LoadingScreenRoot,
-        Name::new("LoadingCamera"),
-    ));
-
-    commands
-        .spawn((
-            Node {
-                width: Val::Percent(100.0),
-                height: Val::Percent(100.0),
-                align_items: AlignItems::Center,
-                justify_content: JustifyContent::Center,
-                ..default()
-            },
-            Visibility::default(),
-            BackgroundColor(Color::NONE),
-            LoadingScreenRoot,
-            Name::new("LoadingRoot"),
-        ))
-        .with_children(|p| {
-            p.spawn((
-                Node {
-                    flex_direction: FlexDirection::Column,
-                    align_items: AlignItems::Center,
-                    justify_content: JustifyContent::Center,
-                    row_gap: Val::Px(12.0),
-                    ..default()
-                },
-                BackgroundColor(Color::NONE),
-                Name::new("LoadingVBox"),
-            ))
-                .with_children(|col| {
-                    // Text
-                    col.spawn((
-                        Text(String::from("Loading (0%)")),
-                        TextColor(Color::WHITE),
-                        TextFont { font_size: 32.0, ..default() },
-                        LoadingTextTag,
-                        Name::new("LoadingText"),
-                    ));
-
-                    col.spawn((
-                        Node {
-                            width: Val::Px(400.0),
-                            height: Val::Px(42.0),
-                            padding: UiRect::all(Val::Px(8.0)),
-                            align_items: AlignItems::Center,
-                            justify_content: JustifyContent::Center,
-                            ..default()
-                        },
-                        BackgroundColor(Color::srgb(0.18, 0.18, 0.20)),
-                        BorderRadius::all(Val::Px(8.0)),
-                        ProgressBarRoot,
-                        Name::new("LoadingBar"),
-                    ))
-                        .with_children(|bar| {
-                            bar.spawn((
-                                Node {
-                                    flex_direction: FlexDirection::Row,
-                                    align_items: AlignItems::Center,
-                                    justify_content: JustifyContent::Center,
-                                    ..default()
-                                },
-                                BackgroundColor(Color::NONE),
-                                Name::new("CellsRow"),
-                            ))
-                                .with_children(|row| {
-                                    for i in 0..10 {
-                                        row.spawn((
-                                            Node {
-                                                width: Val::Px(32.0),
-                                                height: Val::Px(32.0),
-                                                margin: UiRect {
-                                                    left: Val::Px(3.0),
-                                                    right: Val::Px(3.0),
-                                                    ..default()
-                                                },
-                                                ..default()
-                                            },
-                                            BackgroundColor(Color::NONE),
-                                            ProgressCell(i),
-                                            Name::new(format!("Cell{}", i)),
-                                        ));
-                                    }
-                                });
-                        });
-                });
-        });
-}
-
-fn despawn_loading_ui(mut commands: Commands, q: Query<Entity, With<LoadingScreenRoot>>) {
-    for e in q.iter() { commands.entity(e).despawn(); }
-}
-
-fn update_progress_bar(
+fn sync_loading_progressbar(
     lp: Option<Res<LoadingProgress>>,
-    mut q_cells: Query<(&ProgressCell, &mut BackgroundColor)>,
+    mut q_bar: Query<&mut ProgressBar>,
 ) {
-    let Some(lp) = lp else { return; };
-    let filled = ((lp.overall_pct * 10.0).floor() as i32).clamp(0, 10);
+    let Some(lp) = lp else {
+        return;
+    };
 
-    for (cell, mut bg) in q_cells.iter_mut() {
-        if (cell.0 as i32) < filled {
-            *bg = BackgroundColor(UI_ACCENT_COLOR);
-        } else {
-            *bg = BackgroundColor(Color::NONE);
-        }
+    let value = (lp.overall_pct * 100.0).clamp(0.0, 100.0);
+    for mut bar in q_bar.iter_mut() {
+        bar.min = 0.0;
+        bar.max = 100.0;
+        bar.value = value;
     }
-}
-
-fn update_loading_text(
-    lp: Option<Res<LoadingProgress>>,
-    mut q_txt: Query<&mut Text, With<LoadingTextTag>>,
-) {
-    let Ok(mut text) = q_txt.single_mut() else { return; };
-    let Some(lp) = lp else { return; };
-
-    let pct = (lp.overall_pct * 100.0).round() as i32;
-    text.0 = format!("Loading ({}%)", pct);
 }
 
 fn update_loading_progress(

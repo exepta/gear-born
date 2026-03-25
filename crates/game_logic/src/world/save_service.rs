@@ -18,19 +18,14 @@ const SAVE_DEBOUNCE_MS: u64 = 250;
 
 impl Plugin for WorldSaveService {
     fn build(&self, app: &mut App) {
-        app
-            .init_resource::<RegionCache>()
+        app.init_resource::<RegionCache>()
             .init_resource::<SaveDebounce>()
             .init_resource::<SaveQueue>();
         app.add_systems(OnEnter(AppState::Preload), setup_world_save);
         app.add_systems(
             Update,
-            (
-                enqueue_save_on_dirty,
-                tick_save_debounce,
-                drain_save_queue,
-            )
-                .run_if(in_state(AppState::InGame(InGameStates::Game)))
+            (enqueue_save_on_dirty, tick_save_debounce, drain_save_queue)
+                .run_if(in_state(AppState::InGame(InGameStates::Game))),
         );
     }
 }
@@ -47,12 +42,15 @@ fn setup_world_save(mut commands: Commands) {
 }
 
 fn enqueue_save_on_dirty(
-    mut ev_dirty: EventReader<SubChunkNeedRemeshEvent>,
+    mut ev_dirty: MessageReader<SubChunkNeedRemeshEvent>,
     mut deb: ResMut<SaveDebounce>,
 ) {
     for e in ev_dirty.read().copied() {
-        deb.0.entry(e.coord)
-            .and_modify(|t| { t.reset(); })
+        deb.0
+            .entry(e.coord)
+            .and_modify(|t| {
+                t.reset();
+            })
             .or_insert_with(|| {
                 let mut t = Timer::from_seconds(SAVE_DEBOUNCE_MS as f32 / 1000.0, TimerMode::Once);
                 t.reset();
@@ -70,7 +68,7 @@ fn tick_save_debounce(
 
     for (coord, timer) in deb.0.iter_mut() {
         timer.tick(time.delta());
-        if timer.finished() {
+        if timer.is_finished() {
             to_queue.push(*coord);
         }
     }

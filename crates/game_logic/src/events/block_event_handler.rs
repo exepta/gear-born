@@ -1,7 +1,7 @@
+use bevy::camera::visibility::{NoFrustumCulling, RenderLayers};
 use bevy::ecs::relationship::RelatedSpawnerCommands;
-use bevy::pbr::{NotShadowCaster, NotShadowReceiver};
+use bevy::light::{NotShadowCaster, NotShadowReceiver};
 use bevy::prelude::*;
-use bevy::render::view::{NoFrustumCulling, RenderLayers};
 use game_core::events::chunk_events::SubChunkNeedRemeshEvent;
 use game_core::events::player_block_events::{BlockBreakByPlayerEvent, BlockPlaceByPlayerEvent};
 use game_core::player::selection::SelectionState;
@@ -20,19 +20,23 @@ struct MiningOverlay;
 struct MiningOverlayFace;
 
 #[derive(Clone, Copy)]
-enum Axis { XY, XZ, YZ }
+enum Axis {
+    XY,
+    XZ,
+    YZ,
+}
 
 pub struct BlockEventHandler;
 
 impl Plugin for BlockEventHandler {
     fn build(&self, app: &mut App) {
-        app
-            .add_systems(
+        app.add_systems(
             Update,
             (
                 (block_break_handler, sync_mining_overlay).chain(),
                 block_place_handler,
-            ).run_if(in_state(AppState::InGame(InGameStates::Game)))
+            )
+                .run_if(in_state(AppState::InGame(InGameStates::Game))),
         );
     }
 }
@@ -46,10 +50,12 @@ fn block_break_handler(
 
     mut state: ResMut<MiningState>,
     mut chunk_map: ResMut<ChunkMap>,
-    mut ev_dirty: EventWriter<SubChunkNeedRemeshEvent>,
-    mut break_ev: EventWriter<BlockBreakByPlayerEvent>,
+    mut ev_dirty: MessageWriter<SubChunkNeedRemeshEvent>,
+    mut break_ev: MessageWriter<BlockBreakByPlayerEvent>,
 ) {
-    if game_mode.0.eq(&GameMode::Spectator) { return; }
+    if game_mode.0.eq(&GameMode::Spectator) {
+        return;
+    }
     // --- Creative: instant break on click ---
     if matches!(game_mode.0, GameMode::Creative) {
         if !buttons.just_pressed(MouseButton::Left) {
@@ -129,10 +135,12 @@ fn block_break_handler(
     let target = state.target.as_ref().unwrap();
     let progress = (now - target.started_at) / target.duration;
 
-    if progress < 1.0 { return; }
+    if progress < 1.0 {
+        return;
+    }
 
     let world_loc = target.loc;
-    if let Some(mut access) = world_access_mut(&mut  chunk_map, world_loc) {
+    if let Some(mut access) = world_access_mut(&mut chunk_map, world_loc) {
         access.set(0);
     }
     mark_dirty_block_and_neighbors(&mut chunk_map, world_loc, &mut ev_dirty);
@@ -164,14 +172,22 @@ fn block_place_handler(
 
     mut fluids: ResMut<FluidMap>,
     mut chunk_map: ResMut<ChunkMap>,
-    mut ev_dirty: EventWriter<SubChunkNeedRemeshEvent>,
-    mut place_ev: EventWriter<BlockPlaceByPlayerEvent>,
+    mut ev_dirty: MessageWriter<SubChunkNeedRemeshEvent>,
+    mut place_ev: MessageWriter<BlockPlaceByPlayerEvent>,
 ) {
-    if game_mode.0.eq(&GameMode::Spectator) { return; }
-    if !buttons.just_pressed(MouseButton::Right) { return; }
+    if game_mode.0.eq(&GameMode::Spectator) {
+        return;
+    }
+    if !buttons.just_pressed(MouseButton::Right) {
+        return;
+    }
     let id = selected.id;
-    if id == 0 { return; }
-    let Some(hit) = sel.hit else { return; };
+    if id == 0 {
+        return;
+    }
+    let Some(hit) = sel.hit else {
+        return;
+    };
 
     let world_pos = hit.place_pos;
     let (chunk_coord, l) = world_to_chunk_xz(world_pos.x, world_pos.z);
@@ -184,7 +200,9 @@ fn block_place_handler(
         .get(&chunk_coord)
         .map(|ch| ch.get(lx, ly, lz) == 0)
         .unwrap_or(false);
-    if !can_place { return; }
+    if !can_place {
+        return;
+    }
 
     if let Some(fc) = fluids.0.get_mut(&chunk_coord) {
         fc.set(lx, ly, lz, false);
@@ -211,11 +229,16 @@ fn sync_mining_overlay(
     mut mats: ResMut<Assets<StandardMaterial>>,
     time: Res<Time>,
     state: Res<MiningState>,
-    mut q_faces: Query<(&mut Transform, &MiningOverlayFace), (With<MiningOverlayFace>, Without<MiningOverlay>)>,
+    mut q_faces: Query<
+        (&mut Transform, &MiningOverlayFace),
+        (With<MiningOverlayFace>, Without<MiningOverlay>),
+    >,
     mut q_parent_tf: Query<&mut Transform, (With<MiningOverlay>, Without<MiningOverlayFace>)>,
 ) {
     let Some(target) = state.target else {
-        if let Some(e) = root.0.take() { commands.entity(e).despawn(); }
+        if let Some(e) = root.0.take() {
+            commands.entity(e).despawn();
+        }
         return;
     };
 
@@ -232,7 +255,14 @@ fn sync_mining_overlay(
     let parent_e = if let Some(e) = root.0 {
         e
     } else {
-        let e = spawn_overlay_at(&mut commands, &mut meshes, &mut mats, center, Some(RenderLayers::layer(2)), progress);
+        let e = spawn_overlay_at(
+            &mut commands,
+            &mut meshes,
+            &mut mats,
+            center,
+            Some(RenderLayers::layer(2)),
+            progress,
+        );
         root.0 = Some(e);
         e
     };
@@ -266,7 +296,7 @@ fn spawn_overlay_at(
     initial_progress: f32,
 ) -> Entity {
     let quad = meshes.add(unit_centered_quad());
-    let mat  = mats.add(StandardMaterial {
+    let mat = mats.add(StandardMaterial {
         base_color: Color::srgba(0.9, 0.9, 0.9, 0.02),
         alpha_mode: AlphaMode::Blend,
         unlit: true,
@@ -275,13 +305,13 @@ fn spawn_overlay_at(
         ..default()
     });
 
-    let s   = VOXEL_SIZE;
-    let half= 0.5 * s;
+    let s = VOXEL_SIZE;
+    let half = 0.5 * s;
     let eps = 0.003 * s;
 
-    let max_scale   = 0.98 * s;
-    let init_scale  = (initial_progress.clamp(0.0, 1.0).max(0.001)) * max_scale;
-    let init_vec    = Vec3::new(init_scale, init_scale, 1.0);
+    let max_scale = 0.98 * s;
+    let init_scale = (initial_progress.clamp(0.0, 1.0).max(0.001)) * max_scale;
+    let init_vec = Vec3::new(init_scale, init_scale, 1.0);
 
     let mut parent = commands.spawn((
         MiningOverlay,
@@ -293,7 +323,9 @@ fn spawn_overlay_at(
         NotShadowReceiver,
         Name::new("MiningOverlay"),
     ));
-    if let Some(l) = layer.as_ref() { parent.insert(l.clone()); }
+    if let Some(l) = layer.as_ref() {
+        parent.insert(l.clone());
+    }
     let parent_id = parent.id();
 
     let spawn_face = |c: &mut RelatedSpawnerCommands<ChildOf>, _: Axis, tf: Transform| {
@@ -304,29 +336,56 @@ fn spawn_overlay_at(
             MeshMaterial3d(mat.clone()),
             tf.with_scale(init_vec),
             GlobalTransform::default(),
-            NotShadowCaster, NotShadowReceiver,
+            NotShadowCaster,
+            NotShadowReceiver,
             Name::new("MiningOverlayFace"),
         ));
-        if let Some(l) = layer.as_ref() { e.insert(l.clone()); }
+        if let Some(l) = layer.as_ref() {
+            e.insert(l.clone());
+        }
     };
 
     commands.entity(parent_id).with_children(|c| {
         // +Z / -Z (XY)
-        spawn_face(c, Axis::XY, Transform::from_translation(Vec3::new(0.0, 0.0,  half + eps)));
-        spawn_face(c, Axis::XY, Transform::from_rotation(Quat::from_rotation_y(std::f32::consts::PI))
-            .with_translation(Vec3::new(0.0, 0.0, -half - eps)));
+        spawn_face(
+            c,
+            Axis::XY,
+            Transform::from_translation(Vec3::new(0.0, 0.0, half + eps)),
+        );
+        spawn_face(
+            c,
+            Axis::XY,
+            Transform::from_rotation(Quat::from_rotation_y(std::f32::consts::PI))
+                .with_translation(Vec3::new(0.0, 0.0, -half - eps)),
+        );
 
         // +Y / -Y (XZ)
-        spawn_face(c, Axis::XZ, Transform::from_rotation(Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2))
-            .with_translation(Vec3::new(0.0,  half + eps, 0.0)));
-        spawn_face(c, Axis::XZ, Transform::from_rotation(Quat::from_rotation_x(std::f32::consts::FRAC_PI_2))
-            .with_translation(Vec3::new(0.0, -half - eps, 0.0)));
+        spawn_face(
+            c,
+            Axis::XZ,
+            Transform::from_rotation(Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2))
+                .with_translation(Vec3::new(0.0, half + eps, 0.0)),
+        );
+        spawn_face(
+            c,
+            Axis::XZ,
+            Transform::from_rotation(Quat::from_rotation_x(std::f32::consts::FRAC_PI_2))
+                .with_translation(Vec3::new(0.0, -half - eps, 0.0)),
+        );
 
         // +X / -X (YZ)
-        spawn_face(c, Axis::YZ, Transform::from_rotation(Quat::from_rotation_y(-std::f32::consts::FRAC_PI_2))
-            .with_translation(Vec3::new( half + eps, 0.0, 0.0)));
-        spawn_face(c, Axis::YZ, Transform::from_rotation(Quat::from_rotation_y(std::f32::consts::FRAC_PI_2))
-            .with_translation(Vec3::new(-half - eps, 0.0, 0.0)));
+        spawn_face(
+            c,
+            Axis::YZ,
+            Transform::from_rotation(Quat::from_rotation_y(-std::f32::consts::FRAC_PI_2))
+                .with_translation(Vec3::new(half + eps, 0.0, 0.0)),
+        );
+        spawn_face(
+            c,
+            Axis::YZ,
+            Transform::from_rotation(Quat::from_rotation_y(std::f32::consts::FRAC_PI_2))
+                .with_translation(Vec3::new(-half - eps, 0.0, 0.0)),
+        );
     });
 
     parent_id
@@ -334,16 +393,23 @@ fn spawn_overlay_at(
 
 #[inline]
 fn unit_centered_quad() -> Mesh {
-    use bevy::render::mesh::{Indices, Mesh, PrimitiveTopology};
+    use bevy::mesh::{Indices, PrimitiveTopology};
+    use bevy::prelude::Mesh;
     let mut m = Mesh::new(PrimitiveTopology::TriangleList, Default::default());
-    m.insert_attribute(Mesh::ATTRIBUTE_POSITION, vec![
-        [-0.5, -0.5, 0.0],
-        [ 0.5, -0.5, 0.0],
-        [ 0.5,  0.5, 0.0],
-        [-0.5,  0.5, 0.0],
-    ]);
+    m.insert_attribute(
+        Mesh::ATTRIBUTE_POSITION,
+        vec![
+            [-0.5, -0.5, 0.0],
+            [0.5, -0.5, 0.0],
+            [0.5, 0.5, 0.0],
+            [-0.5, 0.5, 0.0],
+        ],
+    );
     m.insert_attribute(Mesh::ATTRIBUTE_NORMAL, vec![[0.0, 0.0, 1.0]; 4]);
-    m.insert_attribute(Mesh::ATTRIBUTE_UV_0, vec![[0.0,0.0],[1.0,0.0],[1.0,1.0],[0.0,1.0]]);
-    m.insert_indices(Indices::U32(vec![0,1,2, 0,2,3]));
+    m.insert_attribute(
+        Mesh::ATTRIBUTE_UV_0,
+        vec![[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]],
+    );
+    m.insert_indices(Indices::U32(vec![0, 1, 2, 0, 2, 3]));
     m
 }

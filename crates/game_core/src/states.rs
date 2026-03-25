@@ -34,7 +34,7 @@ pub enum AppState {
 
     /// Main in-game state (player can interact and play).
     /// Contains its own `InGameStates`.
-    InGame(InGameStates)
+    InGame(InGameStates),
 }
 
 /// UI and pre-game screen states.
@@ -63,16 +63,14 @@ pub enum FetchState {
     FetchingComplete,
 }
 
-
 #[derive(States, Default, Debug, Clone, Eq, PartialEq, Hash)]
 pub enum LoadingStates {
-    
     #[default]
     BaseGen,
-    
+
     WaterGen,
-    
-    CaveGen
+
+    CaveGen,
 }
 
 /// Main in-game state and relevant substates.

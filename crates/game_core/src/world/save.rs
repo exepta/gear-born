@@ -10,9 +10,8 @@ pub const REGION_SIZE: i32 = 64;
 pub const GBW_MAGIC: [u8; 4] = *b"GBW1";
 
 const SLOT_MAGIC: u32 = 0x5653_4C54;
-pub const TAG_BLK1:   u32 = 0x314B_4C42;
-pub const TAG_WAT1:   u32 = 0x3154_4157;
-
+pub const TAG_BLK1: u32 = 0x314B_4C42;
+pub const TAG_WAT1: u32 = 0x3154_4157;
 
 /// Number of addressable slots per region file (`REGION_SIZE^2`).
 const REGION_SLOTS: usize = (REGION_SIZE as usize) * (REGION_SIZE as usize);
@@ -24,7 +23,10 @@ const REGION_SLOTS: usize = (REGION_SIZE as usize) * (REGION_SIZE as usize);
 /// - `len: u32` — payload length in bytes (0 = empty).
 #[repr(C)]
 #[derive(Clone, Copy, Default)]
-pub struct Slot { pub off: u64, pub len: u32 }
+pub struct Slot {
+    pub off: u64,
+    pub len: u32,
+}
 
 /// Open a file, in-memory header, and path for a region.
 ///
@@ -53,7 +55,11 @@ impl RegionFile {
     /// reading/writing the header, or querying metadata.
     pub fn open(path: &Path) -> std::io::Result<Self> {
         std::fs::create_dir_all(path.parent().unwrap())?;
-        let mut f = OpenOptions::new().read(true).write(true).create(true).open(path)?;
+        let mut f = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .open(path)?;
         let mut hdr_bytes = vec![0u8; REGION_SLOTS * 12];
         let file_len = f.metadata()?.len();
         if file_len < hdr_bytes.len() as u64 {
@@ -65,12 +71,16 @@ impl RegionFile {
         }
         let mut hdr = vec![Slot::default(); REGION_SLOTS];
         for i in 0..REGION_SLOTS {
-            let b = &hdr_bytes[i*12..i*12+12];
+            let b = &hdr_bytes[i * 12..i * 12 + 12];
             let off = u64::from_le_bytes(b[0..8].try_into().unwrap());
             let len = u32::from_le_bytes(b[8..12].try_into().unwrap());
             hdr[i] = Slot { off, len };
         }
-        Ok(Self { f, hdr, path: path.to_path_buf() })
+        Ok(Self {
+            f,
+            hdr,
+            path: path.to_path_buf(),
+        })
     }
 
     /// Writes the in-memory header back to disk at offset 0.
@@ -82,8 +92,8 @@ impl RegionFile {
     pub fn flush_header(&mut self) -> std::io::Result<()> {
         let mut hdr_bytes = vec![0u8; self.hdr.len() * 12];
         for (i, s) in self.hdr.iter().enumerate() {
-            hdr_bytes[i*12..i*12+8].copy_from_slice(&s.off.to_le_bytes());
-            hdr_bytes[i*12+8..i*12+12].copy_from_slice(&s.len.to_le_bytes());
+            hdr_bytes[i * 12..i * 12 + 8].copy_from_slice(&s.off.to_le_bytes());
+            hdr_bytes[i * 12 + 8..i * 12 + 12].copy_from_slice(&s.len.to_le_bytes());
         }
         self.f.seek(SeekFrom::Start(0))?;
         self.f.write_all(&hdr_bytes)?;
@@ -104,7 +114,9 @@ impl RegionFile {
             return Ok(None);
         }
         let s = self.hdr[idx];
-        if s.off == 0 || s.len == 0 { return Ok(None); }
+        if s.off == 0 || s.len == 0 {
+            return Ok(None);
+        }
         self.f.seek(SeekFrom::Start(s.off))?;
         let mut buf = vec![0u8; s.len as usize];
         self.f.read_exact(&mut buf)?;
@@ -126,7 +138,10 @@ impl RegionFile {
         }
         let end = self.f.seek(SeekFrom::End(0))?;
         self.f.write_all(data)?;
-        self.hdr[idx] = Slot { off: end, len: data.len() as u32 };
+        self.hdr[idx] = Slot {
+            off: end,
+            len: data.len() as u32,
+        };
         self.flush_header()
     }
 
@@ -177,14 +192,20 @@ impl RegionFile {
 ///
 /// Region files are stored under `<root>/region/r.<rx>.<ry>.region`.
 #[derive(Resource, Clone)]
-pub struct WorldSave { pub root: PathBuf }
+pub struct WorldSave {
+    pub root: PathBuf,
+}
 
 impl WorldSave {
     /// Creates a new world save pointing at `root`.
-    pub fn new(root: impl Into<PathBuf>) -> Self { Self { root: root.into() } }
+    pub fn new(root: impl Into<PathBuf>) -> Self {
+        Self { root: root.into() }
+    }
 
     /// Returns `<root>/region`.
-    pub fn region_dir(&self) -> PathBuf { self.root.join("region") }
+    pub fn region_dir(&self) -> PathBuf {
+        self.root.join("region")
+    }
 
     /// Returns the full path to the region file for region coordinate `r`.
     ///
@@ -206,11 +227,7 @@ impl RegionCache {
     ///
     /// # Errors
     /// Propagates I/O errors from [`RegionFile::open`].
-    pub fn get_or_open(
-        &mut self,
-        ws: &WorldSave,
-        rc: IVec2,
-    ) -> std::io::Result<&mut RegionFile> {
+    pub fn get_or_open(&mut self, ws: &WorldSave, rc: IVec2) -> std::io::Result<&mut RegionFile> {
         if !self.0.contains_key(&rc) {
             let path = ws.region_path(rc);
             let rf = RegionFile::open(&path)?;
@@ -223,11 +240,7 @@ impl RegionCache {
     ///
     /// # Errors
     /// Propagate I/O errors from region open or slot read.
-    pub fn read_chunk(
-        &mut self,
-        ws: &WorldSave,
-        coord: IVec2,
-    ) -> std::io::Result<Option<Vec<u8>>> {
+    pub fn read_chunk(&mut self, ws: &WorldSave, coord: IVec2) -> std::io::Result<Option<Vec<u8>>> {
         let rc = chunk_to_region(coord);
         let rf = self.get_or_open(ws, rc)?;
         rf.read_chunk(coord)
@@ -301,8 +314,16 @@ pub fn unpack_slot_bytes(buf: &[u8]) -> (Option<&[u8]>, Option<&[u8]>) {
         let wl = u32::from_le_bytes(buf[8..12].try_into().unwrap()) as usize;
         let need = 12 + cl + wl;
         if need <= buf.len() {
-            let c = if cl > 0 { Some(&buf[12..12+cl]) } else { None };
-            let w = if wl > 0 { Some(&buf[12+cl..12+cl+wl]) } else { None };
+            let c = if cl > 0 {
+                Some(&buf[12..12 + cl])
+            } else {
+                None
+            };
+            let w = if wl > 0 {
+                Some(&buf[12 + cl..12 + cl + wl])
+            } else {
+                None
+            };
             return (c, w);
         }
         return (None, None);
@@ -311,16 +332,24 @@ pub fn unpack_slot_bytes(buf: &[u8]) -> (Option<&[u8]>, Option<&[u8]>) {
 }
 
 pub fn container_find(buf: &[u8], tag: u32) -> Option<&[u8]> {
-    if !slot_is_container(buf) { return None; }
+    if !slot_is_container(buf) {
+        return None;
+    }
     let count = u32::from_le_bytes(buf[4..8].try_into().ok()?) as usize;
     let mut p = 8usize;
     for _ in 0..count {
-        if p + 8 > buf.len() { return None; }
-        let t  = u32::from_le_bytes(buf[p..p+4].try_into().ok()?); p += 4;
-        let ln = u32::from_le_bytes(buf[p..p+4].try_into().ok()?); p += 4;
-        if p + ln as usize > buf.len() { return None; }
+        if p + 8 > buf.len() {
+            return None;
+        }
+        let t = u32::from_le_bytes(buf[p..p + 4].try_into().ok()?);
+        p += 4;
+        let ln = u32::from_le_bytes(buf[p..p + 4].try_into().ok()?);
+        p += 4;
+        if p + ln as usize > buf.len() {
+            return None;
+        }
         if t == tag {
-            return Some(&buf[p..p+ln as usize]);
+            return Some(&buf[p..p + ln as usize]);
         }
         p += ln as usize;
     }
@@ -340,7 +369,7 @@ pub fn container_upsert(existing: Option<&[u8]>, tag: u32, payload: &[u8]) -> Ve
     let src = existing.unwrap();
 
     if !slot_is_container(src) {
-        let mut out = Vec::with_capacity(8 + 2*8 + src.len() + payload.len());
+        let mut out = Vec::with_capacity(8 + 2 * 8 + src.len() + payload.len());
         out.extend_from_slice(&SLOT_MAGIC.to_le_bytes());
         out.extend_from_slice(&2u32.to_le_bytes());
         // Record 1: BLK1 = raw
@@ -359,9 +388,12 @@ pub fn container_upsert(existing: Option<&[u8]>, tag: u32, payload: &[u8]) -> Ve
     let mut recs: Vec<(u32, &[u8])> = Vec::with_capacity(count + 1);
     let mut had = false;
     for _ in 0..count {
-        let t  = u32::from_le_bytes(src[p..p+4].try_into().unwrap()); p += 4;
-        let ln = u32::from_le_bytes(src[p..p+4].try_into().unwrap()) as usize; p += 4;
-        let data = &src[p..p+ln]; p += ln;
+        let t = u32::from_le_bytes(src[p..p + 4].try_into().unwrap());
+        p += 4;
+        let ln = u32::from_le_bytes(src[p..p + 4].try_into().unwrap()) as usize;
+        p += 4;
+        let data = &src[p..p + ln];
+        p += ln;
         if t == tag {
             recs.push((t, payload));
             had = true;
@@ -369,10 +401,12 @@ pub fn container_upsert(existing: Option<&[u8]>, tag: u32, payload: &[u8]) -> Ve
             recs.push((t, data));
         }
     }
-    if !had { recs.push((tag, payload)); }
+    if !had {
+        recs.push((tag, payload));
+    }
 
     // encode
-    let total_len: usize = 8 + recs.iter().map(|(_,d)| 8 + d.len()).sum::<usize>();
+    let total_len: usize = 8 + recs.iter().map(|(_, d)| 8 + d.len()).sum::<usize>();
     let mut out = Vec::with_capacity(total_len);
     out.extend_from_slice(&SLOT_MAGIC.to_le_bytes());
     out.extend_from_slice(&(recs.len() as u32).to_le_bytes());

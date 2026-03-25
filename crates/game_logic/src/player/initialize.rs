@@ -1,17 +1,25 @@
-use bevy::core_pipeline::fxaa::{Fxaa, Sensitivity};
+use bevy::camera::visibility::RenderLayers;
 use bevy::core_pipeline::prepass::DepthPrepass;
 use bevy::input::mouse::MouseMotion;
-use bevy::pbr::CascadeShadowConfigBuilder;
+use bevy::light::{CascadeShadowConfigBuilder, GlobalAmbientLight};
 use bevy::prelude::*;
-use bevy::render::view::RenderLayers;
-use bevy::window::{CursorGrabMode, PrimaryWindow};
+use bevy::window::{CursorGrabMode, CursorOptions, PrimaryWindow};
 use bevy_rapier3d::prelude::*;
+use game_core::BlockCatalogUiState;
 use game_core::configuration::GameConfig;
 use game_core::key_converter::convert;
-use game_core::player::{FlightState, FpsController, GameMode, GameModeState, Player, PlayerCamera};
+use game_core::player::{
+    FlightState, FpsController, GameMode, GameModeState, Player, PlayerCamera,
+};
 use game_core::states::{AppState, InGameStates};
 use game_core::world::block::BlockRegistry;
-use game_core::BlockCatalogUiState;
+
+const EYE_HEIGHT: f32 = 1.05;
+const RADIUS: f32 = 0.30;
+const HEADROOM: f32 = 0.10;
+
+#[derive(Component)]
+struct MainSun;
 
 #[derive(Component)]
 struct DoubleTapSpace {
@@ -27,31 +35,35 @@ pub struct PlayerInitialize;
 
 impl Plugin for PlayerInitialize {
     fn build(&self, app: &mut App) {
-        app.insert_resource(AmbientLight {
+        app.insert_resource(GlobalAmbientLight {
             color: Color::WHITE,
             brightness: 125.0,
             affects_lightmapped_meshes: false,
         })
-            .add_systems(
-                OnEnter(AppState::InGame(InGameStates::Game)),
-                (spawn_scene, spawn_player),
+        .add_systems(
+            OnEnter(AppState::InGame(InGameStates::Game)),
+            (spawn_scene, spawn_player),
+        )
+        .add_systems(
+            Update,
+            (
+                grab_cursor_on_click,
+                release_cursor_on_escape,
+                mouse_look,
+                player_move_simple,
+                apply_noclip_to_player,
             )
-            .add_systems(
-                Update,
-                (
-                    grab_cursor_on_click,
-                    release_cursor_on_escape,
-                    mouse_look,
-                    player_move_kcc,
-                    apply_noclip_to_player
-                )
-                    .run_if(resource_exists::<BlockRegistry>),
-            );
+                .run_if(resource_exists::<BlockRegistry>),
+        );
     }
 }
 
-fn spawn_scene(mut commands: Commands) {
+fn spawn_scene(mut commands: Commands, existing_sun: Query<Entity, With<MainSun>>) {
+    if !existing_sun.is_empty() {
+        return;
+    }
     commands.spawn((
+        MainSun,
         DirectionalLight {
             shadows_enabled: false,
             illuminance: 1_000.0,
@@ -63,42 +75,49 @@ fn spawn_scene(mut commands: Commands) {
             maximum_distance: 180.0,
             ..default()
         }
-            .build(),
+        .build(),
         Transform::from_xyz(4.0, 200.0, 4.0).looking_at(Vec3::ZERO, Vec3::Y),
     ));
 }
 
-fn spawn_player(mut commands: Commands, game_config: Res<GameConfig>) {
+fn spawn_player(
+    mut commands: Commands,
+    game_config: Res<GameConfig>,
+    existing_players: Query<Entity, With<Player>>,
+    existing_player_cams: Query<Entity, With<PlayerCamera>>,
+) {
+    for entity in &existing_players {
+        commands.entity(entity).despawn();
+    }
+    for entity in &existing_player_cams {
+        commands.entity(entity).despawn();
+    }
+
     let fov_deg: f32 = 80.0;
-
-    const EYE_HEIGHT: f32 = 1.05;
-    const RADIUS: f32     = 0.30;
-    const HEADROOM: f32   = 0.10;
     let half_h = (EYE_HEIGHT + HEADROOM - RADIUS).max(0.60);
-
-    const SKIN: f32          = 0.08;
-    const STEP_MAX: f32      = 0.55;
-    const STEP_MIN_WIDTH: f32= 2.0 * RADIUS + 0.04;
-    const SNAP: f32          = 0.08;
+    const SKIN: f32 = 0.08;
+    const STEP_MAX: f32 = 0.55;
+    const STEP_MIN_WIDTH: f32 = 2.0 * RADIUS + 0.04;
+    const SNAP: f32 = 0.08;
 
     let player = commands
         .spawn((
             Player,
             Name::new("Player"),
             Transform::from_xyz(0.0, 180.0, 0.0),
-            GlobalTransform::default(),
             Visibility::default(),
+            InheritedVisibility::default(),
+            ViewVisibility::default(),
             RigidBody::KinematicPositionBased,
             Collider::capsule_y(half_h, RADIUS),
             CollisionGroups::default(),
             LockedAxes::ROTATION_LOCKED,
-
             KinematicCharacterController {
                 offset: CharacterLength::Absolute(SKIN),
                 slide: true,
                 autostep: Some(CharacterAutostep {
                     max_height: CharacterLength::Absolute(STEP_MAX),
-                    min_width:  CharacterLength::Absolute(STEP_MIN_WIDTH),
+                    min_width: CharacterLength::Absolute(STEP_MIN_WIDTH),
                     include_dynamic_bodies: false,
                 }),
                 snap_to_ground: Some(CharacterLength::Absolute(SNAP)),
@@ -107,8 +126,12 @@ fn spawn_player(mut commands: Commands, game_config: Res<GameConfig>) {
                 up: Vec3::Y,
                 ..default()
             },
-
-            FpsController { yaw: 0.0, pitch: 0.0, speed: 8.0, sensitivity: 0.001 },
+            FpsController {
+                yaw: 0.0,
+                pitch: 0.0,
+                speed: 8.0,
+                sensitivity: 0.001,
+            },
             PlayerKinematics { vel_y: 0.0 },
             FlightState { flying: false },
         ))
@@ -123,54 +146,49 @@ fn spawn_player(mut commands: Commands, game_config: Res<GameConfig>) {
             Projection::Perspective(PerspectiveProjection {
                 fov: fov_deg.to_radians(),
                 near: 0.05,
-                far:  (game_config.graphics.chunk_range as f32 * 50.0 + 20.0 - 0.25).max(1.0),
+                far: (game_config.graphics.chunk_range as f32 * 50.0 + 20.0 - 0.25).max(1.0),
                 ..default()
             }),
-            Fxaa {
-                enabled: true,
-                edge_threshold: Sensitivity::Extreme,
-                edge_threshold_min: Sensitivity::Extreme,
+            Camera {
+                order: 1,
+                clear_color: ClearColorConfig::Custom(Color::srgb(0.62, 0.72, 0.85)),
+                ..default()
             },
-            Camera { clear_color: ClearColorConfig::Custom(Color::srgb(0.62, 0.72, 0.85)), ..default() },
             DistanceFog {
                 color: Color::srgb(0.62, 0.72, 0.85),
                 falloff: FogFalloff::Linear {
                     start: game_config.graphics.chunk_range as f32 * 50.0,
-                    end:   game_config.graphics.chunk_range as f32 * 50.0 + 20.0
+                    end: game_config.graphics.chunk_range as f32 * 50.0 + 20.0,
                 },
                 ..default()
             },
             Transform::from_xyz(0.0, EYE_HEIGHT, 0.0),
-            GlobalTransform::default(),
             Name::new("PlayerCamera"),
         ));
     });
 
-    commands
-        .entity(player)
-        .insert(DoubleTapSpace { last_press: -1_000_000.0 });
+    commands.entity(player).insert(DoubleTapSpace {
+        last_press: -1_000_000.0,
+    });
 }
 
-
 fn grab_cursor_on_click(
-    mut windows: Query<&mut Window, With<PrimaryWindow>>,
+    mut cursor_q: Query<&mut CursorOptions, With<PrimaryWindow>>,
     mouse: Res<ButtonInput<MouseButton>>,
-    ui: Res<BlockCatalogUiState>
+    ui: Res<BlockCatalogUiState>,
 ) {
-    if !mouse.just_pressed(MouseButton::Left) {
+    if !mouse.just_pressed(MouseButton::Left) || ui.open {
         return;
     }
 
-    if ui.open { return; }
-
-    if let Ok(mut win) = windows.single_mut() {
-        win.cursor_options.grab_mode = CursorGrabMode::Locked;
-        win.cursor_options.visible = false;
+    if let Ok(mut cursor) = cursor_q.single_mut() {
+        cursor.grab_mode = CursorGrabMode::Locked;
+        cursor.visible = false;
     }
 }
 
 fn release_cursor_on_escape(
-    mut windows: Query<&mut Window, With<PrimaryWindow>>,
+    mut cursor_q: Query<&mut CursorOptions, With<PrimaryWindow>>,
     keys: Res<ButtonInput<KeyCode>>,
     game_config: Res<GameConfig>,
 ) {
@@ -179,25 +197,32 @@ fn release_cursor_on_escape(
     if !keys.just_pressed(unlock) {
         return;
     }
-    if let Ok(mut win) = windows.single_mut() {
-        win.cursor_options.grab_mode = CursorGrabMode::None;
-        win.cursor_options.visible = true;
+    if let Ok(mut cursor) = cursor_q.single_mut() {
+        cursor.grab_mode = CursorGrabMode::None;
+        cursor.visible = true;
     }
 }
 
 fn mouse_look(
-    mut ev_motion: EventReader<MouseMotion>,
-    mut q_player: Query<(Entity, &mut Transform, &mut FpsController), (With<Player>, Without<PlayerCamera>)>,
+    mut ev_motion: MessageReader<MouseMotion>,
+    mut q_player: Query<
+        (Entity, &mut Transform, &mut FpsController),
+        (With<Player>, Without<PlayerCamera>),
+    >,
     mut q_cam: Query<(&ChildOf, &mut Transform), (With<PlayerCamera>, Without<Player>)>,
-    windows: Query<&Window, With<PrimaryWindow>>,
+    cursor_q: Query<&CursorOptions, With<PrimaryWindow>>,
 ) {
-    let Ok(window) = windows.single() else { return; };
-    if window.cursor_options.grab_mode != CursorGrabMode::Locked {
+    let Ok(cursor) = cursor_q.single() else {
+        return;
+    };
+    if cursor.grab_mode != CursorGrabMode::Locked {
         ev_motion.clear();
         return;
     }
 
-    let Ok((player_entity,mut player_tf, mut ctrl)) = q_player.single_mut() else { return; };
+    let Ok((player_entity, mut player_tf, mut ctrl)) = q_player.single_mut() else {
+        return;
+    };
 
     let mut delta = Vec2::ZERO;
     for ev in ev_motion.read() {
@@ -212,69 +237,80 @@ fn mouse_look(
 
     let limit = std::f32::consts::FRAC_PI_2 - 0.01;
     ctrl.pitch = ctrl.pitch.clamp(-limit, limit);
-
     player_tf.rotation = Quat::from_rotation_y(ctrl.yaw);
 
-    for (parent, mut cam_tf) in q_cam.iter_mut() {
+    for (parent, mut cam_tf) in &mut q_cam {
         if parent.parent() == player_entity {
             cam_tf.rotation = Quat::from_rotation_x(ctrl.pitch);
         }
     }
 }
 
-fn player_move_kcc(
+fn player_move_simple(
     time: Res<Time>,
     keys: Res<ButtonInput<KeyCode>>,
-    mut q_player: Query<(
-        &Transform,
-        &FpsController,
-        &mut PlayerKinematics,
-        &mut KinematicCharacterController,
-        Option<&KinematicCharacterControllerOutput>,
-        &mut FlightState,
-        &mut DoubleTapSpace,
-    ), With<Player>>,
+    mut q_player: Query<
+        (
+            &Transform,
+            &FpsController,
+            &mut PlayerKinematics,
+            &mut KinematicCharacterController,
+            Option<&KinematicCharacterControllerOutput>,
+            &mut FlightState,
+            &mut DoubleTapSpace,
+        ),
+        With<Player>,
+    >,
     game_mode_state: Res<GameModeState>,
     game_config: Res<GameConfig>,
 ) {
-    let Ok((tf, ctrl, mut kin, mut kcc,
-               kcc_out, mut flight, mut tap))
-        = q_player.single_mut() else { return; };
+    let Ok((tf, ctrl, mut kin, mut kcc, kcc_out, mut flight, mut tap)) = q_player.single_mut() else {
+        return;
+    };
 
-    // --------- Tuning ----------
-    let ground_speed   = ctrl.speed;
-    let fly_multi      = 4.0;
-    let fly_v_multi    = 4.0;
-
-    let gravity        = 30.0;
-    let fall_multi     = 2.2;
+    let ground_speed = ctrl.speed;
+    let fly_multi = 4.0;
+    let fly_v_multi = 4.0;
+    let gravity = 30.0;
+    let fall_multi = 2.2;
     const JUMP_HEIGHT: f32 = 1.65;
-    let jump_v0        = (2.0 * gravity * JUMP_HEIGHT).sqrt();
-
+    let jump_v0 = (2.0 * gravity * JUMP_HEIGHT).sqrt();
     const DOUBLE_TAP_WIN: f32 = 0.28;
 
     let forward_key = convert(game_config.input.move_up.as_str()).expect("Invalid key");
-    let back_key    = convert(game_config.input.move_down.as_str()).expect("Invalid key");
-    let left_key    = convert(game_config.input.move_left.as_str()).expect("Invalid key");
-    let right_key   = convert(game_config.input.move_right.as_str()).expect("Invalid key");
+    let back_key = convert(game_config.input.move_down.as_str()).expect("Invalid key");
+    let left_key = convert(game_config.input.move_left.as_str()).expect("Invalid key");
+    let right_key = convert(game_config.input.move_right.as_str()).expect("Invalid key");
+    let jump_key = convert(game_config.input.jump.as_str()).unwrap_or(KeyCode::Space);
+    let down_key = convert(game_config.input.sprint.as_str()).unwrap_or(KeyCode::ShiftLeft);
 
     let f = tf.forward();
     let r = tf.right();
     let forward = Vec3::new(f.x, 0.0, f.z).normalize_or_zero();
-    let right   = Vec3::new(r.x, 0.0, r.z).normalize_or_zero();
+    let right = Vec3::new(r.x, 0.0, r.z).normalize_or_zero();
 
     let mut wish = Vec3::ZERO;
-    if keys.pressed(forward_key) { wish += forward; }
-    if keys.pressed(back_key)    { wish -= forward; }
-    if keys.pressed(left_key)    { wish -= right;   }
-    if keys.pressed(right_key)   { wish += right;   }
-    if wish.length_squared() > 0.0 { wish = wish.normalize(); }
+    if keys.pressed(forward_key) {
+        wish += forward;
+    }
+    if keys.pressed(back_key) {
+        wish -= forward;
+    }
+    if keys.pressed(left_key) {
+        wish -= right;
+    }
+    if keys.pressed(right_key) {
+        wish += right;
+    }
+    if wish.length_squared() > 0.0 {
+        wish = wish.normalize();
+    }
 
-    let dt       = time.delta_secs();
-    let now      = time.elapsed_secs();
+    let dt = time.delta_secs();
+    let now = time.elapsed_secs();
     let grounded = kcc_out.map(|o| o.grounded).unwrap_or(false);
 
-    if keys.just_pressed(KeyCode::Space) {
+    if keys.just_pressed(jump_key) {
         if now - tap.last_press <= DOUBLE_TAP_WIN {
             if game_mode_state.0 == GameMode::Creative {
                 flight.flying = !flight.flying;
@@ -289,32 +325,43 @@ fn player_move_kcc(
         }
     }
 
-    kcc.snap_to_ground = if flight.flying { None } else { Some(CharacterLength::Absolute(0.2)) };
-
-    let mut translation = Vec3::ZERO;
+    kcc.snap_to_ground = if flight.flying {
+        None
+    } else {
+        Some(CharacterLength::Absolute(0.2))
+    };
 
     if flight.flying {
+        let mut delta = Vec3::ZERO;
         let mut up_down = 0.0;
-        if keys.pressed(KeyCode::Space)     { up_down += 1.0; }
-        if keys.pressed(KeyCode::ShiftLeft) { up_down -= 1.0; }
+        if keys.pressed(jump_key) {
+            up_down += 1.0;
+        }
+        if keys.pressed(down_key) {
+            up_down -= 1.0;
+        }
 
-        translation += wish * ground_speed * fly_multi * dt;
-        translation += Vec3::Y * up_down * ground_speed * fly_v_multi * dt;
-
+        delta += wish * ground_speed * fly_multi * dt;
+        delta += Vec3::Y * up_down * ground_speed * fly_v_multi * dt;
         kin.vel_y = 0.0;
+        kcc.translation = Some(delta);
     } else {
-        if grounded && kin.vel_y <= 0.0 {
+        if grounded && kin.vel_y < 0.0 {
             kin.vel_y = 0.0;
         } else {
-            let g_eff = if kin.vel_y < 0.0 { gravity * fall_multi } else { gravity };
+            let g_eff = if kin.vel_y < 0.0 {
+                gravity * fall_multi
+            } else {
+                gravity
+            };
             kin.vel_y -= g_eff * dt;
         }
 
-        translation += wish * ground_speed * dt;
-        translation += Vec3::Y * kin.vel_y * dt;
+        let mut delta = Vec3::ZERO;
+        delta += wish * ground_speed * dt;
+        delta += Vec3::Y * kin.vel_y * dt;
+        kcc.translation = Some(delta);
     }
-
-    kcc.translation = Some(translation);
 }
 
 fn apply_noclip_to_player(
@@ -328,14 +375,14 @@ fn apply_noclip_to_player(
             &mut KinematicCharacterController,
             &mut FlightState,
         ),
-        With<Player>
+        With<Player>,
     >,
 ) {
-    let Ok((e, has_sensor, groups_opt, mut kcc, mut flight)) =
-        q.single_mut() else { return; };
+    let Ok((e, has_sensor, groups_opt, mut kcc, mut flight)) = q.single_mut() else {
+        return;
+    };
 
     let spectator = matches!(game_mode.0, GameMode::Spectator);
-
     if spectator {
         flight.flying = true;
 
@@ -345,7 +392,9 @@ fn apply_noclip_to_player(
         match groups_opt {
             Some(mut g) => *g = CollisionGroups::new(Group::NONE, Group::NONE),
             None => {
-                commands.entity(e).insert(CollisionGroups::new(Group::NONE, Group::NONE));
+                commands
+                    .entity(e)
+                    .insert(CollisionGroups::new(Group::NONE, Group::NONE));
             }
         }
 
@@ -356,7 +405,6 @@ fn apply_noclip_to_player(
             commands.entity(e).remove::<Sensor>();
         }
         commands.entity(e).insert(CollisionGroups::default());
-
         kcc.filter_groups = None;
     }
 }

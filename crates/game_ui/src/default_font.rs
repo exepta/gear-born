@@ -6,7 +6,10 @@ pub struct DefaultFontHandler;
 impl Plugin for DefaultFontHandler {
     fn build(&self, app: &mut App) {
         app.add_systems(Startup, load_default_font);
-        app.add_systems(Update, add_to_texts.run_if(resource_exists::<DefaultGameFont>));
+        app.add_systems(
+            Update,
+            add_to_texts.run_if(resource_exists::<DefaultGameFont>),
+        );
     }
 }
 

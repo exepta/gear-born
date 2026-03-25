@@ -9,7 +9,7 @@ use game_core::world::block::{BlockId, BlockRegistry};
 use game_core::world::chunk::*;
 use game_core::world::chunk_dim::*;
 
-use crate::chunk::cave_utils::{worm_edits_for_chunk, CaveBlockIds, CaveParams};
+use crate::chunk::cave_utils::{CaveBlockIds, CaveParams, worm_edits_for_chunk};
 
 /// How many chunks get processed per frame (to avoid spikes).
 #[derive(Resource, Debug, Clone)]
@@ -17,7 +17,11 @@ pub struct CaveBudget {
     pub chunks_per_frame: usize,
 }
 impl Default for CaveBudget {
-    fn default() -> Self { Self { chunks_per_frame: 2 } }
+    fn default() -> Self {
+        Self {
+            chunks_per_frame: 2,
+        }
+    }
 }
 
 /// Small wrapper to silence #[must_use] when stored in a tuple.
@@ -35,8 +39,7 @@ pub struct CaveBuilder;
 
 impl Plugin for CaveBuilder {
     fn build(&self, app: &mut App) {
-        app
-            .init_resource::<CaveBudget>()
+        app.init_resource::<CaveBudget>()
             .init_resource::<CaveTracker>()
             .init_resource::<CaveJobs>()
             // 1) When entering CaveGen, enqueue all currently loaded chunks.
@@ -65,8 +68,8 @@ impl Plugin for CaveBuilder {
 }
 
 /* =========================
-   Queue Management
-   ========================= */
+Queue Management
+========================= */
 
 #[inline]
 fn enqueue_pending_impl(tracker: &mut CaveTracker, chunk_map: &ChunkMap) {
@@ -79,10 +82,7 @@ fn enqueue_pending_impl(tracker: &mut CaveTracker, chunk_map: &ChunkMap) {
     }
 }
 
-fn enqueue_all_loaded_chunks_for_caves(
-    mut tracker: ResMut<CaveTracker>,
-    chunk_map: Res<ChunkMap>,
-) {
+fn enqueue_all_loaded_chunks_for_caves(mut tracker: ResMut<CaveTracker>, chunk_map: Res<ChunkMap>) {
     // OnEnter: enqueue whatever is already loaded at state start.
     enqueue_pending_impl(&mut tracker, &chunk_map);
 }
@@ -101,22 +101,25 @@ fn clear_cave_queue(mut tracker: ResMut<CaveTracker>) {
 }
 
 /* =========================
-   Main Carving Step (async)
-   ========================= */
+Main Carving Step (async)
+========================= */
 
 fn carve_caves_step(
     budget: Res<CaveBudget>,
     mut tracker: ResMut<CaveTracker>,
     mut jobs: ResMut<CaveJobs>,
     mut next_state: ResMut<NextState<AppState>>,
+    app_state: Res<State<AppState>>,
     reg: Res<BlockRegistry>,
     mut chunk_map: ResMut<ChunkMap>,
     world_gen_config: Res<WorldGenConfig>,
-    mut ev_remesh: EventWriter<SubChunkNeedRemeshEvent>,
+    mut ev_remesh: MessageWriter<SubChunkNeedRemeshEvent>,
 ) {
     // If nothing to do, exit CaveGen (or no-op in InGame).
     if tracker.pending.is_empty() && jobs.running.is_empty() {
-        next_state.set(AppState::InGame(InGameStates::Game));
+        if matches!(app_state.get(), AppState::Loading(LoadingStates::CaveGen)) {
+            next_state.set(AppState::InGame(InGameStates::Game));
+        }
         return;
     }
 
@@ -124,7 +127,11 @@ fn carve_caves_step(
     let water_id: u32 = reg.id_opt("water_block").unwrap_or(1) as u32;
     let border_id: u32 = reg.id_opt("border_block").unwrap_or(0) as u32;
 
-    let _ids = CaveBlockIds { air: air_id, water: water_id, protected_1: None };
+    let _ids = CaveBlockIds {
+        air: air_id,
+        water: water_id,
+        protected_1: None,
+    };
 
     // Tuned for walkable tunnels + rare big cavern clusters.
     let params_template = CaveParams {
@@ -172,11 +179,11 @@ fn carve_caves_step(
         mega_y_bottom: -105,
 
         /* entrances (NEW) */
-        entrance_chance: 0.55,        // ~35% chance when a segment hits the trigger band
-        entrance_len_steps: 40,       // short spur climb
-        entrance_radius_scale: 0.55,  // narrower than the main tunnel
-        entrance_min_radius: 2.8,     // don't get thinner than this
-        entrance_trigger_band: 12.0,   // start spurs within 12 blocks below y_top
+        entrance_chance: 0.55, // ~35% chance when a segment hits the trigger band
+        entrance_len_steps: 40, // short spur climb
+        entrance_radius_scale: 0.55, // narrower than the main tunnel
+        entrance_min_radius: 2.8, // don't get thinner than this
+        entrance_trigger_band: 12.0, // start spurs within 12 blocks below y_top
     };
 
     // 1) Spawn a few jobs per frame.
@@ -184,7 +191,9 @@ fn carve_caves_step(
     let mut started = 0usize;
 
     while started < budget.chunks_per_frame {
-        let Some(coord) = tracker.pending.pop_front() else { break; };
+        let Some(coord) = tracker.pending.pop_front() else {
+            break;
+        };
         if !chunk_map.is_loaded(coord) {
             // If the chunk is gone again, mark as done (no-op).
             tracker.done.insert(coord);
@@ -193,9 +202,7 @@ fn carve_caves_step(
 
         let params = params_template.clone();
 
-        let task = pool.spawn(async move {
-            compute_cave_edits_for_chunk(params, coord).await
-        });
+        let task = pool.spawn(async move { compute_cave_edits_for_chunk(params, coord).await });
 
         jobs.running.push((coord, CaveTask(task)));
         started += 1;
@@ -213,13 +220,12 @@ fn carve_caves_step(
                 if let Some(chunk) = chunk_map.get_chunk_mut(*coord) {
                     for (lx, ly, lz) in edits {
                         let sub = (ly as usize) / SEC_H;
-                        if sub < SEC_COUNT { touched[sub] = true; }
+                        if sub < SEC_COUNT {
+                            touched[sub] = true;
+                        }
 
                         let cur = chunk.get(lx as usize, ly as usize, lz as usize);
-                        if cur != 0
-                            && cur != water_id as BlockId
-                            && cur != border_id as BlockId
-                        {
+                        if cur != 0 && cur != water_id as BlockId && cur != border_id as BlockId {
                             chunk.set(lx as usize, ly as usize, lz as usize, air_id as BlockId);
                         }
                     }
@@ -227,14 +233,16 @@ fn carve_caves_step(
 
                 // Fire remesh events for changed subchunks in this chunk + 4-neighborhood.
                 for sub in 0..SEC_COUNT {
-                    if !touched[sub] { continue; }
+                    if !touched[sub] {
+                        continue;
+                    }
                     ev_remesh.write(SubChunkNeedRemeshEvent { coord: *coord, sub });
 
                     const N4: [IVec2; 4] = [
-                        IVec2::new( 1, 0),
+                        IVec2::new(1, 0),
                         IVec2::new(-1, 0),
-                        IVec2::new( 0, 1),
-                        IVec2::new( 0,-1),
+                        IVec2::new(0, 1),
+                        IVec2::new(0, -1),
                     ];
                     for d in N4 {
                         let nc = IVec2::new(coord.x + d.x, coord.y + d.y);
@@ -257,13 +265,15 @@ fn carve_caves_step(
 
     // If nothing is left, we can leave CaveGen.
     if tracker.pending.is_empty() && jobs.running.is_empty() {
-        next_state.set(AppState::InGame(InGameStates::Game));
+        if matches!(app_state.get(), AppState::Loading(LoadingStates::CaveGen)) {
+            next_state.set(AppState::InGame(InGameStates::Game));
+        }
     }
 }
 
 /* =========================
-   Async compute (off-thread)
-   ========================= */
+Async compute (off-thread)
+========================= */
 
 async fn compute_cave_edits_for_chunk(
     params: CaveParams,
@@ -274,12 +284,8 @@ async fn compute_cave_edits_for_chunk(
 }
 
 /* =========================
-   Legacy helper
-   ========================= */
+Legacy helper
+========================= */
 
 #[allow(dead_code)]
-fn carve_single_chunk(
-    _chunk: &mut ChunkData,
-    _field: &(),
-    _ids: CaveBlockIds,
-) {}
+fn carve_single_chunk(_chunk: &mut ChunkData, _field: &(), _ids: CaveBlockIds) {}

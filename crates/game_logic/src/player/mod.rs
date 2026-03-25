@@ -1,8 +1,8 @@
-mod look_at_service;
+mod change_game_mode;
 mod cross_hair;
 mod initialize;
+mod look_at_service;
 mod water_hud_fx;
-mod change_game_mode;
 
 use crate::player::change_game_mode::ChangeGameModeHandler;
 use crate::player::cross_hair::CrosshairPlugin;
@@ -20,7 +20,7 @@ impl Plugin for PlayerServices {
             LookAtService,
             CrosshairPlugin,
             UnderwaterFxPlugin,
-            ChangeGameModeHandler
+            ChangeGameModeHandler,
         ));
     }
 }

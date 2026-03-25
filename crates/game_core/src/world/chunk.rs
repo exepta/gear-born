@@ -10,18 +10,23 @@ pub const MAX_UPDATE_FRAMES: usize = 32;
 pub const SEA_LEVEL: i32 = 60;
 
 #[inline]
-pub fn idx(x: usize, y: usize, z: usize) -> usize { (y * CZ + z) * CX + x }
+pub fn idx(x: usize, y: usize, z: usize) -> usize {
+    (y * CZ + z) * CX + x
+}
 
 #[inline]
 pub fn index3_to_xyz(i: usize) -> (usize, usize, usize) {
     let y_z = i / CX;
-    let x   = i - y_z * CX;
-    let y   = y_z / CZ;
-    let z   = y_z - y * CZ;
+    let x = i - y_z * CX;
+    let y = y_z / CZ;
+    let z = y_z - y * CZ;
     (x, y, z)
 }
 
-#[inline] pub fn in_bounds(x: usize, y: usize, z: usize) -> bool { x < CX && y < CY && z < CZ }
+#[inline]
+pub fn in_bounds(x: usize, y: usize, z: usize) -> bool {
+    x < CX && y < CY && z < CZ
+}
 
 /// Tracks which chunks still need caves and which are already done.
 #[derive(Resource, Default, Debug)]
@@ -47,7 +52,9 @@ impl ChunkData {
     }
 
     #[inline]
-    pub fn get(&self, x: usize, y: usize, z: usize) -> BlockId { self.blocks[idx(x, y, z)] }
+    pub fn get(&self, x: usize, y: usize, z: usize) -> BlockId {
+        self.blocks[idx(x, y, z)]
+    }
 
     #[inline]
     pub fn set(&mut self, x: usize, y: usize, z: usize, id: BlockId) {
@@ -57,7 +64,11 @@ impl ChunkData {
 
     #[inline]
     pub fn get_opt(&self, x: usize, y: usize, z: usize) -> Option<BlockId> {
-        if in_bounds(x, y, z) { Some(self.get(x, y, z)) } else { None }
+        if in_bounds(x, y, z) {
+            Some(self.get(x, y, z))
+        } else {
+            None
+        }
     }
 
     #[inline]
@@ -76,27 +87,42 @@ impl ChunkData {
     }
 
     #[inline]
-    pub fn mark_dirty_sub(&mut self, sub: usize) { self.dirty_mask |= 1 << sub; }
+    pub fn mark_dirty_sub(&mut self, sub: usize) {
+        self.dirty_mask |= 1 << sub;
+    }
 
     #[inline]
-    pub fn clear_dirty(&mut self, sub: usize) { self.dirty_mask &= !(1 << sub); }
+    pub fn clear_dirty(&mut self, sub: usize) {
+        self.dirty_mask &= !(1 << sub);
+    }
 
     #[inline]
-    pub fn is_dirty(&self, sub: usize) -> bool { (self.dirty_mask & (1 << sub)) != 0 }
+    pub fn is_dirty(&self, sub: usize) -> bool {
+        (self.dirty_mask & (1 << sub)) != 0
+    }
 
     #[inline]
-    pub fn mark_all_dirty(&mut self) { self.dirty_mask = u32::MAX >> (32 - SEC_COUNT); }
+    pub fn mark_all_dirty(&mut self) {
+        self.dirty_mask = u32::MAX >> (32 - SEC_COUNT);
+    }
 
     #[inline]
-    pub fn clear_all_dirty(&mut self) { self.dirty_mask = 0; }
+    pub fn clear_all_dirty(&mut self) {
+        self.dirty_mask = 0;
+    }
 
     #[inline]
     pub fn iter_dirty_subs(&self) -> DirtySubsIter {
-        DirtySubsIter { mask: self.dirty_mask, i: 0 }
+        DirtySubsIter {
+            mask: self.dirty_mask,
+            i: 0,
+        }
     }
 
     pub fn fill_layer_y(&mut self, ly: usize, id: BlockId) {
-        if ly >= CY { return; }
+        if ly >= CY {
+            return;
+        }
         let base = ly * CZ * CX;
         for z in 0..CZ {
             let row = base + z * CX;
@@ -108,15 +134,25 @@ impl ChunkData {
     }
 
     pub fn fill_column(&mut self, x: usize, z: usize, y0: usize, y1: usize, id: BlockId) {
-        if x >= CX || z >= CZ { return; }
+        if x >= CX || z >= CZ {
+            return;
+        }
         let y1 = y1.min(CY);
         for y in y0.min(y1)..y1 {
             self.set(x, y, z, id);
         }
     }
 
-    pub fn fill_box(&mut self, x0: usize, y0: usize, z0: usize,
-                    x1: usize, y1: usize, z1: usize, id: BlockId) {
+    pub fn fill_box(
+        &mut self,
+        x0: usize,
+        y0: usize,
+        z0: usize,
+        x1: usize,
+        y1: usize,
+        z1: usize,
+        id: BlockId,
+    ) {
         let x1 = x1.min(CX);
         let y1 = y1.min(CY);
         let z1 = z1.min(CZ);
@@ -130,9 +166,13 @@ impl ChunkData {
     }
 
     pub fn column_top_local_y(&self, x: usize, z: usize) -> Option<usize> {
-        if x >= CX || z >= CZ { return None; }
+        if x >= CX || z >= CZ {
+            return None;
+        }
         for ly in (0..CY).rev() {
-            if self.get(x, ly, z) != 0 { return Some(ly); }
+            if self.get(x, ly, z) != 0 {
+                return Some(ly);
+            }
         }
         None
     }
@@ -157,15 +197,17 @@ impl ChunkData {
         let ids = self.neighbor_ids6(x, y, z);
         let mut m = 0u8;
         for (i, id) in ids.into_iter().enumerate() {
-            if id.unwrap_or(0) != 0 { m |= 1 << i; }
+            if id.unwrap_or(0) != 0 {
+                m |= 1 << i;
+            }
         }
         m
     }
 }
 
 /* =========================
-   Dirty-Iterator
-   ========================= */
+Dirty-Iterator
+========================= */
 
 pub struct DirtySubsIter {
     mask: u32,
@@ -178,7 +220,9 @@ impl Iterator for DirtySubsIter {
             let bit = 1u32 << self.i;
             let idx = self.i;
             self.i += 1;
-            if (self.mask & bit) != 0 { return Some(idx); }
+            if (self.mask & bit) != 0 {
+                return Some(idx);
+            }
         }
         None
     }
@@ -208,12 +252,21 @@ pub struct ChunkMap {
 }
 
 #[derive(SystemSet, Debug, Hash, PartialEq, Eq, Clone)]
-pub enum VoxelStage { Input, WorldEdit, Meshing }
+pub enum VoxelStage {
+    Input,
+    WorldEdit,
+    Meshing,
+}
 
 #[derive(Resource, Clone, Copy)]
-pub struct LoadCenter { pub world_xz: IVec2 }
+pub struct LoadCenter {
+    pub world_xz: IVec2,
+}
 
-#[inline] pub fn sub_of_local_y(ly: usize) -> usize { ly / SEC_H }
+#[inline]
+pub fn sub_of_local_y(ly: usize) -> usize {
+    ly / SEC_H
+}
 
 #[inline]
 pub fn sub_range(sub: usize) -> (usize, usize) {
@@ -224,7 +277,9 @@ pub fn sub_range(sub: usize) -> (usize, usize) {
 
 #[inline]
 pub fn world_y_to_local_y(wy: i32) -> Option<usize> {
-    if wy < Y_MIN || wy > Y_MAX { return None; }
+    if wy < Y_MIN || wy > Y_MAX {
+        return None;
+    }
     Some((wy - Y_MIN) as usize)
 }
 
@@ -234,31 +289,45 @@ pub fn world_y_to_sub(wy: i32) -> Option<usize> {
 }
 
 /* =========================
-   ChunkMap-Helpers
-   ========================= */
+ChunkMap-Helpers
+========================= */
 
 impl ChunkMap {
     #[inline]
-    pub fn is_loaded(&self, coord: IVec2) -> bool { self.chunks.contains_key(&coord) }
+    pub fn is_loaded(&self, coord: IVec2) -> bool {
+        self.chunks.contains_key(&coord)
+    }
 
     #[inline]
-    pub fn get_chunk(&self, coord: IVec2) -> Option<&ChunkData> { self.chunks.get(&coord) }
+    pub fn get_chunk(&self, coord: IVec2) -> Option<&ChunkData> {
+        self.chunks.get(&coord)
+    }
 
     #[inline]
-    pub fn get_chunk_mut(&mut self, coord: IVec2) -> Option<&mut ChunkData> { self.chunks.get_mut(&coord) }
+    pub fn get_chunk_mut(&mut self, coord: IVec2) -> Option<&mut ChunkData> {
+        self.chunks.get_mut(&coord)
+    }
 
     pub fn ensure_chunk(&mut self, coord: IVec2) -> &mut ChunkData {
         self.chunks.entry(coord).or_insert_with(ChunkData::new)
     }
 
     pub fn get_world(&self, wx: i32, wy: i32, wz: i32) -> BlockId {
-        if wy < Y_MIN || wy > Y_MAX { return 0; }
+        if wy < Y_MIN || wy > Y_MAX {
+            return 0;
+        }
         let (cc, local) = world_to_chunk_xz(wx, wz);
-        let Some(ch) = self.chunks.get(&cc) else { return 0; };
+        let Some(ch) = self.chunks.get(&cc) else {
+            return 0;
+        };
         let lx = local.x as usize;
         let lz = local.y as usize;
         let ly = (wy - Y_MIN) as usize;
-        if lx < CX && ly < CY && lz < CZ { ch.get(lx, ly, lz) } else { 0 }
+        if lx < CX && ly < CY && lz < CZ {
+            ch.get(lx, ly, lz)
+        } else {
+            0
+        }
     }
 
     pub fn set_world(&mut self, wx: i32, wy: i32, wz: i32, id: BlockId) -> Option<BlockId> {
@@ -292,19 +361,25 @@ impl ChunkMap {
 
     #[inline]
     pub fn neighbors_ready(&self, coord: IVec2) -> bool {
-        Self::neighbors_xz(coord).into_iter().all(|c| self.is_loaded(c))
+        Self::neighbors_xz(coord)
+            .into_iter()
+            .all(|c| self.is_loaded(c))
     }
 
-    pub fn column_tops_iter<'a>(&'a self, coord: IVec2)
-                                -> impl 'a + Iterator<Item = ((usize, usize), Option<usize>)>
-    {
+    pub fn column_tops_iter<'a>(
+        &'a self,
+        coord: IVec2,
+    ) -> impl 'a + Iterator<Item = ((usize, usize), Option<usize>)> {
         self.chunks.get(&coord).into_iter().flat_map(|ch| {
             (0..CZ).flat_map(move |z| (0..CX).map(move |x| ((x, z), ch.column_top_local_y(x, z))))
         })
     }
 
     pub fn dirty_subs_of(&self, coord: IVec2) -> impl Iterator<Item = usize> + '_ {
-        self.chunks.get(&coord).into_iter().flat_map(|c| c.iter_dirty_subs())
+        self.chunks
+            .get(&coord)
+            .into_iter()
+            .flat_map(|c| c.iter_dirty_subs())
     }
 }
 
@@ -315,7 +390,9 @@ pub fn sub_priority_order(center_sub: usize) -> impl Iterator<Item = usize> {
     let mut d = 1i32;
     while seq.len() < total {
         let a = center_sub as i32 + d;
-        if a >= 0 && (a as usize) < total { seq.push(a as usize); }
+        if a >= 0 && (a as usize) < total {
+            seq.push(a as usize);
+        }
         d = if d > 0 { -d } else { -d + 1 };
     }
     seq.into_iter()

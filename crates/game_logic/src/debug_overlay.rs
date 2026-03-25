@@ -1,12 +1,12 @@
 use bevy::diagnostic::{DiagnosticsStore, EntityCountDiagnosticsPlugin, FrameTimeDiagnosticsPlugin};
+use bevy::camera::visibility::RenderLayers;
 use bevy::prelude::*;
 use bevy::render::renderer::RenderAdapterInfo;
-use bevy::render::view::RenderLayers;
 use game_core::configuration::{GameConfig, WorldGenConfig};
 use game_core::debug::*;
 use game_core::key_converter::convert;
 use game_core::player::selection::SelectionState;
-use game_core::player::{GameMode, GameModeState};
+use game_core::player::{GameMode, GameModeState, PlayerCamera};
 use game_core::states::{AppState, InGameStates};
 use game_core::v_ram_detection::{detect_v_ram_best_effort, fmt_bytes};
 use game_core::world::biome::biome_func::dominant_biome_at_p_chunks;
@@ -15,7 +15,7 @@ use game_core::world::biome::registry::BiomeRegistry;
 use game_core::world::block::{block_name_from_registry, get_block_world, BlockRegistry, MiningState, VOXEL_SIZE};
 use game_core::world::chunk::ChunkMap;
 use game_core::world::chunk_dim::*;
-use game_core::{BlockCatalogPreviewCam, BuildInfo};
+use game_core::BuildInfo;
 use std::ops::Neg;
 use sysinfo::{CpuRefreshKind, MemoryRefreshKind, Pid, ProcessesToUpdate, RefreshKind, System};
 
@@ -60,7 +60,10 @@ pub struct DebugOverlayPlugin;
 impl Plugin for DebugOverlayPlugin {
     fn build(&self, app: &mut App) {
         app
-            .add_plugins((FrameTimeDiagnosticsPlugin::default(), EntityCountDiagnosticsPlugin))
+            .add_plugins((
+                FrameTimeDiagnosticsPlugin::default(),
+                EntityCountDiagnosticsPlugin::default(),
+            ))
             .init_resource::<DebugOverlayState>()
             .init_resource::<DebugGridState>()
             .init_resource::<SysStats>()
@@ -111,17 +114,23 @@ fn snap_perf(diag: Res<DiagnosticsStore>, stats: Res<SysStats>, mut snap: ResMut
 }
 
 fn snap_camera_and_world(
-    q_cam: Query<&GlobalTransform, (With<Camera3d>, Without<BlockCatalogPreviewCam>)>,
+    q_cam: Query<&GlobalTransform, With<PlayerCamera>>,
     config: Res<WorldGenConfig>,
     game_config: Res<GameConfig>,
     biomes: Res<BiomeRegistry>,
     mut snap: ResMut<DebugSnapshot>,
 ) {
-    let pos = q_cam.single().map(|t| t.translation()).unwrap_or(Vec3::ZERO) / VOXEL_SIZE;
+    let pos = q_cam
+        .iter()
+        .next()
+        .map(|t| t.translation())
+        .unwrap_or(Vec3::ZERO)
+        / VOXEL_SIZE;
     let (cc, _) = world_to_chunk_xz(pos.x.floor() as i32, pos.z.floor() as i32);
 
-    let (facing_text, yaw_deg) = q_cam.single()
-        .ok()
+    let (facing_text, yaw_deg) = q_cam
+        .iter()
+        .next()
         .map(|gt| facing_dir_from_cam(gt))
         .unwrap_or(("—", 0.0));
 
@@ -214,7 +223,7 @@ fn setup_chunk_grid_gizmos(mut store: ResMut<GizmoConfigStore>) {
     let cfg = store.config_mut::<ChunkGridGizmos>();
     cfg.0.enabled = true;
     cfg.0.depth_bias = -0.02;
-    cfg.0.render_layers = RenderLayers::layer(1);
+    cfg.0.render_layers = RenderLayers::layer(0);
 }
 
 fn setup_sys_info(mut stats: ResMut<SysStats>) {
@@ -337,7 +346,7 @@ fn toggle_overlay(
     let key = convert(game_config.input.debug_overlay.as_str())
         .expect("Invalid key for debugger overlay");
 
-    if keys.just_pressed(key) {
+    if keys.just_pressed(key) || keys.just_pressed(KeyCode::F3) {
         state.show = !state.show;
     }
 }
@@ -345,16 +354,16 @@ fn toggle_overlay(
 fn toggle_grid(
     keys: Res<ButtonInput<KeyCode>>,
     mut state: ResMut<DebugGridState>,
-    q_cam: Query<&GlobalTransform, (With<Camera3d>, Without<BlockCatalogPreviewCam>)>,
+    q_cam: Query<&GlobalTransform, With<PlayerCamera>>,
     game_config: Res<GameConfig>
 ) {
     let key = convert(game_config.input.chunk_grid.as_str())
         .expect("Invalid key for debugger overlay");
 
-    if keys.just_pressed(key) {
+    if keys.just_pressed(key) || keys.just_pressed(KeyCode::F9) {
         state.show = !state.show;
         if state.show {
-            if let Ok(tf) = q_cam.single() {
+            if let Some(tf) = q_cam.iter().next() {
                 state.plane_y = tf.translation().y.floor() + 0.02;
             }
         }
@@ -380,10 +389,10 @@ fn ensure_overlay_exists(
                 top: Val::Px(10.0),
                 left: Val::Px(10.0),
                 padding: UiRect::all(Val::Px(10.0)),
+                border_radius: BorderRadius::all(Val::Px(6.0)),
                 ..default()
             },
             BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.28)),
-            BorderRadius::all(Val::Px(6.0)),
             ZIndex(1000),
             Visibility::Hidden,
             Name::new("DebugOverlayRoot"),
@@ -436,11 +445,11 @@ fn poll_sys_info(time: Res<Time>, mut stats: ResMut<SysStats>) {
 fn draw_chunk_grid(
     mut gizmos: Gizmos<ChunkGridGizmos>,
     grid: Res<DebugGridState>,
-    q_cam: Query<&GlobalTransform, (With<Camera3d>, Without<BlockCatalogPreviewCam>)>,
+    q_cam: Query<&GlobalTransform, With<PlayerCamera>>,
     cfg: Res<GameConfig>,
 ) {
     if !grid.show { return; }
-    let Ok(cam_tf) = q_cam.single() else { return; };
+    let Some(cam_tf) = q_cam.iter().next() else { return; };
 
     let s = VOXEL_SIZE;
     let w = CX as f32 * s;
@@ -553,5 +562,3 @@ fn facing_dir_from_cam(cam_gt: &GlobalTransform) -> (&'static str, f32) {
 fn overlay_visible(state: Option<Res<DebugOverlayState>>) -> bool {
     state.map_or(false, |s| s.show)
 }
-
-

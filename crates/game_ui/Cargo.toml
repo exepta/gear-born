@@ -12,7 +12,7 @@ path = "src/lib.rs"
 path = "../game_core"
 
 [dependencies.bevy]
-version = "0.16.1"
+version = "0.18.1"
 default-features = false
 features = [
     "bevy_asset",
@@ -27,7 +27,11 @@ features = [
     "multi_threaded",
     "png",
     "jpeg",
-    "bevy_mesh_picking_backend",
-    "bevy_picking",
     "bevy_window"
 ]
+
+[dependencies.bevy_extended_ui]
+version = "1.5.0"
+
+[dependencies.bevy_extended_ui_macros]
+version = "1.5.0"

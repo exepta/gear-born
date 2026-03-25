@@ -30,6 +30,7 @@ strip = true
 
 [profile.dev]
 opt-level = 1
+incremental = false
 
 [profile.dev.package."*"]
 opt-level = 3
@@ -49,12 +50,13 @@ path = "crates/game_ui"
 path = "crates/game_world"
 
 [dependencies.bevy]
-version = "0.16.1"
+version = "0.18.1"
 default-features = false
 features = [
     "bevy_asset",
     "bevy_state",
     "bevy_core_pipeline",
+    "bevy_gizmos",
     "bevy_log",
     "bevy_render",
     "bevy_window",
@@ -65,15 +67,12 @@ features = [
 ]
 
 [dependencies.bevy-inspector-egui]
-version = "0.33.1"
+version = "0.36.0"
 
 [dependencies.bevy_rapier3d]
-version = "0.31.0"
-features = [
-    "default",
-    "simd-stable",
-    "debug-render-3d"
-]
+version = "0.33.0"
+default-features = false
+features = ["dim3"]
 
 [dependencies.tracing-subscriber]
 version = "0.3.20"

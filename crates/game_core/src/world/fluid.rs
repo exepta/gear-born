@@ -25,41 +25,53 @@ impl FluidChunk {
         for y in y0..y1 {
             for z in 0..CZ {
                 for x in 0..CX {
-                    if self.get(x, y, z) { return true; }
+                    if self.get(x, y, z) {
+                        return true;
+                    }
                 }
             }
         }
         false
     }
 
-
     #[inline]
-    fn bit_len() -> usize { CX * CY * CZ }
+    fn bit_len() -> usize {
+        CX * CY * CZ
+    }
     #[inline]
     fn idx(x: usize, y: usize, z: usize) -> usize {
         (y * CZ + z) * CX + x
     }
     pub fn new(sea_level: i32) -> Self {
         let n = (Self::bit_len() + 63) / 64;
-        Self { sea_level, bits: vec![0u64; n] }
+        Self {
+            sea_level,
+            bits: vec![0u64; n],
+        }
     }
     #[inline]
     pub fn get(&self, x: usize, y: usize, z: usize) -> bool {
-        let i = Self::idx(x,y,z);
-        (self.bits[i>>6] >> (i & 63)) & 1 == 1
+        let i = Self::idx(x, y, z);
+        (self.bits[i >> 6] >> (i & 63)) & 1 == 1
     }
     #[inline]
     pub fn set(&mut self, x: usize, y: usize, z: usize, on: bool) {
-        let i = Self::idx(x,y,z);
-        let w = &mut self.bits[i>>6];
+        let i = Self::idx(x, y, z);
+        let w = &mut self.bits[i >> 6];
         let m = 1u64 << (i & 63);
-        if on { *w |= m; } else { *w &= !m; }
+        if on {
+            *w |= m;
+        } else {
+            *w &= !m;
+        }
     }
     #[inline]
     pub fn fill_column(&mut self, x: usize, z: usize, y0: i32, y1: i32) {
         let lo = y0.max(Y_MIN);
         let hi = y1.min(Y_MIN + CY as i32 - 1);
-        if lo > hi { return; }
+        if lo > hi {
+            return;
+        }
 
         for wy in lo..=hi {
             let ly = (wy - Y_MIN) as usize; // 0..CY-1
@@ -69,7 +81,12 @@ impl FluidChunk {
 }
 
 #[derive(Clone, Copy, Debug)]
-pub struct Seed { pub c: IVec2, pub x: i32, pub y: i32, pub z: i32 }
+pub struct Seed {
+    pub c: IVec2,
+    pub x: i32,
+    pub y: i32,
+    pub z: i32,
+}
 
 #[derive(Clone)]
 pub struct FlowJob {
@@ -81,8 +98,8 @@ pub struct FlowJob {
 #[derive(Default)]
 pub struct FlowResult {
     pub filled: Vec<Seed>,
-    pub spill:  Vec<Seed>,
-    pub more:   Vec<Seed>,
+    pub spill: Vec<Seed>,
+    pub more: Vec<Seed>,
 }
 
 #[derive(Clone)]

@@ -1,11 +1,16 @@
+use bevy::camera::visibility::{NoFrustumCulling, RenderLayers};
+use bevy::mesh::{Indices, PrimitiveTopology};
 use bevy::prelude::*;
-use bevy::render::view::{NoFrustumCulling, RenderLayers};
+use bevy::window::{CursorGrabMode, CursorOptions, PrimaryWindow};
 use game_core::configuration::CrosshairConfig;
 use game_core::states::{AppState, InGameStates};
 use std::f32::consts::TAU;
 
 #[derive(Component)]
 struct Crosshair;
+
+#[derive(Component)]
+struct CrosshairCamera;
 
 pub struct CrosshairPlugin;
 impl Plugin for CrosshairPlugin {
@@ -45,9 +50,9 @@ fn setup_crosshair(
     cfg: Res<CrosshairConfig>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut mats: ResMut<Assets<ColorMaterial>>,
-    q_cam2d: Query<Entity, With<Camera2d>>,
+    q_cross_cam: Query<Entity, With<CrosshairCamera>>,
 ) {
-    if q_cam2d.single().is_err() {
+    if q_cross_cam.is_empty() {
         commands.spawn((
             Camera2d,
             Camera {
@@ -56,6 +61,7 @@ fn setup_crosshair(
                 ..default()
             },
             RenderLayers::layer(3),
+            CrosshairCamera,
             Name::new("OverlayCamera2D"),
         ));
     }
@@ -89,12 +95,12 @@ fn setup_crosshair(
 /// If no crosshair or window exists yet, the system exits early.
 fn toggle_crosshair_visibility(
     mut q_cross: Query<&mut Visibility, With<Crosshair>>,
-    windows: Query<&Window, With<bevy::window::PrimaryWindow>>,
+    cursor_q: Query<&CursorOptions, With<PrimaryWindow>>,
     cfg: Res<CrosshairConfig>,
 ) {
     let Ok(mut vis) = q_cross.single_mut() else { return; };
-    let Ok(win) = windows.single() else { return; };
-    let locked = win.cursor_options.grab_mode == bevy::window::CursorGrabMode::Locked;
+    let Ok(cursor) = cursor_q.single() else { return; };
+    let locked = cursor.grab_mode == CursorGrabMode::Locked;
 
     *vis = if locked || cfg.visible_when_unlocked {
         Visibility::Visible
@@ -138,12 +144,12 @@ fn build_ring_mesh(outer_r: f32, inner_r: f32, segments: usize) -> Mesh {
     let uvs = vec![[0.5, 0.5]; positions.len()];
 
     let mut mesh = Mesh::new(
-        bevy::render::mesh::PrimitiveTopology::TriangleList,
+        PrimitiveTopology::TriangleList,
         bevy::asset::RenderAssetUsages::RENDER_WORLD,
     );
     mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
     mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, normals);
     mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, uvs);
-    mesh.insert_indices(bevy::render::mesh::Indices::U32(indices));
+    mesh.insert_indices(Indices::U32(indices));
     mesh
 }

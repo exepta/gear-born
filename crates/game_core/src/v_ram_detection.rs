@@ -39,28 +39,48 @@ pub struct VideoRamInfo {
 pub fn detect_v_ram_best_effort() -> Option<VideoRamInfo> {
     // 1) NVIDIA per-process via NVML
     if let Some(bytes) = query_vram_bytes_nvml_this_process() {
-        return Some(VideoRamInfo { bytes, source: "NVML", scope: "per-process" });
+        return Some(VideoRamInfo {
+            bytes,
+            source: "NVML",
+            scope: "per-process",
+        });
     }
 
     #[cfg(target_os = "linux")]
     if let Some(bytes) = query_vram_bytes_linux_amdgpu_per_process(std::process::id()) {
-        return Some(VideoRamInfo { bytes, source: "amdgpu-debugfs", scope: "per-process" });
+        return Some(VideoRamInfo {
+            bytes,
+            source: "amdgpu-debugfs",
+            scope: "per-process",
+        });
     }
 
     // 2) Linux AMD
     #[cfg(target_os = "linux")]
     if let Some(bytes) = query_vram_bytes_linux_drm_amdgpu() {
-        return Some(VideoRamInfo { bytes, source: "Linux DRM", scope: "device-wide" });
+        return Some(VideoRamInfo {
+            bytes,
+            source: "Linux DRM",
+            scope: "device-wide",
+        });
     }
 
     // 2) Windows adapter-wide via DXGI (covers AMD & NVIDIA)
     if let Some(bytes) = query_vram_bytes_dxgi_adapter_current_usage() {
-        return Some(VideoRamInfo { bytes, source: "DXGI", scope: "adapter-wide" });
+        return Some(VideoRamInfo {
+            bytes,
+            source: "DXGI",
+            scope: "adapter-wide",
+        });
     }
 
     // 3) macOS device-wide via Metal
     if let Some(bytes) = query_vram_bytes_metal_device_allocated() {
-        return Some(VideoRamInfo { bytes, source: "Metal", scope: "device-wide" });
+        return Some(VideoRamInfo {
+            bytes,
+            source: "Metal",
+            scope: "device-wide",
+        });
     }
 
     None
@@ -78,7 +98,9 @@ pub fn query_vram_bytes_nvml_this_process() -> Option<u64> {
 
 /// Stub when `vram_nvml` feature is disabled.
 #[cfg(not(feature = "vram_nvml"))]
-pub fn query_vram_bytes_nvml_this_process() -> Option<u64> { None }
+pub fn query_vram_bytes_nvml_this_process() -> Option<u64> {
+    None
+}
 
 /// Query VRAM bytes for a given PID via NVML (NVIDIA).
 ///
@@ -117,7 +139,10 @@ pub fn query_vram_bytes_nvml_for_pid(pid: u32) -> Option<u64> {
 }
 
 #[cfg(feature = "vram_nvml")]
-fn find_bytes_for_pid(list: Vec<nvml_wrapper::struct_wrappers::device::ProcessInfo>, pid: u32) -> Option<u64> {
+fn find_bytes_for_pid(
+    list: Vec<nvml_wrapper::struct_wrappers::device::ProcessInfo>,
+    pid: u32,
+) -> Option<u64> {
     use nvml_wrapper::enums::device::UsedGpuMemory;
 
     for p in list {
@@ -191,7 +216,9 @@ pub fn query_vram_bytes_linux_amdgpu_per_process(pid: u32) -> Option<u64> {
 
     for e in entries.flatten() {
         let p = e.path();
-        if !p.is_dir() { continue; }
+        if !p.is_dir() {
+            continue;
+        }
 
         let vm_info = p.join("amdgpu_vm_info");
         if vm_info.exists() {
@@ -276,28 +303,42 @@ fn parse_embedded_number_with_unit(t: &str) -> Option<u64> {
     let mut digits = String::new();
     let mut unit = String::new();
     for ch in t.chars() {
-        if ch.is_ascii_digit() { digits.push(ch); }
-        else { unit.push(ch); }
+        if ch.is_ascii_digit() {
+            digits.push(ch);
+        } else {
+            unit.push(ch);
+        }
     }
-    if digits.is_empty() { return None; }
+    if digits.is_empty() {
+        return None;
+    }
     let val: u64 = digits.parse().ok()?;
     let u = unit.to_ascii_lowercase();
 
-    let mul: u64 = if u.is_empty() || u == "b" { 1 }
-    else if u == "k" || u == "kb" || u == "kib" { 1024 }
-    else if u == "m" || u == "mb" || u == "mib" { 1024*1024 }
-    else if u == "g" || u == "gb" || u == "gib" { 1024*1024*1024 }
-    else { 1 };
+    let mul: u64 = if u.is_empty() || u == "b" {
+        1
+    } else if u == "k" || u == "kb" || u == "kib" {
+        1024
+    } else if u == "m" || u == "mb" || u == "mib" {
+        1024 * 1024
+    } else if u == "g" || u == "gb" || u == "gib" {
+        1024 * 1024 * 1024
+    } else {
+        1
+    };
     Some(val.saturating_mul(mul))
 }
 
-
 #[cfg(not(target_os = "linux"))]
-pub fn query_vram_bytes_linux_drm_amdgpu() -> Option<u64> { None }
+pub fn query_vram_bytes_linux_drm_amdgpu() -> Option<u64> {
+    None
+}
 
 /// Stub when `vram_nvml` feature is disabled.
 #[cfg(not(feature = "vram_nvml"))]
-pub fn query_vram_bytes_nvml_for_pid(_pid: u32) -> Option<u64> { None }
+pub fn query_vram_bytes_nvml_for_pid(_pid: u32) -> Option<u64> {
+    None
+}
 
 /* ========================= Windows: DXGI (adapter) ========================= */
 
@@ -310,11 +351,11 @@ pub fn query_vram_bytes_nvml_for_pid(_pid: u32) -> Option<u64> { None }
 /// Returns `Some(bytes)` on success. Chooses the first enumerated adapter.
 #[cfg(all(windows, feature = "vram_dxgi"))]
 pub fn query_vram_bytes_dxgi_adapter_current_usage() -> Option<u64> {
-    use windows::core::Interface;
     use windows::Win32::Graphics::Dxgi::{
-        CreateDXGIFactory2, IDXGIAdapter3, IDXGIFactory4,
-        DXGI_CREATE_FACTORY_FLAGS, DXGI_MEMORY_SEGMENT_GROUP_LOCAL, DXGI_QUERY_VIDEO_MEMORY_INFO,
+        CreateDXGIFactory2, DXGI_CREATE_FACTORY_FLAGS, DXGI_MEMORY_SEGMENT_GROUP_LOCAL,
+        DXGI_QUERY_VIDEO_MEMORY_INFO, IDXGIAdapter3, IDXGIFactory4,
     };
+    use windows::core::Interface;
 
     unsafe {
         let factory: IDXGIFactory4 =
@@ -345,7 +386,9 @@ pub fn query_vram_bytes_dxgi_adapter_current_usage() -> Option<u64> {
 
 /// Stub when not on Windows or feature disabled.
 #[cfg(not(all(windows, feature = "vram_dxgi")))]
-pub fn query_vram_bytes_dxgi_adapter_current_usage() -> Option<u64> { None }
+pub fn query_vram_bytes_dxgi_adapter_current_usage() -> Option<u64> {
+    None
+}
 
 /* ============================ macOS: Metal (GPU) =========================== */
 
@@ -361,7 +404,9 @@ pub fn query_vram_bytes_metal_device_allocated() -> Option<u64> {
 
 /// Stub when not on macOS or feature disabled.
 #[cfg(not(all(target_os = "macos", feature = "vram_metal")))]
-pub fn query_vram_bytes_metal_device_allocated() -> Option<u64> { None }
+pub fn query_vram_bytes_metal_device_allocated() -> Option<u64> {
+    None
+}
 
 /* ========================== Utility / Presentation ========================= */
 

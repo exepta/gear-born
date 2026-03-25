@@ -9,7 +9,10 @@ impl Plugin for WaterGfxPlugin {
         app.add_plugins(MaterialPlugin::<WaterMaterial>::default())
             .add_systems(Update, tick_water_time);
 
-        app.add_systems(OnEnter(AppState::Loading(LoadingStates::BaseGen)), setup_water_mat);
+        app.add_systems(
+            OnEnter(AppState::Loading(LoadingStates::BaseGen)),
+            setup_water_mat,
+        );
     }
 }
 
@@ -23,10 +26,7 @@ pub fn setup_water_mat(
     cmds.insert_resource(WaterMatHandle(handle));
 }
 
-pub fn tick_water_time(
-    time: Res<Time>,
-    mut mats: ResMut<Assets<WaterMaterial>>,
-) {
+pub fn tick_water_time(time: Res<Time>, mut mats: ResMut<Assets<WaterMaterial>>) {
     let dt = time.delta_secs();
     for (_, m) in mats.iter_mut() {
         m.params.t_misc.x += dt;
@@ -42,9 +42,9 @@ fn make_water_material_for_atlas_tile(
 
     let params = WaterParams {
         uv_rect: Vec4::new(rect.u0, rect.v0, rect.u1, rect.v1),
-        flow:    Vec4::new(0.06, 0.03, 0.05 * VOXEL_SIZE, 0.8),
-        t_misc:  Vec4::new(0.0, 0.15, 64.0, 0.0),
-        tint:    Vec4::new(0.90, 0.95, 1.05, 0.65),
+        flow: Vec4::new(0.06, 0.03, 0.05 * VOXEL_SIZE, 0.8),
+        t_misc: Vec4::new(0.0, 0.15, 64.0, 0.0),
+        tint: Vec4::new(0.90, 0.95, 1.05, 0.65),
     };
 
     water_mats.add(WaterMaterial {

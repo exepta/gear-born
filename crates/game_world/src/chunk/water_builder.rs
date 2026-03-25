@@ -1,5 +1,5 @@
 use crate::chunk::water_utils::*;
-use bevy::pbr::{NotShadowCaster, NotShadowReceiver};
+use bevy::light::{NotShadowCaster, NotShadowReceiver};
 use bevy::prelude::*;
 use bevy::tasks::AsyncComputeTaskPool;
 use futures_lite::future;
@@ -8,8 +8,8 @@ use game_core::events::chunk_events::{ChunkUnloadEvent, SubChunkNeedRemeshEvent}
 use game_core::events::player_block_events::BlockBreakByPlayerEvent;
 use game_core::shader::water_material::{WaterMatHandle, WaterMaterial};
 use game_core::states::{AppState, InGameStates, LoadingStates};
-use game_core::world::block::{id_any, BlockRegistry, VOXEL_SIZE};
-use game_core::world::chunk::{ChunkMap, BIG, MAX_UPDATE_FRAMES, SEA_LEVEL};
+use game_core::world::block::{BlockRegistry, VOXEL_SIZE, id_any};
+use game_core::world::chunk::{BIG, ChunkMap, MAX_UPDATE_FRAMES, SEA_LEVEL};
 use game_core::world::chunk_dim::*;
 use game_core::world::fluid::*;
 use game_core::world::save::{RegionCache, WorldSave};
@@ -34,36 +34,39 @@ struct WaterGenQueue {
 pub struct WaterMeshingTodo(pub HashSet<IVec2>);
 
 #[derive(Resource, Default)]
-pub struct PendingWaterLoad(
-    pub HashMap<IVec2, bevy::tasks::Task<(IVec2, FluidChunk)>>
-);
+pub struct PendingWaterLoad(pub HashMap<IVec2, bevy::tasks::Task<(IVec2, FluidChunk)>>);
 
 #[derive(Resource, Default)]
 pub struct WaterMeshBacklog(pub VecDeque<(IVec2, usize)>);
 
 #[derive(Resource, Default)]
 pub struct PendingWaterMesh(
-    pub HashMap<(IVec2, usize), bevy::tasks::Task<((IVec2, usize), WaterMeshBuild)>>
+    pub HashMap<(IVec2, usize), bevy::tasks::Task<((IVec2, usize), WaterMeshBuild)>>,
 );
 
 #[derive(Resource, Default)]
 pub struct WaterFlowQueue(pub(crate) VecDeque<FlowJob>);
 
 #[derive(Resource, Default)]
-pub struct PendingWaterFlow(
-    pub HashMap<u64, bevy::tasks::Task<(u64, FlowResult)>>
-);
+pub struct PendingWaterFlow(pub HashMap<u64, bevy::tasks::Task<(u64, FlowResult)>>);
 
 #[derive(Resource, Default)]
-pub struct WaterFlowIds { next: u64 }
-impl WaterFlowIds { fn next(&mut self) -> u64 { let id = self.next; self.next += 1; id } }
+pub struct WaterFlowIds {
+    next: u64,
+}
+impl WaterFlowIds {
+    fn next(&mut self) -> u64 {
+        let id = self.next;
+        self.next += 1;
+        id
+    }
+}
 
 pub struct WaterBuilder;
 
 impl Plugin for WaterBuilder {
     fn build(&self, app: &mut App) {
-        app
-            .init_resource::<WaterBoot>()
+        app.init_resource::<WaterBoot>()
             .init_resource::<WaterGenQueue>()
             .init_resource::<WaterMeshIndex>()
             .init_resource::<FluidMap>()
@@ -76,45 +79,43 @@ impl Plugin for WaterBuilder {
             .init_resource::<WaterFlowIds>()
             .add_systems(
                 OnEnter(AppState::Loading(LoadingStates::WaterGen)),
-                water_gen_build_worklist
+                water_gen_build_worklist,
             )
             .add_systems(
                 Update,
                 (
                     water_mark_from_dirty,
                     water_track_new_chunks,
-
                     // Gen/Load
                     schedule_water_generation_jobs,
                     collect_water_generation_jobs,
-
                     // Mesh
                     water_backlog_from_todo,
                     water_drain_mesh_backlog,
                     water_collect_meshed_subchunks,
-
                     // Unload & Co.
                     water_unload_on_event,
-
                     enqueue_flow_on_block_removed,
                     schedule_flow_jobs,
                     collect_flow_jobs,
-
-                    water_finish_check
-                ).chain()
+                    water_finish_check,
+                )
+                    .chain()
                     .run_if(
                         in_state(AppState::Loading(LoadingStates::WaterGen))
-                            .or(in_state(AppState::InGame(InGameStates::Game)))
+                            .or(in_state(AppState::InGame(InGameStates::Game))),
                     ),
             );
 
-        app.add_systems(Last, save_all_water_on_exit
-            .run_if(on_event::<AppExit>)
-            );
+        app.add_systems(Last, save_all_water_on_exit.run_if(on_message::<AppExit>));
     }
 }
 
-async fn flow_task_run(solid_snap: SolidSnapshot, water_snap: WaterSnap, mut job: FlowJob) -> FlowResult {
+async fn flow_task_run(
+    solid_snap: SolidSnapshot,
+    water_snap: WaterSnap,
+    mut job: FlowJob,
+) -> FlowResult {
     use std::collections::{HashSet, VecDeque};
 
     let mut res = FlowResult::default();
@@ -123,7 +124,9 @@ async fn flow_task_run(solid_snap: SolidSnapshot, water_snap: WaterSnap, mut job
 
     // Seed initialization
     for s in job.seeds.drain(..) {
-        if seen.insert((s.c, s.x, s.y, s.z)) { q.push_back(s); }
+        if seen.insert((s.c, s.x, s.y, s.z)) {
+            q.push_back(s);
+        }
     }
 
     let mut filled_count: usize = 0;
@@ -132,9 +135,14 @@ async fn flow_task_run(solid_snap: SolidSnapshot, water_snap: WaterSnap, mut job
         // Skip if solid or out of snapshot (spill if outside)
         let solid = match snap_is_solid(&solid_snap, cur.c, cur.x, cur.y, cur.z) {
             Some(b) => b,
-            None => { res.spill.push(cur); continue; }
+            None => {
+                res.spill.push(cur);
+                continue;
+            }
         };
-        if solid { continue; }
+        if solid {
+            continue;
+        }
 
         // Skip if already has water
         if let Some(true) = snap_has_water(&water_snap, cur.c, cur.x, cur.y, cur.z) {
@@ -149,8 +157,8 @@ async fn flow_task_run(solid_snap: SolidSnapshot, water_snap: WaterSnap, mut job
             snap_has_water(&water_snap, cur.c, cur.x, cur.y - 1, cur.z),
             Some(true)
         );
-        let below_is_solid = snap_is_solid(&solid_snap, cur.c, cur.x, cur.y - 1, cur.z)
-            .unwrap_or(true);
+        let below_is_solid =
+            snap_is_solid(&solid_snap, cur.c, cur.x, cur.y - 1, cur.z).unwrap_or(true);
 
         let has_side_water_same_y = {
             let mut any = false;
@@ -180,27 +188,38 @@ async fn flow_task_run(solid_snap: SolidSnapshot, water_snap: WaterSnap, mut job
 
         // Enqueue neighbors (down first for gravity-like behavior)
         let mut push = |c: IVec2, x: i32, y: i32, z: i32| {
-            if y < 0 || y >= CY as i32 { return; }
-            if let Some(true) = snap_has_water(&water_snap, c, x, y, z) { return; }
+            if y < 0 || y >= CY as i32 {
+                return;
+            }
+            if let Some(true) = snap_has_water(&water_snap, c, x, y, z) {
+                return;
+            }
             let k = (c, x, y, z);
             if seen.insert(k) {
-                if in_snapshot(&solid_snap, c) { q.push_back(Seed { c, x, y, z }); }
-                else { res.spill.push(Seed { c, x, y, z }); }
+                if in_snapshot(&solid_snap, c) {
+                    q.push_back(Seed { c, x, y, z });
+                } else {
+                    res.spill.push(Seed { c, x, y, z });
+                }
             }
         };
 
         push(cur.c, cur.x, cur.y - 1, cur.z);
-        let (c1, x1, z1) = neighbor_lookup_chunked(cur.c, cur.x + 1, cur.z); push(c1, x1, cur.y, z1);
-        let (c2, x2, z2) = neighbor_lookup_chunked(cur.c, cur.x - 1, cur.z); push(c2, x2, cur.y, z2);
-        let (c3, x3, z3) = neighbor_lookup_chunked(cur.c, cur.x, cur.z + 1); push(c3, x3, cur.y, z3);
-        let (c4, x4, z4) = neighbor_lookup_chunked(cur.c, cur.x, cur.z - 1); push(c4, x4, cur.y, z4);
+        let (c1, x1, z1) = neighbor_lookup_chunked(cur.c, cur.x + 1, cur.z);
+        push(c1, x1, cur.y, z1);
+        let (c2, x2, z2) = neighbor_lookup_chunked(cur.c, cur.x - 1, cur.z);
+        push(c2, x2, cur.y, z2);
+        let (c3, x3, z3) = neighbor_lookup_chunked(cur.c, cur.x, cur.z + 1);
+        push(c3, x3, cur.y, z3);
+        let (c4, x4, z4) = neighbor_lookup_chunked(cur.c, cur.x, cur.z - 1);
+        push(c4, x4, cur.y, z4);
     }
 
     res
 }
 
 fn enqueue_flow_on_block_removed(
-    mut ev: EventReader<BlockBreakByPlayerEvent>,
+    mut ev: MessageReader<BlockBreakByPlayerEvent>,
     fluids: Res<FluidMap>,
     chunks: Res<ChunkMap>,
     mut queue: ResMut<WaterFlowQueue>,
@@ -210,8 +229,12 @@ fn enqueue_flow_on_block_removed(
 
         // Skip if cell isn't air now
         if let Some(ch) = chunks.chunks.get(&c) {
-            if ch.get(e.chunk_x as usize, e.chunk_y as usize, e.chunk_z as usize) != 0 { continue; }
-        } else { continue; }
+            if ch.get(e.chunk_x as usize, e.chunk_y as usize, e.chunk_z as usize) != 0 {
+                continue;
+            }
+        } else {
+            continue;
+        }
 
         let mut sea_level = None;
         let mut has_water = false;
@@ -221,11 +244,20 @@ fn enqueue_flow_on_block_removed(
         let mut seed_y = e.chunk_y as i32;
         let seed_z = e.chunk_z as i32;
 
-        for (dx,dy,dz) in [(1,0,0),(-1,0,0),(0,0,1),(0,0,-1),(0,-1,0),(0,1,0)] {
+        for (dx, dy, dz) in [
+            (1, 0, 0),
+            (-1, 0, 0),
+            (0, 0, 1),
+            (0, 0, -1),
+            (0, -1, 0),
+            (0, 1, 0),
+        ] {
             let lx = seed_x + dx;
             let ly = seed_y + dy;
             let lz = seed_z + dz;
-            if ly < 0 || ly >= CY as i32 { continue; }
+            if ly < 0 || ly >= CY as i32 {
+                continue;
+            }
             let (nc, nx, nz) = neighbor_lookup_chunked(c, lx, lz);
             if let Some(fc) = fluids.0.get(&nc) {
                 if fc.get(nx as usize, ly as usize, nz as usize) {
@@ -240,10 +272,17 @@ fn enqueue_flow_on_block_removed(
                 }
             }
         }
-        if !has_water { continue; }
+        if !has_water {
+            continue;
+        }
 
         queue.0.push_back(FlowJob {
-            seeds: vec![Seed{ c, x: seed_x, y: seed_y, z: seed_z }],
+            seeds: vec![Seed {
+                c,
+                x: seed_x,
+                y: seed_y,
+                z: seed_z,
+            }],
             sea_level: sea_level.unwrap_or(SEA_LEVEL),
             cap: WATER_FLOW_CAP,
         });
@@ -257,15 +296,21 @@ fn schedule_flow_jobs(
     chunks: Res<ChunkMap>,
     fluids: Res<FluidMap>,
 ) {
-    if queue.0.is_empty() { return; }
+    if queue.0.is_empty() {
+        return;
+    }
     let pool = AsyncComputeTaskPool::get();
 
-    let mut budget = WATER_FLOW_BUDGET_PER_FRAME
-        .min(WATER_FLOW_MAX_INFLIGHT.saturating_sub(pending.0.len()));
-    if budget == 0 { return; }
+    let mut budget =
+        WATER_FLOW_BUDGET_PER_FRAME.min(WATER_FLOW_MAX_INFLIGHT.saturating_sub(pending.0.len()));
+    if budget == 0 {
+        return;
+    }
 
     while budget > 0 {
-        let Some(job) = queue.0.pop_front() else { break; };
+        let Some(job) = queue.0.pop_front() else {
+            break;
+        };
         let anchor = job.seeds.get(0).map(|s| s.c).unwrap_or(IVec2::ZERO);
         let snapshot = build_solid_snapshot_3x3(&chunks, anchor);
         let water_snap = build_water_snapshot_3x3(&fluids, anchor);
@@ -291,11 +336,13 @@ fn collect_flow_jobs(
 
     for (id, task) in pending.0.iter_mut() {
         if let Some((_id, mut res)) = future::block_on(future::poll_once(task)) {
-
             res.filled.retain(|s| chunks.chunks.contains_key(&s.c));
 
             for s in res.filled {
-                let fc = fluids.0.entry(s.c).or_insert_with(|| FluidChunk::new(SEA_LEVEL));
+                let fc = fluids
+                    .0
+                    .entry(s.c)
+                    .or_insert_with(|| FluidChunk::new(SEA_LEVEL));
 
                 if !fc.get(s.x as usize, s.y as usize, s.z as usize) {
                     fc.set(s.x as usize, s.y as usize, s.z as usize, true);
@@ -304,13 +351,31 @@ fn collect_flow_jobs(
                 }
             }
 
-            let mut more_loaded: Vec<Seed>  = res.more.into_iter().filter(|s| chunks.chunks.contains_key(&s.c)).collect();
-            let mut spill_loaded: Vec<Seed> = res.spill.into_iter().filter(|s| chunks.chunks.contains_key(&s.c)).collect();
+            let mut more_loaded: Vec<Seed> = res
+                .more
+                .into_iter()
+                .filter(|s| chunks.chunks.contains_key(&s.c))
+                .collect();
+            let mut spill_loaded: Vec<Seed> = res
+                .spill
+                .into_iter()
+                .filter(|s| chunks.chunks.contains_key(&s.c))
+                .collect();
 
             let mut push_job = |seeds: &mut Vec<Seed>| {
-                if seeds.is_empty() { return; }
-                let sea = fluids.0.get(&seeds[0].c).map(|f| f.sea_level).unwrap_or(SEA_LEVEL);
-                queue.0.push_back(FlowJob { seeds: std::mem::take(seeds), sea_level: sea, cap: WATER_FLOW_CAP });
+                if seeds.is_empty() {
+                    return;
+                }
+                let sea = fluids
+                    .0
+                    .get(&seeds[0].c)
+                    .map(|f| f.sea_level)
+                    .unwrap_or(SEA_LEVEL);
+                queue.0.push_back(FlowJob {
+                    seeds: std::mem::take(seeds),
+                    sea_level: sea,
+                    cap: WATER_FLOW_CAP,
+                });
             };
 
             push_job(&mut more_loaded);
@@ -319,7 +384,9 @@ fn collect_flow_jobs(
             done_ids.push(*id);
         }
     }
-    for id in done_ids { pending.0.remove(&id); }
+    for id in done_ids {
+        pending.0.remove(&id);
+    }
 }
 
 #[inline]
@@ -337,12 +404,19 @@ fn enqueue_mesh_for_cell(backlog: &mut WaterMeshBacklog, c: IVec2, x: i32, y: i3
 
     push(c, sub);
 
-    if x == 0               { push(c - IVec2::X, sub); }
-    if x == (CX as i32 - 1) { push(c + IVec2::X, sub); }
-    if z == 0               { push(c - IVec2::Y, sub); }
-    if z == (CZ as i32 - 1) { push(c + IVec2::Y, sub); }
+    if x == 0 {
+        push(c - IVec2::X, sub);
+    }
+    if x == (CX as i32 - 1) {
+        push(c + IVec2::X, sub);
+    }
+    if z == 0 {
+        push(c - IVec2::Y, sub);
+    }
+    if z == (CZ as i32 - 1) {
+        push(c + IVec2::Y, sub);
+    }
 }
-
 
 fn water_gen_build_worklist(
     mut q: ResMut<WaterGenQueue>,
@@ -374,24 +448,43 @@ fn schedule_water_generation_jobs(
     mut pending: ResMut<PendingWaterLoad>,
     app_state: Res<State<AppState>>,
 ) {
-    let max_inflight = if in_water_gen(&app_state) { BIG } else { MAX_INFLIGHT_WATER_LOAD };
-    let per_frame    = if in_water_gen(&app_state) { BIG } else { WATER_GEN_BUDGET_PER_FRAME };
+    let max_inflight = if in_water_gen(&app_state) {
+        BIG
+    } else {
+        MAX_INFLIGHT_WATER_LOAD
+    };
+    let per_frame = if in_water_gen(&app_state) {
+        BIG
+    } else {
+        WATER_GEN_BUDGET_PER_FRAME
+    };
 
-    if chunk_map.chunks.is_empty() { q.work.clear(); return; }
+    if chunk_map.chunks.is_empty() {
+        q.work.clear();
+        return;
+    }
 
-    let mut budget = max_inflight
-        .saturating_sub(pending.0.len())
-        .min(per_frame);
-    if budget == 0 { return; }
+    let mut budget = max_inflight.saturating_sub(pending.0.len()).min(per_frame);
+    if budget == 0 {
+        return;
+    }
 
     let pool = AsyncComputeTaskPool::get();
     let seed = gen_cfg.seed as u32;
 
     while budget > 0 {
-        let Some(coord) = q.work.pop_front() else { break; };
-        if water.0.contains_key(&coord) { continue; }
-        let Some(chunk) = chunk_map.chunks.get(&coord) else { continue; };
-        if pending.0.contains_key(&coord) { continue; }
+        let Some(coord) = q.work.pop_front() else {
+            break;
+        };
+        if water.0.contains_key(&coord) {
+            continue;
+        }
+        let Some(chunk) = chunk_map.chunks.get(&coord) else {
+            continue;
+        };
+        if pending.0.contains_key(&coord) {
+            continue;
+        }
 
         let chunk_copy = chunk.clone();
         let root = ws.root.clone();
@@ -420,11 +513,17 @@ fn collect_water_generation_jobs(
     app_state: Res<State<AppState>>,
 ) {
     let mut done: Vec<IVec2> = Vec::new();
-    let apply_cap = if in_water_gen(&app_state) { BIG } else { WATER_GEN_BUDGET_PER_FRAME };
+    let apply_cap = if in_water_gen(&app_state) {
+        BIG
+    } else {
+        WATER_GEN_BUDGET_PER_FRAME
+    };
     let mut applied = 0usize;
 
     for (_, task) in pending.0.iter_mut() {
-        if applied >= apply_cap { break; }
+        if applied >= apply_cap {
+            break;
+        }
 
         if let Some((c, wc)) = future::block_on(future::poll_once(task)) {
             if chunk_map.chunks.contains_key(&c) {
@@ -436,17 +535,21 @@ fn collect_water_generation_jobs(
                     water.0.insert(c, wc);
                 }
                 to_mesh.0.insert(c);
-                for d in [IVec2::X, -IVec2::X, IVec2::Y, -IVec2::Y] { to_mesh.0.insert(c + d); }
+                for d in [IVec2::X, -IVec2::X, IVec2::Y, -IVec2::Y] {
+                    to_mesh.0.insert(c + d);
+                }
                 applied += 1;
             }
             done.push(c);
         }
     }
-    for c in done { pending.0.remove(&c); }
+    for c in done {
+        pending.0.remove(&c);
+    }
 }
 
 fn water_mark_from_dirty(
-    mut ev: EventReader<SubChunkNeedRemeshEvent>,
+    mut ev: MessageReader<SubChunkNeedRemeshEvent>,
     mut todo: ResMut<WaterMeshingTodo>,
 ) {
     for e in ev.read() {
@@ -470,13 +573,15 @@ fn water_finish_check(
     mut next: ResMut<NextState<AppState>>,
 ) {
     let in_water_gen = matches!(app_state.get(), AppState::Loading(LoadingStates::WaterGen));
-    if !in_water_gen { return; }
+    if !in_water_gen {
+        return;
+    }
 
     let coverage_ok = all_chunks_have_water(&chunk_map, &water);
 
-    let gen_done   = q.work.is_empty() && pending_load.0.is_empty();
-    let mesh_done  = to_mesh.0.is_empty() && backlog.0.is_empty() && pending_mesh.0.is_empty();
-    let world_ok   = !chunk_map.chunks.is_empty();
+    let gen_done = q.work.is_empty() && pending_load.0.is_empty();
+    let mesh_done = to_mesh.0.is_empty() && backlog.0.is_empty() && pending_mesh.0.is_empty();
+    let world_ok = !chunk_map.chunks.is_empty();
 
     if boot.started && world_ok && gen_done && coverage_ok && mesh_done {
         debug!("Water gen complete");
@@ -486,7 +591,7 @@ fn water_finish_check(
 
 fn water_unload_on_event(
     mut commands: Commands,
-    mut ev: EventReader<ChunkUnloadEvent>,
+    mut ev: MessageReader<ChunkUnloadEvent>,
     mut water: ResMut<FluidMap>,
     mut windex: ResMut<WaterMeshIndex>,
     mut meshes: ResMut<Assets<Mesh>>,
@@ -502,11 +607,21 @@ fn water_unload_on_event(
     mut q: Option<ResMut<WaterGenQueue>>,
 ) {
     for ChunkUnloadEvent { coord } in ev.read().copied() {
-        if let Some(t) = todo.as_mut()          { t.0.remove(&coord); }
-        if let Some(b) = backlog.as_mut()       { b.0.retain(|(c, _)| *c != coord); }
-        if let Some(pm) = pending_mesh.as_mut() { pm.0.retain(|(c, _), _| *c != coord); }
-        if let Some(pl) = pending_load.as_mut() { pl.0.remove(&coord); }
-        if let Some(fq) = flow_q.as_mut()       { fq.0.retain(|job| job.seeds.iter().all(|s| s.c != coord)); }
+        if let Some(t) = todo.as_mut() {
+            t.0.remove(&coord);
+        }
+        if let Some(b) = backlog.as_mut() {
+            b.0.retain(|(c, _)| *c != coord);
+        }
+        if let Some(pm) = pending_mesh.as_mut() {
+            pm.0.retain(|(c, _), _| *c != coord);
+        }
+        if let Some(pl) = pending_load.as_mut() {
+            pl.0.remove(&coord);
+        }
+        if let Some(fq) = flow_q.as_mut() {
+            fq.0.retain(|job| job.seeds.iter().all(|s| s.c != coord));
+        }
 
         if let Some(mut wc) = water.0.remove(&coord) {
             if let Some(ch) = chunk_map.chunks.get(&coord) {
@@ -515,12 +630,19 @@ fn water_unload_on_event(
             save_water_chunk_sync(&ws, &mut cache, coord, &wc);
         }
 
-        let dead: Vec<_> = windex.0.keys().copied().filter(|(c, _)| *c == coord).collect();
+        let dead: Vec<_> = windex
+            .0
+            .keys()
+            .copied()
+            .filter(|(c, _)| *c == coord)
+            .collect();
         for key in dead {
             despawn_water_mesh(key, &mut windex, &mut commands, &q_mesh, &mut meshes);
         }
 
-        if let Some(q) = q.as_mut()     { q.work.retain(|c| *c != coord); }
+        if let Some(q) = q.as_mut() {
+            q.work.retain(|c| *c != coord);
+        }
     }
 }
 
@@ -545,7 +667,9 @@ fn water_backlog_from_todo(
     water: Res<FluidMap>,
     mut backlog: ResMut<WaterMeshBacklog>,
 ) {
-    if todo.0.is_empty() { return; }
+    if todo.0.is_empty() {
+        return;
+    }
 
     let coords: Vec<_> = todo.0.drain().collect();
 
@@ -570,14 +694,20 @@ fn water_drain_mesh_backlog(
     water: Res<FluidMap>,
     app_state: Res<State<AppState>>,
 ) {
-    let max_inflight = if in_water_gen(&app_state) { BIG } else { MAX_INFLIGHT_WATER_MESH };
+    let max_inflight = if in_water_gen(&app_state) {
+        BIG
+    } else {
+        MAX_INFLIGHT_WATER_MESH
+    };
     let pool = AsyncComputeTaskPool::get();
 
     let mut processed = 0usize;
     let limit = backlog.0.len();
 
     while pending.0.len() < max_inflight && processed < limit {
-        let Some((coord, sub)) = backlog.0.pop_front() else { break; };
+        let Some((coord, sub)) = backlog.0.pop_front() else {
+            break;
+        };
         processed += 1;
 
         if !water_meshing_ready(coord, &water, &chunk_map) {
@@ -587,11 +717,17 @@ fn water_drain_mesh_backlog(
 
         let fc = match water.0.get(&coord).cloned() {
             Some(v) => v,
-            None => { backlog.0.push_back((coord, sub)); continue; }
+            None => {
+                backlog.0.push_back((coord, sub));
+                continue;
+            }
         };
         let chunk_copy = match chunk_map.chunks.get(&coord).cloned() {
             Some(v) => v,
-            None => { backlog.0.push_back((coord, sub)); continue; }
+            None => {
+                backlog.0.push_back((coord, sub));
+                continue;
+            }
         };
 
         let y0 = sub * SEC_H;
@@ -618,14 +754,23 @@ fn water_collect_meshed_subchunks(
     water: Res<FluidMap>,
 ) {
     let water_mat = id_any(&reg, &["water_block", "water"]);
-    if water_mat == 0 { warn!("water_mat not found"); return; }
+    if water_mat == 0 {
+        warn!("water_mat not found");
+        return;
+    }
 
-    let apply_cap = if in_water_gen(&app_state) { BIG } else { MAX_UPDATE_FRAMES };
+    let apply_cap = if in_water_gen(&app_state) {
+        BIG
+    } else {
+        MAX_UPDATE_FRAMES
+    };
     let mut done = Vec::new();
     let mut applied = 0usize;
 
     for (key, task) in pending.0.iter_mut() {
-        if applied >= apply_cap { break; }
+        if applied >= apply_cap {
+            break;
+        }
 
         if let Some(((coord, sub), build)) = future::block_on(future::poll_once(task)) {
             if !chunk_map.chunks.contains_key(&coord) || !water.0.contains_key(&coord) {
@@ -633,7 +778,13 @@ fn water_collect_meshed_subchunks(
                 continue;
             }
 
-            despawn_water_mesh((coord, sub as u8), &mut windex, &mut commands, &q_mesh, &mut meshes);
+            despawn_water_mesh(
+                (coord, sub as u8),
+                &mut windex,
+                &mut commands,
+                &q_mesh,
+                &mut meshes,
+            );
 
             if !build.is_empty() {
                 let mesh = build.into_mesh();
@@ -661,7 +812,9 @@ fn water_collect_meshed_subchunks(
             done.push(*key);
         }
     }
-    for k in done { pending.0.remove(&k); }
+    for k in done {
+        pending.0.remove(&k);
+    }
 }
 
 #[inline]
@@ -673,8 +826,12 @@ fn try_enqueue(
     water: &FluidMap,
     pending: &PendingWaterLoad,
 ) {
-    if !chunk_map.chunks.contains_key(&c) { return; }
-    if water.0.contains_key(&c) || pending.0.contains_key(&c) { return; }
+    if !chunk_map.chunks.contains_key(&c) {
+        return;
+    }
+    if water.0.contains_key(&c) || pending.0.contains_key(&c) {
+        return;
+    }
     if queued.insert(c) {
         work.push_back(c);
     }

@@ -8,13 +8,13 @@ use bevy::prelude::*;
 /* ======================================================================= */
 
 /// Ocean base noise frequency.
-pub const OCEAN_FREQ:  f32 = 0.012;
+pub const OCEAN_FREQ: f32 = 0.012;
 /// Ocean base noise amplitude.
-pub const OCEAN_AMP:   f32 = 12.0;
+pub const OCEAN_AMP: f32 = 12.0;
 /// Plains base noise frequency.
 pub const PLAINS_FREQ: f32 = 0.008;
 /// Plains base noise amplitude.
-pub const PLAINS_AMP:  f32 = 22.0;
+pub const PLAINS_AMP: f32 = 22.0;
 
 /* ======================================================================= */
 /* == Constants: Field / Coast Parameters ================================= */
@@ -40,12 +40,12 @@ pub const OCEAN_WEIGHT_MULTI: f64 = 3.5;
 
 /// Label smoothing radius (in chunks) and iteration count.
 pub const SMOOTH_RADIUS_CH: i32 = 1;
-pub const SMOOTH_ITERS: usize  = 1;
+pub const SMOOTH_ITERS: usize = 1;
 
 /// Controls coastline transition band around land/ocean junctions.
 pub const COAST_INSET_SCORE: f32 = 0.12;
-pub const COAST_BAND_SCORE:  f32 = 0.35;
-pub const COAST_NOISE_FREQ:  f32 = 0.03;
+pub const COAST_BAND_SCORE: f32 = 0.35;
+pub const COAST_NOISE_FREQ: f32 = 0.03;
 pub const COAST_NOISE_AMP_SCORE: f32 = 0.10;
 pub const COAST_DETAIL_FREQ: f32 = 0.12;
 /// Min/max beach widths in blocks.
@@ -64,10 +64,10 @@ pub const SUB_PRESENT_MAX: f32 = 0.70;
 
 /// Core zone influence (smoothstep window).
 pub const SUB_CORE_START: f32 = 0.28;
-pub const SUB_CORE_END: f32   = 1.05;
+pub const SUB_CORE_END: f32 = 1.05;
 /// Edge noise parameters for sub-biome shapes.
 pub const SUB_EDGE_NOISE_FREQ: f32 = 0.02;
-pub const SUB_EDGE_NOISE_AMP:  f32 = 0.06;
+pub const SUB_EDGE_NOISE_AMP: f32 = 0.06;
 
 /* ======================================================================= */
 /* == Constants: Mountain Shaping ========================================= */
@@ -75,27 +75,27 @@ pub const SUB_EDGE_NOISE_AMP:  f32 = 0.06;
 
 pub const MNT_BASE_FREQ: f32 = 0.02;
 pub const MNT_DOME_GAIN: f32 = 0.55;
-pub const MNT_DOME_EXP:  f32 = 1.55;
+pub const MNT_DOME_EXP: f32 = 1.55;
 pub const MNT_DETAIL_EDGE_FADE_START: f32 = 0.10;
-pub const MNT_DETAIL_EDGE_FADE_END:   f32 = 0.40;
+pub const MNT_DETAIL_EDGE_FADE_END: f32 = 0.40;
 pub const MNT_WORLD_SLOPE: f32 = 0.90;
 
 /// Sub-biome cross-guard when neighbor is foreign (used by adjacency).
 pub const FOREIGN_GUARD_START: f32 = 0.95;
-pub const FOREIGN_GUARD_END:   f32 = 1.20;
+pub const FOREIGN_GUARD_END: f32 = 1.20;
 
 /* ======================================================================= */
 /* == Constants: Salts / Hashing ========================================== */
 /* ======================================================================= */
 
 pub const SALT_PICK_BIOME: u32 = 0xB10E_55ED;
-pub const SALT_PICK_SIZE:  u32 = 0x51AE_0001 ^ 0x0000_1234;
-pub const SALT_JITTER_X:   u32 = 0xA11E_D00F;
-pub const SALT_JITTER_Z:   u32 = 0xC0FF_EE00;
-pub const SALT_COAST:      i32 = 0x00C0_4751;
-pub const SALT_COAST2:     i32 = 0xB34C_0001u32 as i32;
-pub const SALT_SUB_SITES:  u32 = 0x5AB5_1735;
-pub const SALT_SUB_EDGE:   i32 = 0x53AB_CAFEi32;
+pub const SALT_PICK_SIZE: u32 = 0x51AE_0001 ^ 0x0000_1234;
+pub const SALT_JITTER_X: u32 = 0xA11E_D00F;
+pub const SALT_JITTER_Z: u32 = 0xC0FF_EE00;
+pub const SALT_COAST: i32 = 0x00C0_4751;
+pub const SALT_COAST2: i32 = 0xB34C_0001u32 as i32;
+pub const SALT_SUB_SITES: u32 = 0x5AB5_1735;
+pub const SALT_SUB_EDGE: i32 = 0x53AB_CAFEi32;
 
 /* ======================================================================= */
 /* == Public API: Dominant Biome / Labels ================================= */
@@ -142,13 +142,8 @@ pub fn dominant_biome_at_p_chunks(
                 let mut core = sub_core_factor(s_sub);
 
                 // Neighbor support (guard against foreign land sites).
-                let adj = adjacency_support_factor(
-                    biomes,
-                    p_chunks,
-                    world_seed,
-                    site_biome,
-                    &sub_b.name,
-                );
+                let adj =
+                    adjacency_support_factor(biomes, p_chunks, world_seed, site_biome, &sub_b.name);
                 core *= adj;
 
                 // Influence from site weight vs. combined weights.
@@ -179,13 +174,12 @@ pub fn dominant_biome_at_p_chunks(
     // Coast/ocean override based on the better of two site scores.
     let s_for_coast = s0.min(s1);
     let t_ocean = smoothstep(1.0 - COAST_INSET_SCORE, 1.0 + COAST_BAND_SCORE, s_for_coast);
-    let ocean = if let Some((b, _, _, _)) =
-        best_land_and_ocean_sites(biomes, p_chunks, world_seed).1
-    {
-        b
-    } else {
-        any_ocean_biome(biomes).unwrap_or(land_mats)
-    };
+    let ocean =
+        if let Some((b, _, _, _)) = best_land_and_ocean_sites(biomes, p_chunks, world_seed).1 {
+            b
+        } else {
+            any_ocean_biome(biomes).unwrap_or(land_mats)
+        };
 
     if (1.0 - t_ocean) >= 0.5 {
         land_mats
@@ -199,10 +193,7 @@ pub fn best_two_land_sites<'a>(
     p_chunks: Vec2,
     world_seed: i32,
     fallback_label: &'a Biome,
-) -> (
-    &'a Biome, Vec2, f32, f32,
-    Option<&'a Biome>, Vec2, f32, f32
-) {
+) -> (&'a Biome, Vec2, f32, f32, Option<&'a Biome>, Vec2, f32, f32) {
     let (best_land, _best_ocean) = best_land_and_ocean_sites(biomes, p_chunks, world_seed);
 
     // Host
@@ -250,8 +241,11 @@ pub fn choose_biome_label_smoothed<'a>(
             }
         }
         counts.sort_by(|(a, ca), (b, cb)| {
-            cb.cmp(ca)
-                .then_with(|| b.rarity.partial_cmp(&a.rarity).unwrap_or(std::cmp::Ordering::Equal))
+            cb.cmp(ca).then_with(|| {
+                b.rarity
+                    .partial_cmp(&a.rarity)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
         });
         if let Some((b, _)) = counts.first() {
             label = *b;
@@ -261,11 +255,7 @@ pub fn choose_biome_label_smoothed<'a>(
 }
 
 /// Choose a biome label at a chunk coordinate using land-score thresholding.
-pub fn choose_biome_label_thresholded(
-    biomes: &BiomeRegistry,
-    coord: IVec2,
-    seed: i32,
-) -> &Biome {
+pub fn choose_biome_label_thresholded(biomes: &BiomeRegistry, coord: IVec2, seed: i32) -> &Biome {
     let px = coord.x as f32 + 0.5;
     let pz = coord.y as f32 + 0.5;
     let (best_land, best_ocean) = best_land_and_ocean_sites(biomes, Vec2::new(px, pz), seed);
@@ -290,7 +280,10 @@ pub fn best_land_and_ocean_sites<'a>(
     biomes: &'a BiomeRegistry,
     p_chunks: Vec2,
     world_seed: i32,
-) -> (Option<(&'a Biome, Vec2, f32, f32)>, Option<(&'a Biome, Vec2, f32, f32)>) {
+) -> (
+    Option<(&'a Biome, Vec2, f32, f32)>,
+    Option<(&'a Biome, Vec2, f32, f32)>,
+) {
     let gx = (p_chunks.x.floor() as i32).div_euclid(BASE_CELL_CHUNKS);
     let gz = (p_chunks.y.floor() as i32).div_euclid(BASE_CELL_CHUNKS);
 
@@ -392,18 +385,26 @@ pub fn site_properties_for_cell(
     let (area_min, area_max) = size_to_area_bounds(if biome.sizes.is_empty() {
         &BiomeSize::Medium
     } else {
-        &biome.sizes
-            [(rand_u32(cell_x, cell_z, (world_seed as u32) ^ SALT_PICK_SIZE) as usize)
+        &biome.sizes[(rand_u32(cell_x, cell_z, (world_seed as u32) ^ SALT_PICK_SIZE) as usize)
             % biome.sizes.len()]
     });
 
-    let t = rand01(cell_x, cell_z, (world_seed as u32).wrapping_add(0xFACE_FEED));
+    let t = rand01(
+        cell_x,
+        cell_z,
+        (world_seed as u32).wrapping_add(0xFACE_FEED),
+    );
     let target_area_chunks = area_min + t * (area_max - area_min);
 
     // Convert area to radius, add small jitter, and enforce a minimum.
     let mut radius_chunks = (target_area_chunks / std::f32::consts::PI).sqrt();
-    let jitter =
-        0.95 + 0.10 * rand01(cell_x, cell_z, (world_seed as u32).wrapping_add(0xDEAD_BEEF));
+    let jitter = 0.95
+        + 0.10
+            * rand01(
+                cell_x,
+                cell_z,
+                (world_seed as u32).wrapping_add(0xDEAD_BEEF),
+            );
     radius_chunks *= jitter;
     let min_r = (area_min / std::f32::consts::PI).sqrt();
     radius_chunks = radius_chunks.max(min_r * 0.98);
@@ -460,14 +461,14 @@ pub fn rarity_pick_site(biomes: &BiomeRegistry, r01: f64) -> Option<&Biome> {
 /// Map a `BiomeSize` to (min,max) area bounds in chunk^2 units.
 pub fn size_to_area_bounds(size: &BiomeSize) -> (f32, f32) {
     match size {
-        BiomeSize::VeryTiny => (SIZE_MIN_FRAC * 4.0,   4.0),
-        BiomeSize::Tiny     => (SIZE_MIN_FRAC * 20.0, 20.0),
-        BiomeSize::Small    => (SIZE_MIN_FRAC * 56.0, 56.0),
-        BiomeSize::Medium   => (SIZE_MIN_FRAC * 96.0, 96.0),
-        BiomeSize::Large    => (SIZE_MIN_FRAC * 196.0, 196.0),
-        BiomeSize::Huge     => (SIZE_MIN_FRAC * 392.0, 392.0),
-        BiomeSize::Giant    => (SIZE_MIN_FRAC * 560.0, 560.0),
-        BiomeSize::Ocean    => (OCEAN_MIN_AREA, OCEAN_MAX_AREA),
+        BiomeSize::VeryTiny => (SIZE_MIN_FRAC * 4.0, 4.0),
+        BiomeSize::Tiny => (SIZE_MIN_FRAC * 20.0, 20.0),
+        BiomeSize::Small => (SIZE_MIN_FRAC * 56.0, 56.0),
+        BiomeSize::Medium => (SIZE_MIN_FRAC * 96.0, 96.0),
+        BiomeSize::Large => (SIZE_MIN_FRAC * 196.0, 196.0),
+        BiomeSize::Huge => (SIZE_MIN_FRAC * 392.0, 392.0),
+        BiomeSize::Giant => (SIZE_MIN_FRAC * 560.0, 560.0),
+        BiomeSize::Ocean => (OCEAN_MIN_AREA, OCEAN_MAX_AREA),
     }
 }
 
@@ -729,10 +730,7 @@ pub fn supports_sub(host: &Biome, sub_name: &str) -> bool {
 
 /// Case-insensitive lookup for dynamic sub-biome references.
 #[inline]
-pub fn get_biome_case_insensitive<'a>(
-    biomes: &'a BiomeRegistry,
-    name: &str,
-) -> Option<&'a Biome> {
+pub fn get_biome_case_insensitive<'a>(biomes: &'a BiomeRegistry, name: &str) -> Option<&'a Biome> {
     if let Some(b) = biomes.by_name.get(name) {
         return Some(b);
     }

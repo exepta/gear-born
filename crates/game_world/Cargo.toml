@@ -11,7 +11,7 @@ path = "src/lib.rs"
 path = "../game_core"
 
 [dependencies.bevy]
-version = "0.16.1"
+version = "0.18.1"
 default-features = false
 features = [
     "bevy_log",
@@ -20,12 +20,9 @@ features = [
 ]
 
 [dependencies.bevy_rapier3d]
-version = "0.31.0"
-features = [
-    "default",
-    "simd-stable",
-    "debug-render-3d"
-]
+version = "0.33.0"
+default-features = false
+features = ["dim3"]
 
 [dependencies.fastnoise-lite]
 version = "1.1.1"

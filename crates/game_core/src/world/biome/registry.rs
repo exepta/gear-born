@@ -1,7 +1,7 @@
 use crate::world::biome::*;
 use bevy::prelude::*;
-use rand::distr::weighted::WeightedIndex;
 use rand::distr::Distribution;
+use rand::distr::weighted::WeightedIndex;
 use rand::rng;
 use std::collections::HashMap;
 

@@ -1,9 +1,9 @@
-mod block_registry;
 mod biome_registry;
+mod block_registry;
 
-use bevy::prelude::*;
 use crate::registry::biome_registry::BiomeInternalRegistry;
 use crate::registry::block_registry::BlockInternalRegistry;
+use bevy::prelude::*;
 
 pub struct RegistryPlugin;
 
